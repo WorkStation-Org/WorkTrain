@@ -1,148 +1,150 @@
 @import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
-@plugin "@tailwindcss/typography";
 
-@custom-variant dark (&:is(.dark *));
+@theme {
+  /* ระบบสีของ WorkTrain — ยกโครงมาจาก Notification_Content (ซึ่งอิง TikTok Studio)
+     พื้นเป็นขาวล้วน · ไล่หมึกจาก #161823 ลดความเข้มลงเป็นสีทึบ เพื่อให้เส้นขอบกับ
+     ตัวอักษรผสมกันได้สะอาด
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
-  --font-heading: var(--font-sans);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+     ★ สีทุกสีของแอปอยู่ในบล็อกนี้บล็อกเดียว มีเทสต์บังคับ
+       (`src/lib/__tests__/design-tokens.test.ts`) — เขียนสีดิบที่หน้าจอไหนก็ตาม
+       เทสต์จะล้ม เพราะสีที่กระจายอยู่ตามไฟล์คือสีที่ไม่มีใครแก้พร้อมกันได้ */
+
+  /* พื้น */
+  --color-surface: #ffffff;
+  --color-surface-2: #f8f8f8;
+  --color-surface-3: #f1f1f2;
+  --color-line: #e6e6e8;
+  --color-line-strong: #cfcfd3;
+
+  /* ตัวอักษร */
+  --color-ink: #161823;
+  --color-ink-2: #5b5c62;
+  --color-ink-3: #8a8b93;
+  --color-ink-4: #b9bac0;
+
+  /* สีหลัก — WorkTrain ใช้ดำเทา ไม่ใช่ชมพูแดงแบบต้นแบบ
+     hover **ไล่ขึ้น** ไม่ใช่ไล่ลง เพราะ #292929 เหลือระยะถึงดำแค่ 41 สเต็ป
+     ไล่ลงแล้วคนกดแทบไม่เห็นว่าปุ่มตอบสนอง
+     soft เข้มกว่า surface-3 (#f1f1f2) หนึ่งขั้นโดยตั้งใจ — ไม่งั้น "ถูกเลือก"
+     กับ "เอาเมาส์ชี้" จะเป็นสีเดียวกันเป๊ะ */
+  --color-primary: #292929;
+  --color-primary-hover: #3d3d3d;
+  --color-primary-soft: #e9e9ea;
+
+  /* สีบอกความหมาย — danger **ไม่ตาม** primary ไปเป็นดำเทา
+     ปุ่มทำลาย (ยกเลิกเคส) กับปุ่มปกติต้องต่างกันด้วยสี ไม่ใช่ต่างแค่ตำแหน่งบนหน้าจอ */
+  --color-danger: #fe2c55;
+  --color-danger-soft: #fff0f3;
+  --color-warning: #ff7a1a;
+  --color-warning-soft: #fff2e8;
+  --color-caution: #d99a00;
+  --color-caution-soft: #fff8db;
+  --color-success: #12a150;
+  --color-success-soft: #e8f7ee;
+  --color-info: #2f6fed;
+  --color-info-soft: #ebf1ff;
+  --color-neutral: #8a8b93;
+  --color-neutral-soft: #f1f1f2;
+
+  --font-sans: var(--font-noto-sans-thai), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", sans-serif;
+
+  --shadow-pop: 0 8px 32px rgb(22 24 35 / 0.12);
+  --shadow-card: 0 1px 2px rgb(22 24 35 / 0.04);
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  color-scheme: light;
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+html {
+  scroll-behavior: smooth;
 }
 
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+a[href],
+summary,
+select,
+input[type="checkbox"],
+input[type="radio"] {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
   }
-  body {
-    @apply bg-background text-foreground;
-  }
-  html {
-    @apply font-sans;
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
-
-/* ── Responsive iframes (YouTube embeds, PDFs) ─────────────────────────────── */
-/* Covers Tiptap's YouTube extension output and dangerouslySetInnerHTML prose */
-.prose iframe,
-.tiptap iframe,
-[data-youtube-video] iframe {
-  width: 100% !important;
-  max-width: 100% !important;
-  height: auto !important;
-  aspect-ratio: 16 / 9;
-  border-radius: 0.5rem;
+.animate-pop {
+  animation: pop 0.18s ease-out both;
 }
 
-[data-youtube-video] {
-  width: 100% !important;
-  max-width: 100% !important;
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+.animate-slide-in-left {
+  animation: slide-in-left 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-fade-in {
+  animation: fade-in 0.18s ease-out both;
+}
+/* หน้ากำลังโหลด — รอ 150ms ก่อนโผล่ เปลี่ยนหน้าเร็วจะไม่เห็นโครงกะพริบ
+   ต้องเป็นคลาสแยก: `[animation-delay:…]` ของ Tailwind อยู่ใน layer จึงแพ้ shorthand ข้างบน */
+.animate-fade-in-late {
+  animation: fade-in 0.2s ease-out 0.15s both;
+}
+
+/* แถบเลื่อนบางในกล่องที่เลื่อนได้ */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

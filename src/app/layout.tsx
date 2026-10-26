@@ -1,24 +1,28 @@
 import type { Metadata } from "next";
-import { Geist } from "next/font/google";
-import { Toaster } from "@/components/ui/sonner";
-import NextTopLoader from "nextjs-toploader";
+import { Noto_Sans_Thai } from "next/font/google";
 import "./globals.css";
 
-const geist = Geist({ subsets: ["latin"], variable: "--font-geist" });
+/**
+ * ★ ฟอนต์ถูกกำหนดที่นี่ที่เดียวและ **โหลดตอน build** — next/font ดึงไฟล์มาเสิร์ฟเอง
+ *   ไม่ได้ยิงไป Google ตอนผู้ใช้เปิดหน้า จึงไม่มีคำขอข้ามโดเมนให้ช้าหรือหลุด
+ *   แลกกับการที่ `npm run build` ต้องมีเน็ต
+ */
+const notoSansThai = Noto_Sans_Thai({
+  variable: "--font-noto-sans-thai",
+  subsets: ["thai", "latin"],
+  weight: ["300", "400", "500", "600", "700"],
+  display: "swap",
+});
 
 export const metadata: Metadata = {
-  title: "WSO Knowledge Base",
-  description: "Work Station Office (Thailand) — Employee Learning Portal",
+  title: "WorkTrain",
+  description: "ระบบเรียนรู้ด้วยตัวเองของ Work Station",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="th" className={`${geist.variable} h-full`}>
-      <body className="h-full bg-gray-50 antialiased">
-        <NextTopLoader color="#6366f1" height={3} showSpinner={false} />
-        {children}
-        <Toaster />
-      </body>
+    <html lang="th" className={`${notoSansThai.variable} h-full`}>
+      <body className="min-h-full">{children}</body>
     </html>
   );
 }
