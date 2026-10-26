@@ -21,6 +21,11 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/session.ts` + `src/proxy.ts` — session cookie ที่เซ็นแล้ว · ถาม WorkID ใหม่ทุก 5 นาที (fail-open)
 - `src/lib/workid.ts` — SSO · `/v1/session/check` · `fetchOrg()` (ผัง: `positionId` · `teamId` · `managedTeamIds` · `managerPersonId` · `lineGroupId`)
 - `src/lib/gateway.ts` — ส่ง LINE ผ่าน WorkGateWay (ยังไม่มีผู้เรียก — ใช้ใน slice การแจ้งเตือน)
+- `src/domain/blueprint.ts` — สัดส่วนหัวข้อ×ระดับของ 10 ข้อ · แม่แบบ PD/ทั่วไป · `src/domain/document.ts` — ชนิด/ขนาดไฟล์ · key ใน R2
+- `src/lib/set-service.ts` — สร้างชุด · ตั้งค่า · อัปโหลด (ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยันด้วย HEAD) · `getSetDetail()` (มีเฉลย — เฉพาะ `canManage`)
+- `src/lib/exam-generator.ts` — **ที่เดียวที่คุยกับ Anthropic API** (`ExamModel`) · ออก 5 ชุดในคำขอเดียว · `checkForms()` ตรวจผลของ AI ก่อนลงฐานทุกครั้ง
+- `src/lib/exam-service.ts` — ออกข้อสอบ · แก้/ออกใหม่ทีละข้อ (ลงประวัติก่อน/หลัง) · `src/lib/approval-service.ts` — ส่ง · ตีกลับ · อนุมัติ
+- `src/lib/object-store.ts` — **ที่เดียวที่แตะ R2** · dev ไม่มี R2 = ที่เก็บในหน่วยความจำผ่าน `/api/dev-store`
 - `src/lib/time.ts` — วันที่ไทย · ห้าม `toISOString()` นอกไฟล์นี้ (มีเทสต์บังคับ)
 - ยกโครงมาจาก WorkDaily: `session.ts` · `workid.ts` · `gateway.ts` · `time.ts` · `auth.ts` · `proxy.ts` · `errmsg.ts` — แก้แล้วเทสต์ที่ติดมาต้องยังผ่าน
 

@@ -18,6 +18,9 @@
     "db:dev-setup": "node scripts/dev-setup.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/s3-request-presigner": "^3.1156.0",
     "@neondatabase/serverless": "^1.0.1",
     "drizzle-orm": "^0.45.2",
     "next": "^16.4.3",

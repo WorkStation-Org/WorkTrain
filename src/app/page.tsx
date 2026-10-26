@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Card } from "@/components/ui";
 import { firstParam, pageActor } from "@/lib/page";
 import { callName } from "@/lib/person-name";
@@ -21,7 +22,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
         <p className="mt-1 text-[13px] text-ink-3">
           {actor.email} · {ROLE_LABELS[actor.role]}
         </p>
-        <p className="mt-4 text-[13px] text-ink-2">WorkTrain รุ่นใหม่กำลังสร้าง — ล็อกอินผ่าน WorkID ใช้งานได้แล้ว</p>
+        <p className="mt-4 text-[13px] text-ink-2">WorkTrain รุ่นใหม่กำลังสร้าง — หน้าของผู้เรียนยังไม่มี</p>
+        <Link href="/sets" className="mt-3 inline-block text-[13px] font-semibold text-ink underline">
+          ชุดการเรียนรู้ (สร้าง · ออกข้อสอบ · อนุมัติ)
+        </Link>
         <form action="/api/auth/logout" method="post" className="mt-4">
           <button type="submit" className="text-[13px] font-medium text-ink-2 underline">
             ออกจากระบบ
