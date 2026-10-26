@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAuthor, requireUser } from "@/lib/auth";
 import { approve, returnToAuthor, submitForApproval } from "@/lib/approval-service";
+import { notifyApprovalEvent, setAudience, syncAssignments } from "@/lib/assignment-service";
 import { claudeExamModel } from "@/lib/exam-generator";
 import { editQuestion, generateExams, regenerateQuestion } from "@/lib/exam-service";
 import { confirmUpload, createSet, removeDocument, requestUpload, updateSettings } from "@/lib/set-service";
@@ -110,20 +111,42 @@ export async function regenerateQuestionAction(form: FormData) {
   back(int(form, "setId"), out, "AI ออกข้อนี้ใหม่แล้ว");
 }
 
+/** แจ้งคนถัดไปหลังเหตุการณ์อนุมัติ — ส่งไม่ได้ไม่ทำให้การอนุมัติล้ม (ผลอยู่ใน notifications แล้ว) */
+async function notify(out: { ok: true; eventId: number } | { ok: false; error: string }) {
+  if (out.ok) await notifyApprovalEvent(out.eventId);
+  return out;
+}
+
 export async function submitAction(form: FormData) {
   const actor = await requireAuthor();
   const setId = int(form, "setId");
-  back(setId, await submitForApproval({ actor, setId }), "ส่งขออนุมัติแล้ว");
+  back(setId, await notify(await submitForApproval({ actor, setId })), "ส่งขออนุมัติแล้ว");
 }
 
 export async function approveAction(form: FormData) {
   const actor = await requireUser();
   const setId = int(form, "setId");
-  back(setId, await approve({ actor, setId }), "อนุมัติแล้ว");
+  const out = await notify(await approve({ actor, setId }));
+  if (!out.ok) back(setId, out, "");
+  // มอบทันที ไม่ต้องรอ cron เช้าพรุ่งนี้ · ถามผังไม่ได้ = cron เช้ามอบให้เอง
+  const sync = await syncAssignments({ setId });
+  back(setId, { ok: true }, sync.ok ? `อนุมัติแล้ว · มอบให้ ${sync.assigned} คน` : "อนุมัติแล้ว · ยังมอบไม่ได้เพราะดึงผังจาก WorkID ไม่ได้ — รอบเช้าจะมอบให้เอง");
 }
 
 export async function returnAction(form: FormData) {
   const actor = await requireUser();
   const setId = int(form, "setId");
-  back(setId, await returnToAuthor({ actor, setId, comment: str(form, "comment") }), "ตีกลับให้ผู้สร้างแล้ว");
+  back(setId, await notify(await returnToAuthor({ actor, setId, comment: str(form, "comment") })), "ตีกลับให้ผู้สร้างแล้ว");
+}
+
+export async function setAudienceAction(form: FormData) {
+  const actor = await requireAuthor();
+  const setId = int(form, "setId");
+  // ค่าแต่ละช่องเป็น "<kind>:<refId>:<label>" — label ไว้แสดงเมื่อของจริงหายไปจากผังแล้ว
+  const rules = form.getAll("rule").flatMap((v) => {
+    if (typeof v !== "string") return [];
+    const [kind, ref, ...label] = v.split(":");
+    return [{ kind, refId: Number.parseInt(ref, 10), label: label.join(":") }];
+  });
+  back(setId, await setAudience({ actor, setId, rules }), "บันทึกผู้รับแล้ว");
 }

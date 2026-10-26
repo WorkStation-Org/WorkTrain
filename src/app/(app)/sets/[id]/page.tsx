@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Button, Card, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle, SELECT_CLASS } from "@/components/ui";
+import { audienceOptions } from "@/domain/audience";
 import { LEVEL_LABELS, TOPIC_LABELS } from "@/domain/blueprint";
 import { aiReadable } from "@/domain/document";
 import type { Level, Topic } from "@/db/schema";
+import { assignmentStatus, audienceRulesOf, previewAudience, type AssignmentState } from "@/lib/assignment-service";
 import { examEditor } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
 import { canEditDraft, getSetDetail, type QuestionView } from "@/lib/set-service";
@@ -16,6 +18,7 @@ import {
   regenerateQuestionAction,
   removeDocumentAction,
   returnAction,
+  setAudienceAction,
   submitAction,
   updateSettingsAction,
 } from "../actions";
@@ -52,6 +55,9 @@ export default async function SetPage({
   const editor = examEditor(actor, set);
   const isApprover = set.status === "pending_approval" && set.approverPersonId === actor.personId;
   const org = editable ? await fetchOrg() : null;
+  const rules = await audienceRulesOf(set.id);
+  const preview = editable ? await previewAudience(set.id) : null;
+  const status = set.status === "active" || set.status === "closed" ? await assignmentStatus(set.id) : [];
 
   return (
     <main className="mx-auto max-w-4xl space-y-5 px-4 py-8">
@@ -177,6 +183,35 @@ export default async function SetPage({
         </div>
       </Card>
 
+      <AudienceCard
+        setId={set.id}
+        editable={editable}
+        rules={rules}
+        options={org?.ok ? audienceOptions(org.people) : null}
+        preview={preview}
+      />
+
+      {status.length > 0 && (
+        <Card>
+          <SectionTitle className="mb-3">
+            ผู้เรียน ({status.filter((s) => s.state === "passed").length}/{status.length} ผ่านแล้ว)
+          </SectionTitle>
+          <ul className="divide-y divide-line text-[13px]">
+            {status.map((a) => (
+              <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
+                <span>
+                  {a.personName}
+                  {a.source === "onboarding" && <span className="ml-1 text-[11px] text-ink-3">(Onboarding)</span>}
+                </span>
+                <span className="text-ink-3">
+                  สอบ {a.attempts} ครั้ง · ส่งภายใน {formatBangkok(a.dueAt)} · <Badge tone={STATE[a.state].tone} label={STATE[a.state].label} />
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
       {(editable || isApprover) && (
         <Card>
           <SectionTitle className="mb-3">{isApprover ? "การอนุมัติ" : "ส่งขออนุมัติ"}</SectionTitle>
@@ -275,5 +310,80 @@ function QuestionItem({ setId, q, no, canEdit }: { setId: number; q: QuestionVie
         </details>
       )}
     </li>
+  );
+}
+
+const STATE: Record<AssignmentState, { label: string; tone: "success" | "info" | "neutral" | "danger" }> = {
+  passed: { label: "ผ่านแล้ว", tone: "success" },
+  started: { label: "เริ่มแล้ว", tone: "info" },
+  not_started: { label: "ยังไม่เริ่ม", tone: "neutral" },
+  overdue: { label: "เลยกำหนด", tone: "danger" },
+};
+
+type Rule = { kind: string; refId: number; label: string };
+type Options = ReturnType<typeof audienceOptions>;
+
+/** ผู้รับ (spec §5) — เลือกจากผังของ WorkID · เก็บเงื่อนไข ไม่ใช่รายชื่อ */
+function AudienceCard({
+  setId,
+  editable,
+  rules,
+  options,
+  preview,
+}: {
+  setId: number;
+  editable: boolean;
+  rules: Rule[];
+  options: Options | null;
+  preview: Awaited<ReturnType<typeof previewAudience>> | null;
+}) {
+  const has = (kind: string, id: number) => rules.some((r) => r.kind === kind && r.refId === id);
+  const box = (kind: string, id: number, label: string, count: number) => (
+    <label key={`${kind}:${id}`} className="flex items-center gap-2">
+      <input type="checkbox" name="rule" value={`${kind}:${id}:${label}`} defaultChecked={has(kind, id)} />
+      {label} <span className="text-ink-3">({count})</span>
+    </label>
+  );
+  return (
+    <Card>
+      <SectionTitle className="mb-3">ผู้รับ</SectionTitle>
+      {!editable && (
+        <p className="text-[13px] text-ink-2">{rules.length ? rules.map((r) => r.label).join(" · ") : "ยังไม่ได้ตั้งผู้รับ"}</p>
+      )}
+      {editable && !options && <p className="text-[13px] text-danger">ดึงผังจาก WorkID ไม่ได้ — ตั้งผู้รับไม่ได้ตอนนี้</p>}
+      {editable && options && (
+        <form action={setAudienceAction} className="space-y-4 text-[13px]">
+          <input type="hidden" name="setId" value={setId} />
+          <fieldset>
+            <legend className="mb-1 font-semibold">ตามตำแหน่ง</legend>
+            {options.positions.length === 0 && <p className="text-ink-3">ยังไม่มีใครในผังที่มีรหัสตำแหน่งจาก WorkHR</p>}
+            <div className="grid gap-1 sm:grid-cols-2">{options.positions.map((p) => box("position", p.id, p.label, p.count))}</div>
+            {options.peopleWithoutPosition > 0 && (
+              <p className="mt-1 text-[11px] text-warning">
+                {options.peopleWithoutPosition} คนยังไม่มีรหัสตำแหน่งใน WorkID — จะไม่ติดเงื่อนไขตำแหน่งจนกว่า WorkHR จะเติมให้
+              </p>
+            )}
+          </fieldset>
+          <fieldset>
+            <legend className="mb-1 font-semibold">ตามทีม</legend>
+            <div className="grid gap-1 sm:grid-cols-2">{options.teams.map((t) => box("team", t.id, t.label, t.count))}</div>
+          </fieldset>
+          <fieldset>
+            <legend className="mb-1 font-semibold">หัวหน้าที่ดูแลทีม</legend>
+            <div className="grid gap-1 sm:grid-cols-2">{options.teams
+                .filter((t) => options.managersByTeam.has(t.id))
+                .map((t) => box("manages_team", t.id, `หัวหน้า ${t.label}`, options.managersByTeam.get(t.id) ?? 0))}</div>
+          </fieldset>
+          <Button type="submit">บันทึกผู้รับ</Button>
+        </form>
+      )}
+      {preview && (
+        <p className="mt-3 text-[12px] text-ink-3">
+          {preview.ok
+            ? `ตอนนี้ตรงเงื่อนไข ${preview.people.length} คน${preview.people.length ? `: ${preview.people.map((p) => p.name).join(", ")}` : ""}`
+            : preview.error}
+        </p>
+      )}
+    </Card>
   );
 }
