@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Button, Card, PageHeader, SectionTitle } from "@/components/ui";
+import { confirmedScanFor, enrollmentState, scanMode } from "@/lib/identity-service";
 import { learnView } from "@/lib/learn-service";
 import { firstParam, learnerActor } from "@/lib/page";
 import { formatBangkok } from "@/lib/time";
-import { endStudyAction, startExamAction, startStudyAction } from "../actions";
+import { endStudyAction } from "../actions";
+import { ScanFlow } from "../scan-flow";
 import { Reader } from "./reader";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +27,10 @@ export default async function LearnSetPage({
   if (!view) notFound();
   const err = firstParam((await searchParams).err);
   const readCount = view.documents.filter((d) => d.completed).length;
+  const mode = scanMode();
+  const enrolled = (await enrollmentState(actor.personId)).state === "active";
+  const confirmedStudy = await confirmedScanFor(actor.personId, "study");
+  const confirmedExam = await confirmedScanFor(actor.personId, "exam");
 
   return (
     <main className="mx-auto max-w-4xl space-y-5 px-4 py-8">
@@ -34,6 +40,15 @@ export default async function LearnSetPage({
         actions={<Link href="/learn" className="text-[13px] text-ink-3 underline">ชุดทั้งหมด</Link>}
       />
       {err && <p className="rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger">{err}</p>}
+
+      {!enrolled && view.state !== "passed" && (
+        <p className="rounded-lg bg-warning-soft px-3 py-2 text-[13px] text-warning">
+          ต้องลงทะเบียนใบหน้าก่อนเริ่มเรียน —{" "}
+          <Link href="/enroll" className="font-semibold underline">
+            ลงทะเบียนใบหน้า
+          </Link>
+        </p>
+      )}
 
       {view.state === "passed" && <p className="rounded-lg bg-success-soft px-3 py-2 text-[14px] text-success">สอบผ่านชุดนี้แล้ว 🎉</p>}
       {view.state === "relearn" && (
@@ -67,32 +82,30 @@ export default async function LearnSetPage({
           </SectionTitle>
           {view.session ? (
             <Reader assignmentId={view.assignment.id} documents={view.documents} />
-          ) : (
-            <form action={startStudyAction}>
-              <input type="hidden" name="assignmentId" value={view.assignment.id} />
+          ) : enrolled ? (
+            <div>
               <p className="mb-3 text-[13px] text-ink-3">
                 สแกนใบหน้าเพื่อเริ่มรอบเรียน · นิ่งเกิน 2 นาทีรอบจะจบ ต้องสแกนใหม่ (หน้าที่อ่านแล้วยังนับอยู่)
               </p>
-              <Button type="submit" variant="primary">
-                สแกนใบหน้า · เริ่มเรียน
-              </Button>
-            </form>
-          )}
+              <ScanFlow mode={mode} purpose="study" label="สแกนใบหน้า · เริ่มเรียน" confirmedScanId={confirmedStudy} />
+            </div>
+          ) : null}
         </Card>
       )}
 
       {view.state === "ready" && (
         <Card>
           <SectionTitle className="mb-3">สอบ</SectionTitle>
-          <form action={startExamAction}>
-            <input type="hidden" name="assignmentId" value={view.assignment.id} />
-            <p className="mb-3 text-[13px] text-ink-3">
-              10 ข้อ · {view.set.examMinutes} นาที · ทีละข้อ ย้อนกลับไม่ได้ · เปิดเอกสารไม่ได้ระหว่างสอบ · ออกจากหน้าสอบครบ 5 ครั้ง = ส่งเอง
-            </p>
-            <Button type="submit" variant="primary">
-              สแกนใบหน้า · เริ่มสอบ
-            </Button>
-          </form>
+          <p className="mb-3 text-[13px] text-ink-3">
+            10 ข้อ · {view.set.examMinutes} นาที · ทีละข้อ ย้อนกลับไม่ได้ · เปิดเอกสารไม่ได้ระหว่างสอบ · ออกจากหน้าสอบครบ 5 ครั้ง = ส่งเอง
+          </p>
+          <ScanFlow
+            mode={mode}
+            purpose="exam"
+            assignmentId={view.assignment.id}
+            label="สแกนใบหน้า · เริ่มสอบ"
+            confirmedScanId={confirmedExam}
+          />
         </Card>
       )}
 

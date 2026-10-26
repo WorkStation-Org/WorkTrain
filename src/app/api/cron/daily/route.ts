@@ -1,6 +1,7 @@
 import { errorSummary } from "@/lib/errmsg";
 import { reportHeartbeat } from "@/lib/gateway";
 import { runReminders, syncAssignments } from "@/lib/assignment-service";
+import { deleteExpiredScanImages } from "@/lib/identity-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,6 +10,7 @@ export const maxDuration = 300;
 const HB_JOB = "worktrain-daily";
 /**
  * รอบเช้าวันละครั้ง (vercel.json `0 2 * * *` = 09:00 เวลาไทย) — มอบให้คนที่เพิ่งตรงเงื่อนไข แล้วเตือนตาม spec §11
+ * แล้วลบภาพสแกนที่ครบ 90 วัน (spec §8)
  *
  * heartbeat แดงเมื่อถามผังไม่ได้ หรือมีข้อความที่ส่งล้ม (failed) — `skipped` (ไม่ผูก LINE ฯลฯ) ไม่ทำให้แดง
  */
@@ -24,6 +26,7 @@ export async function GET(req: Request) {
     const now = new Date();
     const sync = await syncAssignments({ now });
     const remind = await runReminders({ now });
+    const imagesDeleted = await deleteExpiredScanImages(now);
     const failed = sync.notified.failed + remind.day3.failed + remind.day5.failed + remind.overdue.failed;
     const sent = sync.notified.sent + remind.day3.sent + remind.day5.sent + remind.overdue.sent;
     const healthy = sync.ok && remind.ok && failed === 0;
@@ -31,10 +34,10 @@ export async function GET(req: Request) {
       ...HB,
       success: sent,
       failed,
-      message: `assigned=${sync.assigned} sent=${sent} failed=${failed}${sync.why ? ` sync=${sync.why}` : ""}${remind.why ? ` remind=${remind.why}` : ""}`,
+      message: `assigned=${sync.assigned} sent=${sent} failed=${failed} imagesDeleted=${imagesDeleted}${sync.why ? ` sync=${sync.why}` : ""}${remind.why ? ` remind=${remind.why}` : ""}`,
     });
-    console.log(JSON.stringify({ msg: "cron_daily_done", sync, remind }));
-    return Response.json({ ok: healthy, sync, remind });
+    console.log(JSON.stringify({ msg: "cron_daily_done", sync, remind, imagesDeleted }));
+    return Response.json({ ok: healthy, sync, remind, imagesDeleted });
   } catch (err) {
     await reportHeartbeat(HB_JOB, false, { ...HB, message: errorSummary(err) });
     console.log(JSON.stringify({ msg: "cron_daily_failed", error: errorSummary(err) }));

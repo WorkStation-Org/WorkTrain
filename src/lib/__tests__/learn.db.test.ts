@@ -3,7 +3,6 @@ import { asc, eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
 import { defaultBlueprint } from "@/domain/blueprint";
-import type { FaceVerifier } from "@/lib/identity-service";
 
 /**
  * ผู้เรียน: ยินยอม → สแกน → อ่านครบทุกหน้า → สแกน → สอบทีละข้อ → ผล (spec §8–§10 · PGlite + migration จริง)
@@ -15,14 +14,26 @@ vi.mock("@/db", async () => {
   return { db: () => get(), schema: s };
 });
 
-const { giveConsent, hasConsent, recordScan } = await import("@/lib/identity-service");
+const { giveConsent, hasConsent } = await import("@/lib/identity-service");
 const L = await import("@/lib/learn-service");
 
 const ME = 31;
 const T0 = new Date("2026-11-02T09:00:00+07:00");
 const sec = (n: number) => new Date(T0.getTime() + n * 1000);
-const pass: FaceVerifier = { verify: async () => ({ result: "pass" }) };
-const fail: FaceVerifier = { verify: async () => ({ result: "no_match", similarity: 12.5 }) };
+/** ผลสแกนลงฐานตรง ๆ — การสแกนจริง (Rekognition) เทสต์แยกใน identity.db.test.ts */
+async function recordScan(input: { personId: number; purpose: "study" | "exam"; pass: boolean; now: Date }) {
+  const [row] = await testDb()
+    .insert(schema.faceScans)
+    .values({
+      personId: input.personId,
+      purpose: input.purpose,
+      result: input.pass ? "pass" : "no_match",
+      deleteAfter: new Date(input.now.getTime() + 90 * 86400_000),
+      createdAt: input.now,
+    })
+    .returning({ id: schema.faceScans.id });
+  return { ok: true, scanId: row.id, error: "" } as { ok: boolean; scanId: number; error: string };
+}
 
 /** ชุดที่ใช้อยู่: เอกสาร 2 ไฟล์ (3 หน้า + 1 หน้า) · ข้อสอบ 5 ชุด ชุดละ 10 ข้อ · มอบให้ ME แล้ว */
 async function seed(examMinutes = 15) {
@@ -67,7 +78,7 @@ async function seed(examMinutes = 15) {
 }
 
 async function startSession(at: Date) {
-  const scan = await recordScan({ personId: ME, purpose: "study", verifier: pass, now: at });
+  const scan = await recordScan({ personId: ME, purpose: "study", pass: true, now: at });
   if (!scan.ok) throw new Error(scan.error);
   const s = await L.startStudySession({ personId: ME, scanId: scan.scanId, now: at });
   if (!s.ok) throw new Error(s.error);
@@ -82,7 +93,7 @@ async function readAll(aId: number, docs: { id: number; pageCount: number | null
 }
 
 async function startExam(aId: number, at: Date) {
-  const scan = await recordScan({ personId: ME, purpose: "exam", verifier: pass, now: at });
+  const scan = await recordScan({ personId: ME, purpose: "exam", pass: true, now: at });
   if (!scan.ok) throw new Error(scan.error);
   return L.startAttempt({ personId: ME, assignmentId: aId, scanId: scan.scanId, now: at });
 }
@@ -112,16 +123,12 @@ describe("ความยินยอมและการสแกน", () => {
     expect(await testDb().select().from(schema.faceConsents)).toHaveLength(1);
   });
 
-  it("ไม่มีตัวเทียบใบหน้า (production ก่อนมี AWS) → บอกตรง ๆ", async () => {
-    expect(await recordScan({ personId: ME, purpose: "study", verifier: null })).toEqual({ ok: false, error: "ยังไม่ได้ตั้งระบบสแกนใบหน้าบนเซิร์ฟเวอร์นี้" });
-  });
-
   it("สแกนไม่ผ่าน · ผิดจุดประสงค์ · หมดอายุ · ใช้ซ้ำ → เริ่มรอบเรียนไม่ได้", async () => {
-    const bad = await recordScan({ personId: ME, purpose: "study", verifier: fail, now: T0 });
+    const bad = await recordScan({ personId: ME, purpose: "study", pass: false, now: T0 });
     expect(await L.startStudySession({ personId: ME, scanId: (bad as { scanId: number }).scanId, now: T0 })).toEqual({ ok: false, error: "สแกนใบหน้าไม่ผ่าน" });
-    const exam = await recordScan({ personId: ME, purpose: "exam", verifier: pass, now: T0 });
+    const exam = await recordScan({ personId: ME, purpose: "exam", pass: true, now: T0 });
     expect((await L.startStudySession({ personId: ME, scanId: (exam as { scanId: number }).scanId, now: T0 })).ok).toBe(false);
-    const ok = await recordScan({ personId: ME, purpose: "study", verifier: pass, now: T0 });
+    const ok = await recordScan({ personId: ME, purpose: "study", pass: true, now: T0 });
     const id = (ok as { scanId: number }).scanId;
     expect((await L.startStudySession({ personId: ME, scanId: id, now: sec(6 * 60) })).ok).toBe(false);
     expect((await L.startStudySession({ personId: ME, scanId: id, now: sec(10) })).ok).toBe(true);
@@ -129,7 +136,7 @@ describe("ความยินยอมและการสแกน", () => {
   });
 
   it("สแกนของคนอื่นใช้ไม่ได้", async () => {
-    const other = await recordScan({ personId: 99, purpose: "study", verifier: pass, now: T0 });
+    const other = await recordScan({ personId: 99, purpose: "study", pass: true, now: T0 });
     expect((await L.startStudySession({ personId: ME, scanId: (other as { scanId: number }).scanId, now: T0 })).ok).toBe(false);
   });
 });

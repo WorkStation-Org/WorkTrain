@@ -395,7 +395,8 @@ export const faceEnrollments = pgTable(
   ],
 );
 
-export const SCAN_PURPOSES = ["study", "exam"] as const;
+/** `enroll` = ลงทะเบียนใบหน้า (ครั้งแรก หรือขอลงทะเบียนใหม่) */
+export const SCAN_PURPOSES = ["study", "exam", "enroll"] as const;
 /** `liveness_fail` = ไม่ใช่คนจริงต่อหน้ากล้อง · `no_match` = คนจริงแต่ไม่ตรงกับใบหน้าที่ลงทะเบียน */
 export const SCAN_RESULTS = ["pass", "liveness_fail", "no_match", "error"] as const;
 export const SCAN_REVIEWS = ["confirmed", "rejected"] as const;

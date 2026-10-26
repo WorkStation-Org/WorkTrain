@@ -29,6 +29,8 @@ export interface ObjectStore {
   delete(key: string): Promise<void>;
   /** อ่านไฟล์ทั้งก้อนฝั่งเซิร์ฟเวอร์ (ส่งเอกสารให้ AI ออกข้อสอบ) · `null` = ไม่มี object */
   get(key: string): Promise<Uint8Array | null>;
+  /** เขียนจากฝั่งเซิร์ฟเวอร์ (ภาพสแกนที่ได้จาก Rekognition) */
+  put(key: string, bytes: Uint8Array, contentType: string): Promise<void>;
   /** ลิงก์เปิดไฟล์อายุสั้น — ส่งให้คนที่ผ่านการตรวจสิทธิ์แล้วเท่านั้น */
   presignGet(input: { key: string; contentType: string; disposition: string }): Promise<string>;
 }
@@ -114,6 +116,9 @@ function r2Store(): ObjectStore {
     async delete(key) {
       await s3().send(new DeleteObjectCommand({ Bucket, Key: key }));
     },
+    async put(key, bytes, contentType) {
+      await s3().send(new PutObjectCommand({ Bucket, Key: key, Body: bytes, ContentType: contentType }));
+    },
     async get(key) {
       try {
         const r = await s3().send(new GetObjectCommand({ Bucket, Key: key }));
@@ -170,6 +175,9 @@ function localDevStore(): ObjectStore {
     },
     async get(key) {
       return objects.get(key) ?? null;
+    },
+    async put(key, bytes) {
+      objects.set(key, bytes);
     },
     async presignGet({ key, contentType, disposition }) {
       return url(key, { ct: contentType, cd: disposition });
