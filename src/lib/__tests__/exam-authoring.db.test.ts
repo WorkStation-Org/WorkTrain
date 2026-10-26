@@ -33,7 +33,13 @@ const ORG = [
   { personId: 30, email: "s@ws.co", fullName: "เซล", name: "เซล", managerPersonId: 20 },
 ];
 
-const PDF = new TextEncoder().encode("%PDF-1.7 fake catalog");
+/** PDF จริง 3 หน้า — confirmUpload นับหน้าจากไฟล์ */
+const PDF = await (async () => {
+  const { PDFDocument } = await import("pdf-lib");
+  const doc = await PDFDocument.create();
+  for (let i = 0; i < 3; i++) doc.addPage();
+  return doc.save();
+})();
 
 let counter = 0;
 function question(topic: GeneratedQuestion["topic"], level: GeneratedQuestion["level"]): GeneratedQuestion {
@@ -143,13 +149,20 @@ describe("อัปโหลดเอกสาร", () => {
     const a = await confirmUpload({ actor: pd, token: req.token });
     const b = await confirmUpload({ actor: pd, token: req.token });
     expect(a).toEqual(b);
-    expect((await getSetDetail(pd, setId))?.documents).toHaveLength(1);
+    expect((await getSetDetail(pd, setId))?.documents.map((d) => d.pageCount)).toEqual([3]);
   });
 
   it("ขนาดไฟล์ที่มาถึงไม่ตรงกับที่ขอ → ปฏิเสธและลบไฟล์ทิ้ง", async () => {
     const r = await createSet({ actor: pd, title: "x", kind: "product" });
     const out = await uploadPdf(pd, (r as { setId: number }).setId, new Uint8Array(5));
     expect(out).toEqual({ ok: false, error: "ขนาดไฟล์ไม่ตรงกับที่แจ้งไว้" });
+    expect(devStoreObjects().size).toBe(0);
+  });
+
+  it("ไฟล์ที่บอกว่าเป็น PDF แต่อ่านไม่ได้ → ปฏิเสธและลบทิ้ง", async () => {
+    const r = await createSet({ actor: pd, title: "x", kind: "product" });
+    const junk = new Uint8Array(PDF.byteLength).fill(65);
+    expect(await uploadPdf(pd, (r as { setId: number }).setId, junk)).toEqual({ ok: false, error: "อ่านไฟล์ PDF ไม่ได้ — ไฟล์อาจเสียหรือมีรหัสผ่าน" });
     expect(devStoreObjects().size).toBe(0);
   });
 

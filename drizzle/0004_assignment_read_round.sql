@@ -1,0 +1,1 @@
+ALTER TABLE "assignments" ADD COLUMN "read_round" smallint DEFAULT 1 NOT NULL;

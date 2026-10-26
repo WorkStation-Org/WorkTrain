@@ -1,0 +1,483 @@
+import { randomInt } from "node:crypto";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { db } from "@/db";
+import { atomic } from "@/db/atomic";
+import {
+  assignments,
+  attempts,
+  choices,
+  documentViews,
+  documents,
+  examForms,
+  learningSets,
+  questions,
+  readingProgress,
+  setVersions,
+  studySessions,
+} from "@/db/schema";
+import {
+  buildLayout,
+  currentIndex,
+  leaveForcesSubmit,
+  needsRelearn,
+  pickForm,
+  score,
+  type LayoutItem,
+  type Rng,
+} from "@/domain/exam";
+import { usableScan } from "@/lib/identity-service";
+import { objectStore } from "@/lib/object-store";
+import type { Outcome } from "@/lib/set-service";
+
+/**
+ * ฝั่งผู้เรียน (spec §9 · §10) — รอบเรียน · ความคืบหน้าการอ่าน · ครั้งที่สอบ
+ *
+ * ★ ทุกฟังก์ชันรับ `personId` ของคนที่ล็อกอิน แล้วตรวจเองว่าการมอบ/ครั้งที่สอบเป็นของคนนี้ — ไม่เชื่อ id จากหน้าจอ
+ * ★ เวลามาจากเซิร์ฟเวอร์เสมอ (`now`) — หมดเวลาสอบตัดสินที่นี่ ไม่ใช่ที่นาฬิกาของเบราว์เซอร์
+ * ★ Pricelist ยังไม่อยู่ในเอกสารที่ผู้เรียนต้องอ่าน — ต้องแสดงแบบมีลายน้ำฝั่งเซิร์ฟเวอร์ก่อน (ADR-0010 · ยังไม่ได้ทำ)
+ */
+
+/** นิ่งเกินนี้ = จบรอบเรียน ต้องสแกนใหม่ (spec §9) */
+export const IDLE_END_MS = 2 * 60 * 1000;
+/** เวลาอ่านที่รับต่อ heartbeat หนึ่งครั้ง — กันเบราว์เซอร์ส่งตัวเลขเกินจริง */
+export const MAX_SECONDS_PER_BEAT = 30;
+
+const secureRng: Rng = () => randomInt(0, 2 ** 32) / 2 ** 32;
+
+type AssignmentRow = typeof assignments.$inferSelect;
+type SetRow = typeof learningSets.$inferSelect;
+
+async function myAssignment(personId: number, assignmentId: number): Promise<{ a: AssignmentRow; set: SetRow } | null> {
+  const [row] = await db()
+    .select({ a: assignments, set: learningSets })
+    .from(assignments)
+    .innerJoin(learningSets, eq(learningSets.id, assignments.setId))
+    .where(and(eq(assignments.id, assignmentId), eq(assignments.personId, personId)));
+  return row ?? null;
+}
+
+/** เวอร์ชันล่าสุดที่อนุมัติแล้ว — ผู้เรียนเห็นและสอบจากเวอร์ชันนี้ */
+async function approvedVersion(setId: number) {
+  const rows = await db()
+    .select()
+    .from(setVersions)
+    .where(eq(setVersions.setId, setId))
+    .orderBy(desc(setVersions.versionNo));
+  return rows.find((v) => v.approvedAt !== null) ?? null;
+}
+
+/** เอกสารที่ผู้เรียนต้องอ่าน — ทุกชนิดยกเว้น Pricelist (ยังแสดงแบบมีลายน้ำไม่ได้) */
+async function requiredDocuments(versionId: number) {
+  const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder));
+  return rows.filter((d) => d.kind !== "pricelist" && d.pageCount !== null);
+}
+
+// ── รอบเรียน ───────────────────────────────────────────────────────────────
+
+/** รอบเรียนที่ยังเปิดอยู่ · นิ่งเกิน 2 นาที = ปิดเป็น `idle` แล้วคืน null */
+export async function activeSession(personId: number, now: Date) {
+  const [open] = await db()
+    .select()
+    .from(studySessions)
+    .where(and(eq(studySessions.personId, personId), isNull(studySessions.endedAt)));
+  if (!open) return null;
+  if (open.lastActiveAt.getTime() < now.getTime() - IDLE_END_MS) {
+    await db()
+      .update(studySessions)
+      .set({ endedAt: now, endReason: "idle" })
+      .where(and(eq(studySessions.id, open.id), isNull(studySessions.endedAt)));
+    return null;
+  }
+  return open;
+}
+
+/** เริ่มรอบเรียนด้วยผลสแกนที่ผ่าน — รอบเก่าที่ค้างถูกปิดก่อน (login ใหม่ = รอบใหม่) */
+export async function startStudySession(input: { personId: number; scanId: number; now?: Date }): Promise<Outcome<{ sessionId: number }>> {
+  const now = input.now ?? new Date();
+  const bad = await usableScan({ personId: input.personId, scanId: input.scanId, purpose: "study", now });
+  if (bad) return { ok: false, error: bad };
+  await db()
+    .update(studySessions)
+    .set({ endedAt: now, endReason: "expired" })
+    .where(and(eq(studySessions.personId, input.personId), isNull(studySessions.endedAt)));
+  const [row] = await db()
+    .insert(studySessions)
+    .values({ personId: input.personId, scanId: input.scanId, startedAt: now, lastActiveAt: now })
+    .returning({ id: studySessions.id });
+  return { ok: true, sessionId: row.id };
+}
+
+export async function endStudySession(personId: number, now: Date = new Date()): Promise<void> {
+  await db()
+    .update(studySessions)
+    .set({ endedAt: now, endReason: "logout" })
+    .where(and(eq(studySessions.personId, personId), isNull(studySessions.endedAt)));
+}
+
+// ── การอ่าน ────────────────────────────────────────────────────────────────
+
+/**
+ * heartbeat ระหว่างอ่าน — หน้าที่เห็น + เวลาที่แท็บอยู่หน้าและมีการขยับ (เบราว์เซอร์ส่งทุก ~15 วินาที)
+ * ไม่มีรอบเรียนที่เปิดอยู่ = ไม่นับ และบอกให้สแกนใหม่
+ */
+export async function recordReading(input: {
+  personId: number;
+  assignmentId: number;
+  documentId: number;
+  pages: number[];
+  activeSeconds: number;
+  now?: Date;
+}): Promise<Outcome<{ completed: boolean }>> {
+  const now = input.now ?? new Date();
+  const session = await activeSession(input.personId, now);
+  if (!session) return { ok: false, error: "session_ended" };
+  const mine = await myAssignment(input.personId, input.assignmentId);
+  if (!mine || mine.set.status !== "active") return { ok: false, error: "ไม่พบการมอบนี้" };
+  if (await openAttempt(mine.a.id)) return { ok: false, error: "กำลังสอบอยู่ — เปิดเอกสารไม่ได้" };
+  const version = await approvedVersion(mine.set.id);
+  const doc = version ? (await requiredDocuments(version.id)).find((d) => d.id === input.documentId) : undefined;
+  if (!doc || doc.pageCount === null) return { ok: false, error: "ไม่พบเอกสารนี้" };
+
+  const pages = [...new Set(input.pages)].filter((p) => Number.isInteger(p) && p >= 1 && p <= doc.pageCount!);
+  const seconds = Math.max(0, Math.min(MAX_SECONDS_PER_BEAT, Math.floor(input.activeSeconds)));
+  const round = mine.a.readRound;
+  const [prev] = await db()
+    .select()
+    .from(readingProgress)
+    .where(and(eq(readingProgress.assignmentId, mine.a.id), eq(readingProgress.documentId, doc.id), eq(readingProgress.readRound, round)));
+  const seen = [...new Set([...(prev?.pagesSeen ?? []), ...pages])].sort((x, y) => x - y);
+  const completed = seen.length >= doc.pageCount;
+  const values = {
+    pagesSeen: seen,
+    activeSeconds: (prev?.activeSeconds ?? 0) + seconds,
+    completedAt: prev?.completedAt ?? (completed ? now : null),
+    updatedAt: now,
+  };
+  await atomic([
+    prev
+      ? db()
+          .update(readingProgress)
+          .set(values)
+          .where(and(eq(readingProgress.assignmentId, mine.a.id), eq(readingProgress.documentId, doc.id), eq(readingProgress.readRound, round)))
+      : db().insert(readingProgress).values({ assignmentId: mine.a.id, documentId: doc.id, readRound: round, ...values }),
+    // มีการขยับจริงเท่านั้นที่ต่ออายุรอบเรียน — heartbeat ที่ไม่มีเวลาอ่าน (แท็บซ่อน/นิ่ง) ไม่นับ
+    ...(seconds > 0 || pages.length > 0
+      ? [db().update(studySessions).set({ lastActiveAt: now }).where(eq(studySessions.id, session.id))]
+      : []),
+  ]);
+  if (completed && mine.a.relearnRequiredAt && (await readingComplete(mine.a, version!.id))) {
+    await db().update(assignments).set({ relearnRequiredAt: null }).where(eq(assignments.id, mine.a.id));
+  }
+  return { ok: true, completed };
+}
+
+async function readingComplete(a: Pick<AssignmentRow, "id" | "readRound">, versionId: number): Promise<boolean> {
+  const required = await requiredDocuments(versionId);
+  if (!required.length) return false;
+  const done = await db()
+    .select({ documentId: readingProgress.documentId, completedAt: readingProgress.completedAt })
+    .from(readingProgress)
+    .where(and(eq(readingProgress.assignmentId, a.id), eq(readingProgress.readRound, a.readRound)));
+  const finished = new Set(done.filter((d) => d.completedAt).map((d) => d.documentId));
+  return required.every((d) => finished.has(d.id));
+}
+
+/**
+ * ลิงก์เปิดเอกสารอายุสั้น — ต้องมีรอบเรียนที่เปิดอยู่ · ห้ามระหว่างสอบ (ล็อกเอกสาร · spec §10) · บันทึกทุกการเปิด (ADR-0010)
+ */
+export async function documentLink(input: { personId: number; assignmentId: number; documentId: number; now?: Date }): Promise<Outcome<{ url: string }>> {
+  const now = input.now ?? new Date();
+  if (!(await activeSession(input.personId, now))) return { ok: false, error: "session_ended" };
+  const mine = await myAssignment(input.personId, input.assignmentId);
+  if (!mine || mine.set.status !== "active") return { ok: false, error: "ไม่พบการมอบนี้" };
+  if (await openAttempt(mine.a.id)) return { ok: false, error: "กำลังสอบอยู่ — เปิดเอกสารไม่ได้" };
+  const version = await approvedVersion(mine.set.id);
+  const doc = version ? (await requiredDocuments(version.id)).find((d) => d.id === input.documentId) : undefined;
+  if (!doc) return { ok: false, error: "ไม่พบเอกสารนี้" };
+  const store = objectStore();
+  if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
+  const url = await store.presignGet({ key: doc.objectKey, contentType: doc.mimeType, disposition: "inline" });
+  await db().insert(documentViews).values({ documentId: doc.id, personId: input.personId, viewedAt: now });
+  return { ok: true, url };
+}
+
+// ── หน้าผู้เรียน ───────────────────────────────────────────────────────────
+
+export type LearnerState = "passed" | "relearn" | "ready" | "reading" | "in_exam";
+
+/** ชุดที่ได้รับมอบของฉัน — เฉพาะชุดที่ใช้อยู่ */
+export async function myAssignments(personId: number) {
+  const rows = await db()
+    .select({ a: assignments, title: learningSets.title, passPercent: learningSets.passPercent })
+    .from(assignments)
+    .innerJoin(learningSets, eq(learningSets.id, assignments.setId))
+    .where(and(eq(assignments.personId, personId), eq(learningSets.status, "active")))
+    .orderBy(asc(assignments.dueAt));
+  return rows;
+}
+
+/** ทุกอย่างที่หน้าเรียนของการมอบหนึ่งต้องใช้ */
+export async function learnView(personId: number, assignmentId: number, now: Date = new Date()) {
+  const mine = await myAssignment(personId, assignmentId);
+  if (!mine || mine.set.status !== "active") return null;
+  const version = await approvedVersion(mine.set.id);
+  if (!version) return null;
+  const docs = await requiredDocuments(version.id);
+  const progress = await db()
+    .select()
+    .from(readingProgress)
+    .where(and(eq(readingProgress.assignmentId, mine.a.id), eq(readingProgress.readRound, mine.a.readRound)));
+  const past = await db()
+    .select({ id: attempts.id, endedAt: attempts.endedAt, scorePercent: attempts.scorePercent, passed: attempts.passed, endReason: attempts.endReason })
+    .from(attempts)
+    .where(eq(attempts.assignmentId, mine.a.id))
+    .orderBy(asc(attempts.startedAt));
+  const open = await openAttempt(mine.a.id, now);
+  const complete = await readingComplete(mine.a, version.id);
+  const state: LearnerState = mine.a.passedAt
+    ? "passed"
+    : open
+      ? "in_exam"
+      : mine.a.relearnRequiredAt
+        ? "relearn"
+        : complete
+          ? "ready"
+          : "reading";
+  return {
+    assignment: mine.a,
+    set: { id: mine.set.id, title: mine.set.title, passPercent: mine.set.passPercent, examMinutes: mine.set.examMinutes },
+    versionLabel: version.label,
+    documents: docs.map((d) => {
+      const p = progress.find((x) => x.documentId === d.id);
+      return { id: d.id, fileName: d.fileName, pageCount: d.pageCount!, pagesSeen: p?.pagesSeen ?? [], completed: Boolean(p?.completedAt) };
+    }),
+    attempts: past.filter((x) => x.endedAt),
+    openAttemptId: open?.id ?? null,
+    state,
+    session: await activeSession(personId, now),
+  };
+}
+
+// ── การสอบ ─────────────────────────────────────────────────────────────────
+
+/** ครั้งที่สอบที่ยังค้าง — เลยเวลาแล้วปิดเป็น `timeout` ให้ก่อนคืน */
+async function openAttempt(assignmentId: number, now: Date = new Date()) {
+  const [row] = await db()
+    .select()
+    .from(attempts)
+    .where(and(eq(attempts.assignmentId, assignmentId), isNull(attempts.endedAt)));
+  if (!row) return null;
+  if (row.deadlineAt <= now) {
+    await finalize(row, "timeout", now);
+    return null;
+  }
+  return row;
+}
+
+export async function startAttempt(input: {
+  personId: number;
+  assignmentId: number;
+  scanId: number;
+  now?: Date;
+  rng?: Rng;
+}): Promise<Outcome<{ attemptId: number }>> {
+  const now = input.now ?? new Date();
+  const mine = await myAssignment(input.personId, input.assignmentId);
+  if (!mine || mine.set.status !== "active") return { ok: false, error: "ไม่พบการมอบนี้" };
+  if (mine.a.passedAt) return { ok: false, error: "สอบผ่านชุดนี้แล้ว" };
+  if (await openAttempt(mine.a.id, now)) return { ok: false, error: "มีการสอบที่ยังค้างอยู่" };
+  if (mine.a.relearnRequiredAt) return { ok: false, error: "ไม่ผ่าน 2 ครั้งติด — กลับไปอ่านเอกสารให้ครบอีกรอบก่อนสอบ" };
+  const version = await approvedVersion(mine.set.id);
+  if (!version) return { ok: false, error: "ชุดนี้ยังไม่มีข้อสอบ" };
+  if (!(await readingComplete(mine.a, version.id))) return { ok: false, error: "ต้องอ่านเอกสารให้ครบทุกหน้าก่อนสอบ" };
+  const bad = await usableScan({ personId: input.personId, scanId: input.scanId, purpose: "exam", now });
+  if (bad) return { ok: false, error: bad };
+
+  const forms = await db()
+    .select({ id: examForms.id })
+    .from(examForms)
+    .where(and(eq(examForms.versionId, version.id), eq(examForms.kind, "full")))
+    .orderBy(asc(examForms.formNo));
+  if (!forms.length) return { ok: false, error: "ชุดนี้ยังไม่มีข้อสอบ" };
+  const used = await db()
+    .select({ formId: attempts.formId })
+    .from(attempts)
+    .where(and(eq(attempts.assignmentId, mine.a.id), eq(attempts.kind, "full")))
+    .orderBy(asc(attempts.startedAt));
+  const rng = input.rng ?? secureRng;
+  const formId = pickForm(forms.map((f) => f.id), used.map((u) => u.formId), rng);
+
+  const qs = await db().select({ id: questions.id }).from(questions).where(eq(questions.formId, formId));
+  const cs = await db()
+    .select({ id: choices.id, questionId: choices.questionId })
+    .from(choices)
+    .where(inArray(choices.questionId, qs.map((q) => q.id)));
+  const layout = buildLayout(
+    qs.map((q) => ({ id: q.id, choiceIds: cs.filter((c) => c.questionId === q.id).map((c) => c.id) })),
+    rng,
+  );
+  const [row] = await db()
+    .insert(attempts)
+    .values({
+      assignmentId: mine.a.id,
+      versionId: version.id,
+      formId,
+      kind: "full",
+      scanId: input.scanId,
+      layout,
+      startedAt: now,
+      deadlineAt: new Date(now.getTime() + mine.set.examMinutes * 60 * 1000),
+    })
+    .returning({ id: attempts.id });
+  // เริ่มสอบ = จบรอบเรียน (เอกสารถูกล็อกระหว่างสอบ)
+  await endStudySession(input.personId, now);
+  return { ok: true, attemptId: row.id };
+}
+
+async function myAttempt(personId: number, attemptId: number) {
+  const [row] = await db()
+    .select({ t: attempts, personId: assignments.personId })
+    .from(attempts)
+    .innerJoin(assignments, eq(assignments.id, attempts.assignmentId))
+    .where(eq(attempts.id, attemptId));
+  return row && row.personId === personId ? row.t : null;
+}
+
+type AttemptRow = typeof attempts.$inferSelect;
+
+/** ปิดครั้งที่สอบ — คะแนน · ผ่านแล้วลงที่การมอบ · ไม่ผ่าน 2 ครั้งติดให้กลับไปอ่านใหม่ */
+async function finalize(t: AttemptRow, reason: "submitted" | "timeout" | "left_page", now: Date): Promise<void> {
+  const layout = t.layout as LayoutItem[];
+  const answers = t.answers as Record<string, number>;
+  const correctRows = await db()
+    .select({ questionId: choices.questionId, id: choices.id })
+    .from(choices)
+    .where(and(inArray(choices.questionId, layout.map((l) => l.questionId)), eq(choices.isCorrect, true)));
+  const { percent } = score(layout, answers, new Map(correctRows.map((c) => [c.questionId, c.id])));
+  const [a] = await db()
+    .select({ a: assignments, passPercent: learningSets.passPercent })
+    .from(assignments)
+    .innerJoin(learningSets, eq(learningSets.id, assignments.setId))
+    .where(eq(assignments.id, t.assignmentId));
+  const passed = percent >= a.passPercent;
+
+  const closed = await db()
+    .update(attempts)
+    .set({ endedAt: now, endReason: reason, scorePercent: percent, passed })
+    .where(and(eq(attempts.id, t.id), isNull(attempts.endedAt)))
+    .returning({ id: attempts.id });
+  if (!closed.length) return; // อีกคำขอหนึ่งปิดไปแล้ว
+
+  if (passed) {
+    if (!a.a.passedAt) await db().update(assignments).set({ passedAt: now }).where(eq(assignments.id, a.a.id));
+    return;
+  }
+  const history = await db()
+    .select({ passed: attempts.passed })
+    .from(attempts)
+    .where(and(eq(attempts.assignmentId, a.a.id), eq(attempts.kind, "full")))
+    .orderBy(asc(attempts.startedAt));
+  if (needsRelearn(history.flatMap((h) => (h.passed === null ? [] : [h.passed])))) {
+    await db()
+      .update(assignments)
+      .set({ relearnRequiredAt: now, readRound: a.a.readRound + 1 })
+      .where(eq(assignments.id, a.a.id));
+  }
+}
+
+export interface AttemptView {
+  attemptId: number;
+  setTitle: string;
+  assignmentId: number;
+  ended: boolean;
+  /** ระหว่างสอบ */
+  index?: number;
+  total: number;
+  question?: { id: number; text: string; choices: { id: number; text: string }[] };
+  secondsLeft?: number;
+  leaveCount: number;
+  /** หลังสอบ — แสดงข้อที่ผิด ไม่เฉลยคำตอบที่ถูก (ADR-0009) */
+  result?: { percent: number; passed: boolean; reason: string; wrongQuestions: string[]; passPercent: number };
+}
+
+export async function attemptView(personId: number, attemptId: number, now: Date = new Date()): Promise<AttemptView | null> {
+  let t = await myAttempt(personId, attemptId);
+  if (!t) return null;
+  if (!t.endedAt && t.deadlineAt <= now) {
+    await finalize(t, "timeout", now);
+    t = (await myAttempt(personId, attemptId))!;
+  }
+  const [meta] = await db()
+    .select({ title: learningSets.title, passPercent: learningSets.passPercent })
+    .from(assignments)
+    .innerJoin(learningSets, eq(learningSets.id, assignments.setId))
+    .where(eq(assignments.id, t.assignmentId));
+  const layout = t.layout as LayoutItem[];
+  const answers = t.answers as Record<string, number>;
+  const base = { attemptId: t.id, setTitle: meta.title, assignmentId: t.assignmentId, total: layout.length, leaveCount: t.leaveCount };
+
+  if (t.endedAt) {
+    const correctRows = await db()
+      .select({ questionId: choices.questionId, id: choices.id })
+      .from(choices)
+      .where(and(inArray(choices.questionId, layout.map((l) => l.questionId)), eq(choices.isCorrect, true)));
+    const { wrong } = score(layout, answers, new Map(correctRows.map((c) => [c.questionId, c.id])));
+    const texts = wrong.length ? await db().select({ id: questions.id, text: questions.text }).from(questions).where(inArray(questions.id, wrong)) : [];
+    return {
+      ...base,
+      ended: true,
+      result: {
+        percent: t.scorePercent ?? 0,
+        passed: Boolean(t.passed),
+        reason: t.endReason ?? "submitted",
+        wrongQuestions: wrong.map((id) => texts.find((x) => x.id === id)?.text ?? ""),
+        passPercent: meta.passPercent,
+      },
+    };
+  }
+
+  const idx = currentIndex(layout, answers)!;
+  const item = layout[idx];
+  const [q] = await db().select({ id: questions.id, text: questions.text }).from(questions).where(eq(questions.id, item.questionId));
+  const cs = await db().select({ id: choices.id, text: choices.text }).from(choices).where(inArray(choices.id, item.choiceIds));
+  return {
+    ...base,
+    ended: false,
+    index: idx,
+    question: { id: q.id, text: q.text, choices: item.choiceIds.map((id) => cs.find((c) => c.id === id)!) },
+    secondsLeft: Math.max(0, Math.ceil((t.deadlineAt.getTime() - now.getTime()) / 1000)),
+  };
+}
+
+/** ตอบข้อปัจจุบัน — ต้องเป็นข้อที่กำลังแสดง (ย้อนกลับ/ข้ามไม่ได้) · ตอบครบ = ส่งเอง */
+export async function answer(input: { personId: number; attemptId: number; questionId: number; choiceId: number; now?: Date }): Promise<Outcome> {
+  const now = input.now ?? new Date();
+  const t = await myAttempt(input.personId, input.attemptId);
+  if (!t) return { ok: false, error: "ไม่พบการสอบนี้" };
+  if (t.endedAt) return { ok: false, error: "การสอบนี้จบแล้ว" };
+  if (t.deadlineAt <= now) {
+    await finalize(t, "timeout", now);
+    return { ok: false, error: "หมดเวลาสอบ" };
+  }
+  const layout = t.layout as LayoutItem[];
+  const answers = { ...(t.answers as Record<string, number>) };
+  const idx = currentIndex(layout, answers);
+  if (idx === null || layout[idx].questionId !== input.questionId) return { ok: false, error: "ตอบได้เฉพาะข้อที่กำลังแสดง" };
+  if (!layout[idx].choiceIds.includes(input.choiceId)) return { ok: false, error: "ตัวเลือกไม่ถูกต้อง" };
+  answers[String(input.questionId)] = input.choiceId;
+  await db().update(attempts).set({ answers }).where(and(eq(attempts.id, t.id), isNull(attempts.endedAt)));
+  if (currentIndex(layout, answers) === null) await finalize({ ...t, answers }, "submitted", now);
+  return { ok: true };
+}
+
+/** ออกจากหน้าสอบ (สลับแท็บ/ย่อจอ) — ครั้งที่ 1–4 เตือน · ครั้งที่ 5 ส่งเอง · บันทึกทุกครั้งให้ TG เห็น */
+export async function recordLeave(input: { personId: number; attemptId: number; now?: Date }): Promise<Outcome<{ leaveCount: number; submitted: boolean }>> {
+  const now = input.now ?? new Date();
+  const t = await myAttempt(input.personId, input.attemptId);
+  if (!t || t.endedAt) return { ok: false, error: "การสอบนี้จบแล้ว" };
+  const leaveCount = t.leaveCount + 1;
+  await db().update(attempts).set({ leaveCount }).where(and(eq(attempts.id, t.id), isNull(attempts.endedAt)));
+  const submitted = leaveForcesSubmit(leaveCount);
+  if (submitted) await finalize({ ...t, leaveCount }, "left_page", now);
+  return { ok: true, leaveCount, submitted };
+}

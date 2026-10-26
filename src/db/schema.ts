@@ -327,6 +327,8 @@ export const assignments = pgTable(
     passedAt: ts("passed_at"),
     /** ไม่ผ่าน 2 ครั้งติด = ต้องอ่านใหม่ก่อนสอบ (spec §10) · ล้างเมื่ออ่านครบอีกรอบ */
     relearnRequiredAt: ts("relearn_required_at"),
+    /** รอบการอ่านปัจจุบัน — เริ่ม 1 · ต้องอ่านใหม่ = +1 แล้วนับหน้าที่อ่านใหม่ทั้งหมดใน `reading_progress` รอบนั้น */
+    readRound: smallint("read_round").notNull().default(1),
     createdAt: ts("created_at").notNull().defaultNow(),
   },
   (t) => [

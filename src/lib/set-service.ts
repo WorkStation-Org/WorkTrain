@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { asc, desc, eq, inArray, or } from "drizzle-orm";
+import { PDFDocument } from "pdf-lib";
 import { db } from "@/db";
 import {
   approvalEvents,
@@ -229,6 +230,17 @@ export async function confirmUpload(input: { actor: Actor; token: string; now?: 
   const existing = await db().select({ id: documents.id }).from(documents).where(eq(documents.objectKey, t.key));
   if (existing.length) return { ok: true, documentId: existing[0].id };
 
+  // นับหน้าตอนรับไฟล์ — ผู้เรียนต้องเลื่อนผ่านครบทุกหน้า (spec §9) จึงต้องรู้จำนวนหน้าจากไฟล์จริง ไม่ใช่จากเบราว์เซอร์
+  let pageCount: number | null = null;
+  if (t.mime === "application/pdf") {
+    const bytes = await store.get(t.key);
+    pageCount = bytes ? await countPdfPages(bytes) : null;
+    if (pageCount === null) {
+      await store.delete(t.key);
+      return { ok: false, error: "อ่านไฟล์ PDF ไม่ได้ — ไฟล์อาจเสียหรือมีรหัสผ่าน" };
+    }
+  }
+
   const order = await db().select({ id: documents.id }).from(documents).where(eq(documents.versionId, t.versionId));
   const [doc] = await db()
     .insert(documents)
@@ -239,10 +251,22 @@ export async function confirmUpload(input: { actor: Actor; token: string; now?: 
       fileName: t.fileName,
       mimeType: t.mime,
       sizeBytes: t.size,
+      pageCount,
       sortOrder: order.length,
     })
     .returning({ id: documents.id });
   return { ok: true, documentId: doc.id };
+}
+
+/** จำนวนหน้าของ PDF · อ่านไม่ได้ = null */
+export async function countPdfPages(bytes: Uint8Array): Promise<number | null> {
+  try {
+    const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+    const n = doc.getPageCount();
+    return n > 0 ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function removeDocument(input: { actor: Actor; documentId: number }): Promise<Outcome> {
