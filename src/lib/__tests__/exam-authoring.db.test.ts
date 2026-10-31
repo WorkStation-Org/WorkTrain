@@ -241,13 +241,13 @@ describe("แก้ข้อสอบ", () => {
 describe("การอนุมัติ", () => {
   it("ส่ง → ผู้อนุมัติแก้ได้ ผู้สร้างแก้ไม่ได้ → อนุมัติ → ใช้อยู่", async () => {
     const setId = await readySet();
-    expect(await submitForApproval({ actor: pd, setId })).toEqual({ ok: true });
+    expect(await submitForApproval({ actor: pd, setId })).toMatchObject({ ok: true });
     const q = (await getSetDetail(pdMgr, setId))!.forms[1].questions[0];
     const edit = { text: "แก้โดยผู้อนุมัติ", sourceRef: "หน้า 6", choices: ["1", "2", "3", "4"], correctIndex: 2 };
     expect((await editQuestion({ actor: pd, questionId: q.id, edit })).ok).toBe(false);
     expect((await editQuestion({ actor: pdMgr, questionId: q.id, edit })).ok).toBe(true);
     expect((await approve({ actor: sales, setId })).ok).toBe(false);
-    expect(await approve({ actor: pdMgr, setId })).toEqual({ ok: true });
+    expect(await approve({ actor: pdMgr, setId })).toMatchObject({ ok: true });
     const d = await getSetDetail(pdMgr, setId);
     expect(d?.set.status).toBe("active");
     expect(d?.version?.approvedAt).not.toBeNull();
@@ -258,7 +258,7 @@ describe("การอนุมัติ", () => {
     const setId = await readySet();
     await submitForApproval({ actor: pd, setId });
     expect((await returnToAuthor({ actor: pdMgr, setId, comment: "  " })).ok).toBe(false);
-    expect(await returnToAuthor({ actor: pdMgr, setId, comment: "ราคา STELVIO ใน Pricelist ผิด" })).toEqual({ ok: true });
+    expect(await returnToAuthor({ actor: pdMgr, setId, comment: "ราคา STELVIO ใน Pricelist ผิด" })).toMatchObject({ ok: true });
     expect((await getSetDetail(pd, setId))?.set.status).toBe("draft");
     const last = (await events(setId)).at(-1);
     expect(last).toMatchObject({ action: "returned", comment: "ราคา STELVIO ใน Pricelist ผิด" });

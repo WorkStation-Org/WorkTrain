@@ -20,7 +20,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/auth.ts` + `roles.ts` — ใครกดอยู่ · `requireAdmin()` / `requireAuthor()` / `requireUser()`
 - `src/lib/session.ts` + `src/proxy.ts` — session cookie ที่เซ็นแล้ว · ถาม WorkID ใหม่ทุก 5 นาที (fail-open)
 - `src/lib/workid.ts` — SSO · `/v1/session/check` · `fetchOrg()` (ผัง: `positionId` · `teamId` · `managedTeamIds` · `managerPersonId` · `lineGroupId`)
-- `src/lib/gateway.ts` — ส่ง LINE ผ่าน WorkGateWay (ยังไม่มีผู้เรียก — ใช้ใน slice การแจ้งเตือน)
+- `src/lib/gateway.ts` — client ของ WorkGateWay · `src/lib/deliver.ts` — ส่งตัวต่อตัว/เข้ากลุ่มประจำตัว พร้อมจองแถวและบันทึกผล (ยกจาก WorkDaily)
+- `src/domain/audience.ts` — เงื่อนไขผู้รับ → รายชื่อ · `src/lib/assignment-service.ts` — ผู้รับ · มอบ (`syncAssignments`) · เตือน (`runReminders`) · แจ้งเรื่องอนุมัติ
+- `src/app/api/cron/daily` — รอบเช้า 09:00: มอบให้คนที่เพิ่งตรงเงื่อนไข แล้วเตือนวันที่ 3 / 5 / เลยกำหนด
 - `src/domain/blueprint.ts` — สัดส่วนหัวข้อ×ระดับของ 10 ข้อ · แม่แบบ PD/ทั่วไป · `src/domain/document.ts` — ชนิด/ขนาดไฟล์ · key ใน R2
 - `src/lib/set-service.ts` — สร้างชุด · ตั้งค่า · อัปโหลด (ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยันด้วย HEAD) · `getSetDetail()` (มีเฉลย — เฉพาะ `canManage`)
 - `src/lib/exam-generator.ts` — **ที่เดียวที่คุยกับ Anthropic API** (`ExamModel`) · ออก 5 ชุดในคำขอเดียว · `checkForms()` ตรวจผลของ AI ก่อนลงฐานทุกครั้ง

@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["sin1"],
-  "buildCommand": "node scripts/migrate-on-deploy.mjs && next build"
+  "buildCommand": "node scripts/migrate-on-deploy.mjs && next build",
+  "crons": [
+    {
+      "path": "/api/cron/daily",
+      "schedule": "0 2 * * *"
+    }
+  ]
 }

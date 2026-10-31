@@ -23,7 +23,7 @@ async function latestVersion(setId: number) {
   return rows.at(-1) ?? null;
 }
 
-export async function submitForApproval(input: { actor: Actor; setId: number; now?: Date }): Promise<Outcome> {
+export async function submitForApproval(input: { actor: Actor; setId: number; now?: Date }): Promise<Outcome<{ eventId: number }>> {
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
   if (!canEditDraft(input.actor, set)) return { ok: false, error: "ส่งขออนุมัติได้เฉพาะชุดร่างของตัวเอง" };
@@ -35,7 +35,7 @@ export async function submitForApproval(input: { actor: Actor; setId: number; no
   if (incomplete) return { ok: false, error: incomplete };
 
   const now = input.now ?? new Date();
-  await atomic([
+  const results = await atomic([
     db().update(learningSets).set({ status: "pending_approval", updatedAt: now }).where(eq(learningSets.id, set.id)),
     db().insert(approvalEvents).values({
       setId: set.id,
@@ -44,9 +44,15 @@ export async function submitForApproval(input: { actor: Actor; setId: number; no
       actorPersonId: input.actor.personId,
       actorName: input.actor.name,
       createdAt: now,
-    }),
+    }).returning({ id: approvalEvents.id }),
   ]);
-  return { ok: true };
+  return { ok: true, eventId: eventIdOf(results) };
+}
+
+/** id ของประวัติที่เพิ่งลง — ตัวสุดท้ายของ `atomic()` เป็น insert ... returning เสมอ */
+function eventIdOf(results: unknown[]): number {
+  const rows = results.at(-1) as { id: number }[];
+  return rows[0].id;
 }
 
 function isApprover(actor: Pick<Actor, "personId">, set: SetRow): boolean {
@@ -54,7 +60,7 @@ function isApprover(actor: Pick<Actor, "personId">, set: SetRow): boolean {
 }
 
 /** ตีกลับพร้อมความเห็น — ใช้เมื่อต้นทางผิด (Pricelist/แคตตาล็อกผิด) ผู้สร้างแก้ไฟล์แล้วออกข้อสอบใหม่ */
-export async function returnToAuthor(input: { actor: Actor; setId: number; comment: string; now?: Date }): Promise<Outcome> {
+export async function returnToAuthor(input: { actor: Actor; setId: number; comment: string; now?: Date }): Promise<Outcome<{ eventId: number }>> {
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
   if (!isApprover(input.actor, set)) return { ok: false, error: "ตีกลับได้เฉพาะผู้อนุมัติของชุดที่รออนุมัติ" };
@@ -62,7 +68,7 @@ export async function returnToAuthor(input: { actor: Actor; setId: number; comme
   if (!comment) return { ok: false, error: "ตีกลับต้องมีความเห็นบอกผู้สร้างว่าต้องแก้อะไร" };
   const version = await latestVersion(set.id);
   const now = input.now ?? new Date();
-  await atomic([
+  const results = await atomic([
     db().update(learningSets).set({ status: "draft", updatedAt: now }).where(eq(learningSets.id, set.id)),
     db().insert(approvalEvents).values({
       setId: set.id,
@@ -72,12 +78,12 @@ export async function returnToAuthor(input: { actor: Actor; setId: number; comme
       actorName: input.actor.name,
       comment,
       createdAt: now,
-    }),
+    }).returning({ id: approvalEvents.id }),
   ]);
-  return { ok: true };
+  return { ok: true, eventId: eventIdOf(results) };
 }
 
-export async function approve(input: { actor: Actor; setId: number; now?: Date }): Promise<Outcome> {
+export async function approve(input: { actor: Actor; setId: number; now?: Date }): Promise<Outcome<{ eventId: number }>> {
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
   if (!isApprover(input.actor, set)) return { ok: false, error: "อนุมัติได้เฉพาะผู้อนุมัติของชุดที่รออนุมัติ" };
@@ -88,7 +94,7 @@ export async function approve(input: { actor: Actor; setId: number; now?: Date }
   if (incomplete) return { ok: false, error: incomplete };
 
   const now = input.now ?? new Date();
-  await atomic([
+  const results = await atomic([
     db().update(setVersions).set({ approvedAt: now }).where(eq(setVersions.id, version.id)),
     db().update(learningSets).set({ status: "active", approvedAt: now, updatedAt: now }).where(eq(learningSets.id, set.id)),
     db().insert(approvalEvents).values({
@@ -98,7 +104,7 @@ export async function approve(input: { actor: Actor; setId: number; now?: Date }
       actorPersonId: input.actor.personId,
       actorName: input.actor.name,
       createdAt: now,
-    }),
+    }).returning({ id: approvalEvents.id }),
   ]);
-  return { ok: true };
+  return { ok: true, eventId: eventIdOf(results) };
 }

@@ -530,11 +530,15 @@ export const documentViews = pgTable(
   (t) => [index("document_views_document_idx").on(t.documentId, t.viewedAt)],
 );
 
-export const NOTIFICATION_STATUSES = ["queued", "sent", "delivered", "failed"] as const;
+/** `pending` = จองไว้กำลังส่ง · `skipped` = ส่งไม่ได้เพราะการตั้งค่า (ไม่ผูก LINE · ไม่แอด Work Bot) ไม่ต้องลองซ้ำ */
+export const NOTIFICATION_STATUSES = ["pending", "sent", "failed", "skipped"] as const;
 
 /**
- * ข้อความที่ส่งผ่าน WorkGateWay (spec §11) — `sent` = GateWay รับเข้าคิวแล้วมี jobId เท่านั้น (กติกาเครือข้อ 12)
- * `dedupeKey` กันส่งซ้ำ เช่น `remind-day3:<assignmentId>`
+ * ข้อความที่ส่งผ่าน WorkGateWay (spec §11) — โครงเดียวกับ WorkDaily (`src/lib/deliver.ts` ยกมาจากที่นั่น)
+ *
+ * ★ `sent` = GateWay รับเข้าคิวแล้ว **มี jobId** เท่านั้น (กติกาเครือข้อ 12) — ฐานบังคับด้วย CHECK
+ * ★ จองแถวด้วย `dedupeKey` ก่อนส่ง — สองรอบ cron ที่ชนกันส่งได้ครั้งเดียว · `failed` จองใหม่ได้ (ลองซ้ำรอบถัดไป)
+ *   เช่น `assigned:<assignmentId>` · `remind-day3:<assignmentId>` · `approval:<eventId>`
  */
 export const notifications = pgTable(
   "notifications",
@@ -542,20 +546,26 @@ export const notifications = pgTable(
     id: serial("id").primaryKey(),
     dedupeKey: text("dedupe_key").notNull(),
     kind: text("kind").notNull(),
+    /** คนที่ข้อความส่งถึงหรือพูดถึง · null = ข้อความรวมหลายคน */
     personId: integer("person_id"),
-    /** ส่งเข้ากลุ่ม LINE ประจำตัว — ห้ามส่งค่านี้ออกไปหน้าจอหรือ API */
+    /** กลุ่มที่ส่งไปจริง (กลุ่ม LINE ประจำตัว หรือกลุ่ม Test ช่วง dev) — ห้ามส่งค่านี้ออกไปหน้าจอหรือ API */
     lineGroupId: text("line_group_id"),
     setId: integer("set_id").references(() => learningSets.id, { onDelete: "restrict" }),
-    status: text("status", { enum: NOTIFICATION_STATUSES }).notNull().default("queued"),
-    jobId: text("job_id"),
-    error: text("error"),
+    assignmentId: integer("assignment_id").references(() => assignments.id, { onDelete: "restrict" }),
+    status: text("status", { enum: NOTIFICATION_STATUSES }).notNull(),
+    jobIds: text("job_ids").array().notNull().default(sql`'{}'::text[]`),
+    detail: text("detail"),
+    /** ข้อความล้วน — สำเนาของสิ่งที่ส่ง ใช้ส่งซ้ำ */
+    text: text("text"),
+    attempts: integer("attempts").notNull().default(1),
+    claimedAt: ts("claimed_at").notNull().defaultNow(),
     createdAt: ts("created_at").notNull().defaultNow(),
     deliveredAt: ts("delivered_at"),
   },
   (t) => [
     uniqueIndex("notifications_dedupe_uniq").on(t.dedupeKey),
-    check("notifications_has_target", sql`${t.personId} is not null or ${t.lineGroupId} is not null`),
-    check("notifications_sent_has_job", sql`${t.status} not in ('sent', 'delivered') or ${t.jobId} is not null`),
+    index("notifications_assignment_idx").on(t.assignmentId),
+    check("notifications_sent_has_job", sql`${t.status} <> 'sent' or cardinality(${t.jobIds}) > 0`),
     check("notifications_line_group_shape", sql`${t.lineGroupId} is null or ${t.lineGroupId} ~ '^C[0-9a-f]{32}$'`),
   ],
 );
