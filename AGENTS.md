@@ -24,7 +24,10 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/domain/audience.ts` — เงื่อนไขผู้รับ → รายชื่อ · `src/lib/assignment-service.ts` — ผู้รับ · มอบ (`syncAssignments`) · เตือน (`runReminders`) · แจ้งเรื่องอนุมัติ
 - `src/app/api/cron/daily` — รอบเช้า 09:00: มอบให้คนที่เพิ่งตรงเงื่อนไข แล้วเตือนวันที่ 3 / 5 / เลยกำหนด
 - `src/domain/exam.ts` — เลือกชุด (ไม่ซ้ำจนครบ 5) · สลับข้อ/ตัวเลือก · คะแนน · ไม่ผ่าน 2 ครั้งติด = อ่านใหม่
-- `src/lib/identity-service.ts` — ความยินยอม PDPA · การสแกน (`FaceVerifier` — **ตอนนี้มีแต่ตัว dev** · production เรียน/สอบไม่ได้จนกว่าจะมี AWS)
+- `src/lib/rekognition.ts` — **ที่เดียวที่คุยกับ AWS** (`FaceApi`: liveness session · ผล liveness · CompareFaces · credential ชั่วคราวให้เบราว์เซอร์)
+- `src/lib/identity-service.ts` — ความยินยอม PDPA · ลงทะเบียนใบหน้า (ครั้งแรกใช้ได้ทันที · ใหม่ต้องให้ TG อนุมัติ) · `beginScan`/`finishScan` เทียบฝั่งเซิร์ฟเวอร์ ·
+  ไม่ผ่าน 3 ครั้งติด → คิว TG (`/admin/faces`) · ภาพสแกนลบเมื่อครบ 90 วัน (cron เช้า) · ไม่ตั้ง AWS = `scanMode()` เป็น `off` บน production
+- `src/app/(app)/learn/scan-flow.tsx` — FaceLivenessDetector (Amplify) · บนเครื่อง dev เป็นปุ่มข้ามกล้อง
 - `src/lib/learn-service.ts` — รอบเรียน (นิ่ง 2 นาที = จบ) · ความคืบหน้าการอ่าน · ครั้งที่สอบ (ทีละข้อ · หมดเวลา/ออกหน้าสอบตัดสินที่เซิร์ฟเวอร์) · ทุกฟังก์ชันตรวจว่าเป็นของคนที่ล็อกอิน
 - `/learn` · `/learn/[id]` (ตัวอ่าน PDF ด้วย pdfjs ≥ 6.2.108) · `/learn/[id]/exam/[attemptId]` · `/consent` — หน้าผู้เรียนผ่าน `learnerActor()` (ต้องยินยอมก่อน)
 - `scripts/dev-seed-learner.mjs` — ใส่ชุดพร้อมสอบลง PGlite ไว้ลองฝั่งผู้เรียนบนเครื่องโดยไม่ต้องมี AI

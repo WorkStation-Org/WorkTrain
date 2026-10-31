@@ -2,14 +2,19 @@
 
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { faceVerifier, giveConsent, hasConsent, recordScan } from "@/lib/identity-service";
+import { beginScan, devScan, finishScan, giveConsent, hasConsent, type ScanPurpose } from "@/lib/identity-service";
 import { answer, documentLink, endStudySession, recordLeave, recordReading, startAttempt, startStudySession } from "@/lib/learn-service";
+import { awsFaceApi } from "@/lib/rekognition";
 
 /**
  * server action ของผู้เรียน — ตัวตนมาจาก session เสมอ · service ตรวจเองว่าการมอบ/ครั้งที่สอบเป็นของคนนี้
  *
- * ★ การสแกนตอนนี้ใช้ `faceVerifier()` ซึ่งมีแต่ตัว dev — บน production เริ่มเรียน/สอบไม่ได้จนกว่าจะมี AWS (ADR-0006)
+ * การสแกน (ADR-0006): `beginScanAction` → เบราว์เซอร์รัน FaceLivenessDetector ด้วย `livenessCredentialsAction`
+ * → `finishScanAction` เทียบใบหน้าฝั่งเซิร์ฟเวอร์ → ได้ scanId → `startStudyWithScanAction` / `startExamWithScanAction`
+ * บนเครื่อง dev ที่ไม่มี AWS ใช้ `devScanAction` แทนสองขั้นแรก
  */
+
+const PURPOSES: readonly ScanPurpose[] = ["study", "exam", "enroll"];
 
 async function learner() {
   const actor = await requireUser();
@@ -17,8 +22,9 @@ async function learner() {
   return actor;
 }
 
-function back(assignmentId: number, error?: string): never {
-  redirect(`/learn/${assignmentId}${error ? `?err=${encodeURIComponent(error)}` : ""}`);
+function purposeOf(v: string): ScanPurpose {
+  if (!PURPOSES.includes(v as ScanPurpose)) throw new Error("จุดประสงค์ของการสแกนไม่ถูกต้อง");
+  return v as ScanPurpose;
 }
 
 export async function consentAction() {
@@ -27,33 +33,43 @@ export async function consentAction() {
   redirect("/learn");
 }
 
-/** สแกนใบหน้า → เริ่มรอบเรียน */
-export async function startStudyAction(form: FormData) {
+export async function beginScanAction(purpose: string) {
   const actor = await learner();
-  const assignmentId = Number(form.get("assignmentId"));
-  const scan = await recordScan({ personId: actor.personId, purpose: "study", verifier: faceVerifier() });
-  if (!scan.ok) back(assignmentId, scan.error);
-  if (!scan.passed) back(assignmentId, "สแกนใบหน้าไม่ผ่าน ลองใหม่ในที่ที่มีแสงพอ");
-  const s = await startStudySession({ personId: actor.personId, scanId: scan.scanId });
-  back(assignmentId, s.ok ? undefined : s.error);
+  return beginScan({ personId: actor.personId, purpose: purposeOf(purpose), api: awsFaceApi() });
+}
+
+/** credential ชั่วคราว 15 นาทีที่ทำได้แค่เปิดสตรีม liveness — ให้ FaceLivenessDetector ในเบราว์เซอร์ */
+export async function livenessCredentialsAction() {
+  await learner();
+  const api = awsFaceApi();
+  if (!api) throw new Error("ยังไม่ได้ตั้งระบบสแกนใบหน้าบนเซิร์ฟเวอร์นี้");
+  return api.browserCredentials();
+}
+
+export async function finishScanAction(ticket: string) {
+  const actor = await learner();
+  return finishScan({ personId: actor.personId, ticket, api: awsFaceApi() });
+}
+
+export async function devScanAction(purpose: string) {
+  const actor = await learner();
+  return devScan({ personId: actor.personId, purpose: purposeOf(purpose) });
+}
+
+export async function startStudyWithScanAction(input: { scanId: number }) {
+  const actor = await learner();
+  return startStudySession({ personId: actor.personId, scanId: input.scanId });
+}
+
+export async function startExamWithScanAction(input: { assignmentId: number; scanId: number }) {
+  const actor = await learner();
+  return startAttempt({ personId: actor.personId, ...input });
 }
 
 export async function endStudyAction(form: FormData) {
   const actor = await learner();
   await endStudySession(actor.personId);
-  back(Number(form.get("assignmentId")));
-}
-
-/** สแกนใบหน้า → เริ่มสอบ */
-export async function startExamAction(form: FormData) {
-  const actor = await learner();
-  const assignmentId = Number(form.get("assignmentId"));
-  const scan = await recordScan({ personId: actor.personId, purpose: "exam", verifier: faceVerifier() });
-  if (!scan.ok) back(assignmentId, scan.error);
-  if (!scan.passed) back(assignmentId, "สแกนใบหน้าไม่ผ่าน ลองใหม่ในที่ที่มีแสงพอ");
-  const out = await startAttempt({ personId: actor.personId, assignmentId, scanId: scan.scanId });
-  if (!out.ok) back(assignmentId, out.error);
-  redirect(`/learn/${assignmentId}/exam/${out.attemptId}`);
+  redirect(`/learn/${Number(form.get("assignmentId"))}`);
 }
 
 export async function documentLinkAction(input: { assignmentId: number; documentId: number }) {

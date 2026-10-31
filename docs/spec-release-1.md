@@ -199,8 +199,8 @@ TG ติดตามให้ครบ และดูสถิติเพื�
 | เรื่อง | รอใคร | ขวางอะไร |
 |---|---|---|
 | ตัวอย่าง Pricelist | PD | รูปแบบการอ่านราคา (§3) · การตรวจตัวเลขอัตโนมัติ |
-| บัญชี AWS ที่จะใช้ | ผู้ตัดสิน | การสแกน (§8) |
-| ราคาและการมี Face Liveness ใน region Singapore (สำรอง: Tokyo) | ตรวจเองก่อนเริ่ม | ข้อความ PDPA เรื่องที่ตั้งข้อมูล (กติกาเครือข้อ 7) |
+| บัญชี AWS — เปิดแล้ว (new experience · Sydney) 26 ต.ค. · ต้อง activate advanced features ตาม `docs/aws-setup.md` | เจ้าของบัญชี AWS | การสแกน (§8) |
+| region: ใช้ **Thailand (`ap-southeast-7`)** — ภาพไม่ออกนอกประเทศ · ต้อง activate advanced AWS features + เปิด opt-in region ก่อน (`docs/aws-setup.md`) | เจ้าของบัญชี AWS | การสแกน (§8) |
 | ข้อความยินยอม PDPA สำหรับใบหน้า + ฐานทางกฎหมายของการบังคับยินยอม (§8) | HR / กฎหมาย | เปิดใช้การสแกน |
 | **รหัสตำแหน่งใน WorkID** (§6.1) — WorkHR ส่ง `positionId` · WorkID เก็บและเปิดใน `/v1/org` + แคตตาล็อกตำแหน่ง | WorkHR + WorkID | เส้นทาง Onboarding · เลือกผู้รับตามตำแหน่ง |
 | app key `worktrain` + role `admin`/`author`/`user` + `default_role = user` ที่ WorkID | Admin ของ WorkID | login |

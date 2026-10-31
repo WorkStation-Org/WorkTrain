@@ -22,10 +22,18 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
         <p className="mt-1 text-[13px] text-ink-3">
           {actor.email} · {ROLE_LABELS[actor.role]}
         </p>
-        <p className="mt-4 text-[13px] text-ink-2">WorkTrain รุ่นใหม่กำลังสร้าง — หน้าของผู้เรียนยังไม่มี</p>
+        <p className="mt-4 text-[13px] text-ink-2">WorkTrain รุ่นใหม่กำลังสร้าง — ยังไม่เปิดใช้จริง</p>
         <Link href="/learn" className="mt-3 block text-[13px] font-semibold text-ink underline">
           ชุดที่ต้องเรียน
         </Link>
+        <Link href="/enroll" className="mt-2 block text-[13px] font-semibold text-ink underline">
+          ลงทะเบียนใบหน้า
+        </Link>
+        {actor.role === "admin" && (
+          <Link href="/admin/faces" className="mt-2 block text-[13px] font-semibold text-ink underline">
+            ตรวจภาพใบหน้า (TG)
+          </Link>
+        )}
         <Link href="/sets" className="mt-2 inline-block text-[13px] font-semibold text-ink underline">
           ชุดการเรียนรู้ (สร้าง · ออกข้อสอบ · อนุมัติ)
         </Link>
