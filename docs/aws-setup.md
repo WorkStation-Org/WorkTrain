@@ -1,8 +1,12 @@
 # ตั้ง AWS สำหรับสแกนใบหน้า (ADR-0006)
 
-## สถานะ (26 ต.ค. 2569)
+## สถานะ (31 ต.ค. 2569)
 
-- เครือเปิดบัญชีด้วย **Sign up for AWS (new)** ผ่าน Gmail แล้ว — project region = **Sydney (`ap-southeast-2`)** · account `468683594627`
+- **ตั้งครบแล้ว 31 ต.ค. 2569:** ข้อ 2 · 4 · 5 · 6 · 7–11 (Budget `worktrain-monthly-20usd` แจ้ง it.workstationoffice@gmail.com ที่ 80%/100%/คาดการณ์ 100% · Vercel โปรเจกต์ `wso-knowledge` · ตรวจด้วย CLI: liveness ใน Thailand ได้ · Sydney ถูกปฏิเสธ · role ของเบราว์เซอร์สร้าง session เองไม่ได้) · เหลือข้อ 3 (MFA ของ root — เจ้าของทำ) และตรวจบนมือถือหลัง deploy
+
+### ประวัติ (26 ต.ค. 2569)
+
+- เครือเปิดบัญชีด้วย **Sign up for AWS (new)** ผ่าน Gmail แล้ว — project region = **Sydney (`ap-southeast-2`)** · account `468683594627` (ชื่อ `WorkTrain` — เดิม AWS ตั้งให้ว่า "Golden Hour Code")
 - AWS CLI ตั้ง profile `workstation` แล้ว (`aws login` · credential 12 ชม. ต่ออายุได้ 90 วัน)
 - **ปัญหา:** บัญชีแบบ new สร้างของได้แค่ region ของ project และ **Sydney ไม่มี Face Liveness**
 - **ตัดสินแล้ว:** activate advanced AWS features แล้วใช้ **Thailand (`ap-southeast-7`)** — ภาพใบหน้าไม่ออกนอกประเทศไทย (ดีที่สุดสำหรับ PDPA)
@@ -33,7 +37,7 @@ Organizations console (management account) → Policies → Service control poli
 แก้ statement **`RegionFloor`** ให้รวม `ap-southeast-7` ด้วย (ไม่แก้ส่วนอื่น)
 
 ### 6. เปิด Region Thailand ให้ project account
-Organizations console → **AWS accounts** → เลือก project account (`468683594627`) → **Account settings** → **Regions** →
+Organizations console → **AWS accounts** → เลือก project account `WorkTrain` (`468683594627`) → **Account settings** → **Regions** →
 `Asia Pacific (Thailand) ap-southeast-7` → **Actions → Enable** — ใช้เวลาไม่กี่นาทีถึงหลายชั่วโมง
 
 > ทำเสร็จข้อ 6 แล้วบอก Claude — จะตรวจด้วย CLI ว่า region เปิดแล้ว และเรียก Face Liveness ใน Thailand ได้จริง
@@ -101,6 +105,9 @@ inline policy `start-liveness-only`:
 ```
 
 เซิร์ฟเวอร์บีบสิทธิ์ซ้ำอีกชั้นตอนออก credential 15 นาที (`src/lib/rekognition.ts`)
+
+⚠ Thailand เป็น opt-in region — token จาก STS global endpoint ใช้ที่นี่ไม่ได้ (`UnrecognizedClientException`) ·
+ต้อง AssumeRole ผ่าน STS ของ `ap-southeast-7` · โค้ดทำอยู่แล้ว (`new STSClient({ region })`) · ทดสอบด้วย CLI ให้ใส่ `--region ap-southeast-7`
 
 ### 10. access key ของ `worktrain-server`
 "Application running outside AWS" · คัดครั้งเดียว · **ห้ามส่งในแชต/LINE** · หมุนทุก 90 วัน
