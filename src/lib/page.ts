@@ -17,3 +17,14 @@ export async function pageActor(allowed?: readonly Role[]): Promise<Actor> {
 export function firstParam(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v[0] : v;
 }
+
+/**
+ * ด่านของหน้าผู้เรียน — ล็อกอินแล้ว **และยินยอมสแกนใบหน้าแล้ว** (spec §8: ไม่ยินยอม = ใช้แอปไม่ได้)
+ * ยังไม่ยินยอม → `/consent`
+ */
+export async function learnerActor(): Promise<Actor> {
+  const actor = await pageActor();
+  const { hasConsent } = await import("@/lib/identity-service");
+  if (!(await hasConsent(actor.personId))) redirect("/consent");
+  return actor;
+}

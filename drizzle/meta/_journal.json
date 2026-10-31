@@ -29,6 +29,13 @@
       "when": 1792981932982,
       "tag": "0003_notifications_like_workdaily",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792983280709,
+      "tag": "0004_assignment_read_round",
+      "breakpoints": true
     }
   ]
 }

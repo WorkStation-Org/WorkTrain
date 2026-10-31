@@ -24,6 +24,8 @@
     "@neondatabase/serverless": "^1.0.1",
     "drizzle-orm": "^0.45.2",
     "next": "^16.4.3",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.4.299",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "zod": "^4.4.3"
