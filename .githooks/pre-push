@@ -1,0 +1,39 @@
+#!/bin/sh
+# กติกาเครือข้อ 9: เข้า main ผ่าน Pull Request เท่านั้น
+# (WS-Strategy/MASTER-ARCHITECTURE.md §2 — ใช้กับทุกคนและทุก AI agent)
+#
+# ทำไมต้องกันที่เครื่อง: org อยู่บน GitHub Free ซึ่งตั้ง branch protection กับ
+# private repo ไม่ได้ (ต้อง Team ขึ้นไป) hook นี้จึงเป็นด่านเดียวที่มีจริง
+#
+# เปิดใช้: `npm install` ตั้งให้อัตโนมัติผ่าน script prepare
+#          ถ้า repo ไม่มี package.json ให้รันครั้งเดียวต่อ clone:
+#          git config core.hooksPath .githooks
+#
+# ฉุกเฉินจริง ๆ ค่อยข้าม (รับสองชื่อเพื่อให้เข้ากับ repo ที่ใช้มาก่อน):
+#   PR_ONLY_BYPASS=1 git push ...
+#   ALLOW_MAIN_PUSH=1 git push ...
+#   git push --no-verify ...
+
+[ -n "$PR_ONLY_BYPASS" ] && exit 0
+[ -n "$ALLOW_MAIN_PUSH" ] && exit 0
+
+# อ่าน ref ปลายทางจาก stdin ที่ git ป้อนให้ — ต้องดูปลายทาง ไม่ใช่ branch ที่ยืนอยู่
+# เพราะ `git push origin my-branch:main` ก็เข้า main ได้ทั้งที่ HEAD ไม่ได้อยู่บน main
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      echo "" >&2
+      echo "  ✋ ห้าม push เข้า $remote_ref ตรง — ต้องผ่าน Pull Request" >&2
+      echo "" >&2
+      echo "     git checkout -b <ชื่องาน>" >&2
+      echo "     git push -u origin <ชื่องาน>" >&2
+      echo "     gh pr create --base main" >&2
+      echo "" >&2
+      echo "     (ฉุกเฉิน: PR_ONLY_BYPASS=1 git push ...)" >&2
+      echo "" >&2
+      exit 1
+      ;;
+  esac
+done
+
+exit 0

@@ -1,0 +1,6 @@
+# CI รันบน ubuntu — เชลล์สคริปต์ที่ลง CRLF จะพังด้วย "bad interpreter"
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary

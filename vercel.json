@@ -1,8 +1,5 @@
 {
-  "crons": [
-    {
-      "path": "/api/cron/refresh-preview-db",
-      "schedule": "0 3 * * *"
-    }
-  ]
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["sin1"],
+  "buildCommand": "node scripts/migrate-on-deploy.mjs && next build"
 }
