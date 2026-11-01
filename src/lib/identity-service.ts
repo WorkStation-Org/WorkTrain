@@ -78,8 +78,12 @@ async function activeEnrollment(personId: number) {
   return row ?? null;
 }
 
+/**
+ * แยก prefix ตามอายุภาพ: `faces/enroll/` เก็บจนถูกแทน · `faces/scan/` ลบเมื่อครบ 90 วัน
+ * — lifecycle rule ของ R2 ลบ `faces/scan/` ซ้ำอีกชั้นได้โดยไม่แตะภาพลงทะเบียน
+ */
 function imageKey(personId: number, kind: "enroll" | "scan"): string {
-  return `faces/${personId}/${kind}-${randomBytes(12).toString("hex")}.jpg`;
+  return `faces/${kind}/${personId}/${randomBytes(12).toString("hex")}.jpg`;
 }
 
 // ── การสแกน ────────────────────────────────────────────────────────────────
@@ -127,12 +131,13 @@ export async function finishScan(input: { personId: number; ticket: string; api:
   const purpose = t.purpose;
 
   const live = await input.api.livenessResult(t.sessionId);
+  const isLive = live.status === "SUCCEEDED" && (live.confidence ?? 0) >= LIVENESS_MIN_CONFIDENCE && live.referenceImage !== null;
   let objectKey: string | null = null;
   if (live.referenceImage) {
-    objectKey = imageKey(input.personId, purpose === "enroll" ? "enroll" : "scan");
+    // ลงทะเบียนที่ไม่ผ่าน liveness ไม่ได้เป็นใบหน้าที่ลงทะเบียน → เก็บแบบภาพสแกน (ลบเมื่อครบ 90 วัน)
+    objectKey = imageKey(input.personId, purpose === "enroll" && isLive ? "enroll" : "scan");
     await store.put(objectKey, live.referenceImage, "image/jpeg");
   }
-  const isLive = live.status === "SUCCEEDED" && (live.confidence ?? 0) >= LIVENESS_MIN_CONFIDENCE && live.referenceImage !== null;
   if (!isLive) return { ok: true, ...(await insertScan(input.personId, purpose, "liveness_fail", null, objectKey, now)), passed: false };
 
   if (purpose === "enroll") {
