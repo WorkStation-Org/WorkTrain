@@ -41,6 +41,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/exam-service.ts` — ออกข้อสอบ · แก้/ออกใหม่ทีละข้อ (ลงประวัติก่อน/หลัง) · `src/lib/approval-service.ts` — ส่ง · ตีกลับ · อนุมัติ
 - `src/lib/version-service.ts` — เวอร์ชันใหม่ (spec §7): เริ่ม · สรุปด้วย AI · ส่ง · ผู้อนุมัติเลือกเล็ก/ใหญ่ · ข้อสอบส่วนที่เปลี่ยน (`DELTA_BLUEPRINT`) · อนุมัติ + แจ้งคนที่ผ่านแล้ว ·
   ฝั่งผู้เรียน `pendingUpdate()` / `acknowledgeVersion()` ใน learn-service · เวอร์ชันแรกยังใช้สถานะของชุด (approval-service)
+- `src/lib/watermark.ts` — ประทับลายน้ำ Pricelist ทุกหน้า · `pricelistPdf()` + route `/learn/[id]/doc/[documentId]` (ไม่ส่งไฟล์ต้นฉบับ)
 - `src/lib/object-store.ts` — **ที่เดียวที่แตะ R2** · dev ไม่มี R2 = ที่เก็บในหน่วยความจำผ่าน `/api/dev-store`
 - `src/lib/time.ts` — วันที่ไทย · ห้าม `toISOString()` นอกไฟล์นี้ (มีเทสต์บังคับ)
 - ยกโครงมาจาก WorkDaily: `session.ts` · `workid.ts` · `gateway.ts` · `time.ts` · `auth.ts` · `proxy.ts` · `errmsg.ts` — แก้แล้วเทสต์ที่ติดมาต้องยังผ่าน

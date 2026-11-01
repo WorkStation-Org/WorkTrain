@@ -103,7 +103,7 @@ export default async function LearnSetPage({
             เอกสาร ({readCount}/{view.documents.length} อ่านครบ)
           </SectionTitle>
           {view.session ? (
-            <Reader assignmentId={view.assignment.id} documents={view.documents} />
+            <Reader assignmentId={view.assignment.id} documents={view.documents} viewer={`${actor.name} · ${actor.email}`} />
           ) : enrolled ? (
             <div>
               <p className="mb-3 text-[13px] text-ink-3">

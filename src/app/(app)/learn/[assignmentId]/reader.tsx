@@ -18,13 +18,14 @@ const ACTIVE_WINDOW_MS = 30_000;
 
 interface Doc {
   id: number;
+  kind: string;
   fileName: string;
   pageCount: number;
   pagesSeen: number[];
   completed: boolean;
 }
 
-export function Reader({ assignmentId, documents }: { assignmentId: number; documents: Doc[] }) {
+export function Reader({ assignmentId, documents, viewer }: { assignmentId: number; documents: Doc[]; viewer: string }) {
   const [openId, setOpenId] = useState<number | null>(documents.find((d) => !d.completed)?.id ?? documents[0]?.id ?? null);
   return (
     <div className="space-y-3">
@@ -41,12 +42,13 @@ export function Reader({ assignmentId, documents }: { assignmentId: number; docu
           </button>
         ))}
       </div>
-      {openId !== null && <PdfDoc key={openId} assignmentId={assignmentId} doc={documents.find((d) => d.id === openId)!} />}
+      {openId !== null && <PdfDoc key={openId} assignmentId={assignmentId} doc={documents.find((d) => d.id === openId)!} viewer={viewer} />}
     </div>
   );
 }
 
-function PdfDoc({ assignmentId, doc }: { assignmentId: number; doc: Doc }) {
+function PdfDoc({ assignmentId, doc, viewer }: { assignmentId: number; doc: Doc; viewer: string }) {
+  const confidential = doc.kind === "pricelist";
   const router = useRouter();
   const container = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -150,8 +152,23 @@ function PdfDoc({ assignmentId, doc }: { assignmentId: number; doc: Doc }) {
       <p className="mb-2 text-[12px] text-ink-3">
         เลื่อนผ่านแล้ว {seen.size}/{doc.pageCount} หน้า — ต้องครบทุกหน้าก่อนสอบ
       </p>
+      {confidential && <p className="mb-2 text-[12px] text-danger">Pricelist — ดูในระบบเท่านั้น · ทุกหน้ามีชื่อของคุณและเวลาที่เปิด · ระบบบันทึกการเปิดทุกครั้ง</p>}
       {error && <p className="mb-2 text-[13px] text-danger">{error}</p>}
-      <div ref={container} />
+      {/* Pricelist: ซ้อนชื่อภาษาไทยบนหน้าจออีกชั้น (ในไฟล์ประทับอีเมล/รหัสไว้แล้วฝั่งเซิร์ฟเวอร์) · ปิดเมนูคลิกขวา */}
+      <div className="relative" onContextMenu={confidential ? (e) => e.preventDefault() : undefined}>
+        <div ref={container} className={confidential ? "select-none" : undefined} />
+        {confidential && (
+          <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+            <div className="flex h-full flex-wrap content-start gap-x-24 gap-y-28 p-8 opacity-[0.12]" style={{ transform: "rotate(-30deg) scale(1.6)" }}>
+              {Array.from({ length: 60 }, (_, i) => (
+                <span key={i} className="whitespace-nowrap text-[18px] font-semibold text-danger">
+                  {viewer}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

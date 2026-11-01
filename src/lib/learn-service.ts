@@ -30,13 +30,15 @@ import {
 import { usableScan } from "@/lib/identity-service";
 import { objectStore } from "@/lib/object-store";
 import type { Outcome } from "@/lib/set-service";
+import { formatBangkok } from "@/lib/time";
+import { watermarkPdf } from "@/lib/watermark";
 
 /**
  * ฝั่งผู้เรียน (spec §9 · §10) — รอบเรียน · ความคืบหน้าการอ่าน · ครั้งที่สอบ
  *
  * ★ ทุกฟังก์ชันรับ `personId` ของคนที่ล็อกอิน แล้วตรวจเองว่าการมอบ/ครั้งที่สอบเป็นของคนนี้ — ไม่เชื่อ id จากหน้าจอ
  * ★ เวลามาจากเซิร์ฟเวอร์เสมอ (`now`) — หมดเวลาสอบตัดสินที่นี่ ไม่ใช่ที่นาฬิกาของเบราว์เซอร์
- * ★ Pricelist ยังไม่อยู่ในเอกสารที่ผู้เรียนต้องอ่าน — ต้องแสดงแบบมีลายน้ำฝั่งเซิร์ฟเวอร์ก่อน (ADR-0010 · ยังไม่ได้ทำ)
+ * ★ Pricelist ไม่ส่งไฟล์ต้นฉบับ — `pricelistPdf()` ประทับลายน้ำของคนเปิดลงทุกหน้าก่อนส่ง (ADR-0010) · Excel ยังแสดงไม่ได้
  */
 
 /** นิ่งเกินนี้ = จบรอบเรียน ต้องสแกนใหม่ (spec §9) */
@@ -68,10 +70,10 @@ async function approvedVersion(setId: number) {
   return rows.find((v) => v.approvedAt !== null) ?? null;
 }
 
-/** เอกสารที่ผู้เรียนต้องอ่าน — ทุกชนิดยกเว้น Pricelist (ยังแสดงแบบมีลายน้ำไม่ได้) */
+/** เอกสารที่ผู้เรียนต้องอ่าน — PDF ทุกชนิด (Pricelist แสดงแบบมีลายน้ำ) · Excel ยังแสดงทีละหน้าไม่ได้ */
 async function requiredDocuments(versionId: number) {
   const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder));
-  return rows.filter((d) => d.kind !== "pricelist" && d.pageCount !== null);
+  return rows.filter((d) => d.pageCount !== null);
 }
 
 // ── เวอร์ชันใหม่ (spec §7 · ADR-0008) ───────────────────────────────────────
@@ -236,20 +238,54 @@ async function readingComplete(a: Pick<AssignmentRow, "id" | "readRound">, versi
 /**
  * ลิงก์เปิดเอกสารอายุสั้น — ต้องมีรอบเรียนที่เปิดอยู่ · ห้ามระหว่างสอบ (ล็อกเอกสาร · spec §10) · บันทึกทุกการเปิด (ADR-0010)
  */
-export async function documentLink(input: { personId: number; assignmentId: number; documentId: number; now?: Date }): Promise<Outcome<{ url: string }>> {
-  const now = input.now ?? new Date();
-  if (!(await activeSession(input.personId, now))) return { ok: false, error: "session_ended" };
+/** เอกสารที่คนนี้เปิดได้ตอนนี้ — มีรอบเรียนเปิดอยู่ · ไม่ได้กำลังสอบ · อยู่ในเวอร์ชันที่อนุมัติล่าสุด */
+async function openableDocument(input: { personId: number; assignmentId: number; documentId: number; now: Date }) {
+  if (!(await activeSession(input.personId, input.now))) return { ok: false as const, error: "session_ended" };
   const mine = await myAssignment(input.personId, input.assignmentId);
-  if (!mine || mine.set.status !== "active") return { ok: false, error: "ไม่พบการมอบนี้" };
-  if (await openAttempt(mine.a.id)) return { ok: false, error: "กำลังสอบอยู่ — เปิดเอกสารไม่ได้" };
+  if (!mine || mine.set.status !== "active") return { ok: false as const, error: "ไม่พบการมอบนี้" };
+  if (await openAttempt(mine.a.id)) return { ok: false as const, error: "กำลังสอบอยู่ — เปิดเอกสารไม่ได้" };
   const version = await approvedVersion(mine.set.id);
   const doc = version ? (await requiredDocuments(version.id)).find((d) => d.id === input.documentId) : undefined;
-  if (!doc) return { ok: false, error: "ไม่พบเอกสารนี้" };
+  if (!doc) return { ok: false as const, error: "ไม่พบเอกสารนี้" };
+  return { ok: true as const, doc };
+}
+
+/**
+ * ลิงก์เปิดเอกสาร — ต้องมีรอบเรียนที่เปิดอยู่ · ห้ามระหว่างสอบ (ล็อกเอกสาร · spec §10) · บันทึกทุกการเปิด (ADR-0010)
+ * แคตตาล็อก = ลิงก์ R2 อายุสั้น · Pricelist = route ของเราเองที่ประทับลายน้ำ (`pricelistPdf`) ไม่ใช่ไฟล์ต้นฉบับ
+ */
+export async function documentLink(input: { personId: number; assignmentId: number; documentId: number; now?: Date }): Promise<Outcome<{ url: string }>> {
+  const now = input.now ?? new Date();
+  const found = await openableDocument({ ...input, now });
+  if (!found.ok) return found;
+  const { doc } = found;
+  if (doc.kind === "pricelist") return { ok: true, url: `/learn/${input.assignmentId}/doc/${doc.id}` };
   const store = objectStore();
   if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
   const url = await store.presignGet({ key: doc.objectKey, contentType: doc.mimeType, disposition: "inline" });
   await db().insert(documentViews).values({ documentId: doc.id, personId: input.personId, viewedAt: now });
   return { ok: true, url };
+}
+
+/** Pricelist ที่ประทับลายน้ำของคนเปิดแล้ว (spec §13) — สิทธิ์เดียวกับ `documentLink` · บันทึกการเปิด */
+export async function pricelistPdf(input: {
+  personId: number;
+  email: string;
+  assignmentId: number;
+  documentId: number;
+  now?: Date;
+}): Promise<Outcome<{ bytes: Uint8Array }>> {
+  const now = input.now ?? new Date();
+  const found = await openableDocument({ ...input, now });
+  if (!found.ok) return found;
+  if (found.doc.kind !== "pricelist") return { ok: false, error: "ไม่พบเอกสารนี้" };
+  const store = objectStore();
+  if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
+  const raw = await store.get(found.doc.objectKey);
+  if (!raw) return { ok: false, error: "อ่านไฟล์จากที่เก็บไม่ได้" };
+  const bytes = await watermarkPdf(raw, [`WorkTrain · ${input.email}`, `ID ${input.personId} · ${formatBangkok(now)}`, "CONFIDENTIAL · Work Station"]);
+  await db().insert(documentViews).values({ documentId: found.doc.id, personId: input.personId, viewedAt: now });
+  return { ok: true, bytes };
 }
 
 // ── หน้าผู้เรียน ───────────────────────────────────────────────────────────
@@ -305,7 +341,7 @@ export async function learnView(personId: number, assignmentId: number, now: Dat
     versionLabel: version.label,
     documents: docs.map((d) => {
       const p = progress.find((x) => x.documentId === d.id);
-      return { id: d.id, fileName: d.fileName, pageCount: d.pageCount!, pagesSeen: p?.pagesSeen ?? [], completed: Boolean(p?.completedAt) };
+      return { id: d.id, kind: d.kind, fileName: d.fileName, pageCount: d.pageCount!, pagesSeen: p?.pagesSeen ?? [], completed: Boolean(p?.completedAt) };
     }),
     attempts: past.filter((x) => x.endedAt),
     openAttemptId: open?.id ?? null,
