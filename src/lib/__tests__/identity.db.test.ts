@@ -64,7 +64,7 @@ describe("ลงทะเบียนใบหน้า", () => {
     expect(out).toMatchObject({ ok: true, passed: true, enrollment: "active" });
     expect(await I.enrollmentState(ME)).toEqual({ state: "active", pending: false });
     const [e] = await testDb().select().from(schema.faceEnrollments);
-    expect(e.objectKey).toMatch(new RegExp(`^faces/${ME}/enroll-[0-9a-f]{24}\\.jpg$`));
+    expect(e.objectKey).toMatch(new RegExp(`^faces/enroll/${ME}/[0-9a-f]{24}\\.jpg$`));
     expect(devStoreObjects().get(e.objectKey!)).toEqual(FACE);
   });
 
@@ -138,7 +138,7 @@ describe("TG ตรวจเมื่อไม่ผ่าน 3 ครั้ง�
     await scan("exam", fakeApi({ similarity: 50 }), at(2));
     const q = (await I.reviewQueue()).scanReviews;
     expect(q.map((r) => [r.personId, r.scans.length])).toEqual([[ME, 3]]);
-    expect(q[0].scans.every((s) => s.objectKey)).toBe(true);
+    expect(q[0].scans.every((s) => s.objectKey?.startsWith(`faces/scan/${ME}/`))).toBe(true);
   });
 
   it("ยืนยัน → ใช้เริ่มสอบได้ภายใน 24 ชม. ครั้งเดียว · ออกจากคิว", async () => {
@@ -163,6 +163,13 @@ describe("ทางลัด dev และการลบภาพ", () => {
     expect((await I.devScan({ personId: ME, purpose: "study" })).ok).toBe(false);
     expect(await I.devScan({ personId: ME, purpose: "enroll" })).toMatchObject({ ok: true, enrollment: "active" });
     expect(await I.devScan({ personId: ME, purpose: "study" })).toMatchObject({ ok: true, passed: true });
+  });
+
+  it("ลงทะเบียนที่ไม่ผ่าน liveness เก็บภาพไว้ใต้ faces/scan/ (ลบตามรอบ 90 วัน)", async () => {
+    await scan("enroll", fakeApi({ live: { confidence: 10 } }));
+    expect(await testDb().select().from(schema.faceEnrollments)).toEqual([]);
+    const [s] = await testDb().select().from(schema.faceScans);
+    expect(s.objectKey).toMatch(new RegExp(`^faces/scan/${ME}/`));
   });
 
   it("ภาพสแกนครบ 90 วันถูกลบจากที่เก็บ และล้าง key", async () => {

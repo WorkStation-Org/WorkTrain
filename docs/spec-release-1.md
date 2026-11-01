@@ -190,6 +190,10 @@ TG ติดตามให้ครบ และดูสถิติเพื�
 ## 13. การป้องกันข้อมูลรั่ว
 
 - ไฟล์ทั้งหมดอยู่ใน R2 แบบ private · เปิดด้วย presigned URL อายุสั้น หลังตรวจสิทธิ์ — ไม่มี public URL (ADR-0010)
+- bucket `worktrain` (บัญชี Cloudflare เดียวกับระบบอื่น · token อ่าน/เขียนเฉพาะ bucket นี้) แบ่ง key ตามอายุข้อมูล:
+  `sets/<setId>/v<version>/…` เอกสารต้นทาง · `faces/enroll/<personId>/…` ใบหน้าที่ลงทะเบียน (เก็บจนถูกแทน) ·
+  `faces/scan/<personId>/…` ภาพสแกน — cron เช้าลบเมื่อครบ 90 วัน และ lifecycle rule ของ R2 ลบ `faces/scan/` ที่อายุเกิน 91 วันซ้ำอีกชั้น
+- CORS ของ bucket: origin `https://worktrain.workstationoffice.com` · `GET` `PUT` `HEAD` · header `content-type` `range`
 - แคตตาล็อกดาวน์โหลดได้ (ใช้ขายอยู่แล้ว) · **Pricelist ดูในระบบเท่านั้น** ไม่มีปุ่มดาวน์โหลด
 - Pricelist ทุกหน้ามีลายน้ำ: ชื่อ + รหัสพนักงาน + วันเวลาที่เปิด
 - Log ทุกการเปิดเอกสารต้นทาง: ใคร · ไฟล์ไหน · เมื่อไร
@@ -199,8 +203,7 @@ TG ติดตามให้ครบ และดูสถิติเพื�
 | เรื่อง | รอใคร | ขวางอะไร |
 |---|---|---|
 | ตัวอย่าง Pricelist | PD | รูปแบบการอ่านราคา (§3) · การตรวจตัวเลขอัตโนมัติ |
-| บัญชี AWS — เปิดแล้ว (new experience · Sydney) 26 ต.ค. · ต้อง activate advanced features ตาม `docs/aws-setup.md` | เจ้าของบัญชี AWS | การสแกน (§8) |
-| region: ใช้ **Thailand (`ap-southeast-7`)** — ภาพไม่ออกนอกประเทศ · ต้อง activate advanced AWS features + เปิด opt-in region ก่อน (`docs/aws-setup.md`) | เจ้าของบัญชี AWS | การสแกน (§8) |
+| AWS ตั้งครบแล้ว 1 พ.ย. — ใช้ **Thailand (`ap-southeast-7`)** ภาพไม่ออกนอกประเทศ (`docs/aws-setup.md`) · เหลือลองสแกนบนมือถือหลัง deploy | ทีมพัฒนา | ยืนยันการสแกน (§8) บนเครื่องจริง |
 | ข้อความยินยอม PDPA สำหรับใบหน้า + ฐานทางกฎหมายของการบังคับยินยอม (§8) | HR / กฎหมาย | เปิดใช้การสแกน |
 | **รหัสตำแหน่งใน WorkID** (§6.1) — WorkHR ส่ง `positionId` · WorkID เก็บและเปิดใน `/v1/org` + แคตตาล็อกตำแหน่ง | WorkHR + WorkID | เส้นทาง Onboarding · เลือกผู้รับตามตำแหน่ง |
 | app key `worktrain` + role `admin`/`author`/`user` + `default_role = user` ที่ WorkID | Admin ของ WorkID | login |
