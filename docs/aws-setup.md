@@ -2,7 +2,8 @@
 
 ## สถานะ (31 ต.ค. 2569)
 
-- **ตั้งครบแล้ว 31 ต.ค. 2569:** ข้อ 2 · 4 · 5 · 6 · 7–11 (Budget `worktrain-monthly-20usd` แจ้ง it.workstationoffice@gmail.com ที่ 80%/100%/คาดการณ์ 100% · Vercel โปรเจกต์ `wso-knowledge` · ตรวจด้วย CLI: liveness ใน Thailand ได้ · Sydney ถูกปฏิเสธ · role ของเบราว์เซอร์สร้าง session เองไม่ได้) · เหลือข้อ 3 (MFA ของ root — เจ้าของทำ) และตรวจบนมือถือหลัง deploy
+- **ตั้งครบแล้ว 31 ต.ค. 2569:** ข้อ 2 · 4 · 5 · 6 · 7–11 (Budget `worktrain-monthly-20usd` แจ้ง it.workstationoffice@gmail.com ที่ 80%/100%/คาดการณ์ 100% · Vercel โปรเจกต์ `wso-knowledge` · ตรวจด้วย CLI: liveness ใน Thailand ได้ · Sydney ถูกปฏิเสธ · role ของเบราว์เซอร์สร้าง session เองไม่ได้)
+- **1 พ.ย. 2569:** ข้อ 3 เสร็จ — เจ้าของตั้งรหัสผ่านและ MFA ของ root บัญชีหลัก `168629931180` แล้ว · เหลือตรวจบนมือถือหลัง deploy
 
 ### ประวัติ (26 ต.ค. 2569)
 
