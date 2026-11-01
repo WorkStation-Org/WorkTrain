@@ -34,6 +34,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
             ตรวจภาพใบหน้า (TG)
           </Link>
         )}
+        {actor.role === "admin" && (
+          <Link href="/admin/onboarding" className="mt-2 block text-[13px] font-semibold text-ink underline">
+            เส้นทาง Onboarding (TG)
+          </Link>
+        )}
         <Link href="/sets" className="mt-2 inline-block text-[13px] font-semibold text-ink underline">
           ชุดการเรียนรู้ (สร้าง · ออกข้อสอบ · อนุมัติ)
         </Link>

@@ -98,7 +98,10 @@ TG ติดตามให้ครบ และดูสถิติเพื�
 - คนใหม่ยังไม่มีอีเมลตอนที่ใบ checklist ของ WorkHR เปิด — การมอบเกิดเมื่อมีตัวตนใน WorkID แล้วเท่านั้น
 - WorkTrain เปิด API ให้ WorkHR ดึงสถานะ:
   `GET /api/v1/people/{email}/training-status` → แต่ละชุดในเส้นทาง: ได้รับมอบเมื่อไร · ผ่านแล้วหรือยัง · ผ่านเมื่อไร
-  — ต้องมี API key (consumer) แบบเดียวกับ WorkID
+  — ต้องมี API key (consumer) แบบเดียวกับ WorkID: `Authorization: Bearer wtr_…` · ทะเบียนใน env `WORKTRAIN_API_CONSUMERS` (แบบ WorkHR)
+  · ตอบ `{ email, personId, positionId, sets: [{ setId, title, assignedAt, dueAt, passed, passedAt }], complete }`
+  · `complete: null` = ตำแหน่งนี้ไม่มีเส้นทาง · 404 = ยังไม่มีตัวตนใน WorkID · 503 = ถามผังไม่ได้ (ลองใหม่ ไม่ใช่ "ยังไม่ผ่าน")
+- TG ผูกชุดกับตำแหน่งที่ `/admin/onboarding` — ตำแหน่งดึงจากผังวันนี้จนกว่าจะมีแคตตาล็อก (§6.1 ข้อ 3)
 - ข้อใน checklist ของ WorkHR ("ผ่าน training พื้นฐาน") ติ๊กเองจาก API นี้ — งานฝั่ง WorkHR ไม่อยู่ใน repo นี้
 
 ### 6.1 รหัสตำแหน่ง (ต้องมีก่อนเปิดเส้นทาง Onboarding)
@@ -190,7 +193,7 @@ TG ติดตามให้ครบ และดูสถิติเพื�
 ## 13. การป้องกันข้อมูลรั่ว
 
 - ไฟล์ทั้งหมดอยู่ใน R2 แบบ private · เปิดด้วย presigned URL อายุสั้น หลังตรวจสิทธิ์ — ไม่มี public URL (ADR-0010)
-- bucket `worktrain` (บัญชี Cloudflare เดียวกับระบบอื่น · token อ่าน/เขียนเฉพาะ bucket นี้) แบ่ง key ตามอายุข้อมูล:
+- bucket `worktrain-assets` (บัญชี Cloudflare เดียวกับระบบอื่น · token อ่าน/เขียนเฉพาะ bucket นี้) แบ่ง key ตามอายุข้อมูล:
   `sets/<setId>/v<version>/…` เอกสารต้นทาง · `faces/enroll/<personId>/…` ใบหน้าที่ลงทะเบียน (เก็บจนถูกแทน) ·
   `faces/scan/<personId>/…` ภาพสแกน — cron เช้าลบเมื่อครบ 90 วัน และ lifecycle rule ของ R2 ลบ `faces/scan/` ที่อายุเกิน 91 วันซ้ำอีกชั้น
 - CORS ของ bucket: origin `https://worktrain.workstationoffice.com` · `GET` `PUT` `HEAD` · header `content-type` `range`

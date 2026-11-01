@@ -15,7 +15,8 @@
     "ci": "node scripts/ci-local.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:dev-setup": "node scripts/dev-setup.mjs"
+    "db:dev-setup": "node scripts/dev-setup.mjs",
+    "api:new-key": "tsx scripts/new-api-key.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
