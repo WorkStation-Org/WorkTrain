@@ -36,6 +36,13 @@
       "when": 1792983280709,
       "tag": "0004_assignment_read_round",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793536903317,
+      "tag": "0005_version_submitted",
+      "breakpoints": true
     }
   ]
 }

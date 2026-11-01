@@ -52,6 +52,16 @@ export interface GenerateInput {
   documents: SourceDocument[];
   blueprint: Blueprint;
   formCount: number;
+  /** ออกเฉพาะส่วนที่เปลี่ยนตามสรุปนี้ (ข้อสอบส่วนที่เปลี่ยนใหญ่ · ADR-0008) · ไม่มี = ทั้งเอกสาร */
+  focus?: string;
+}
+
+export interface SummarizeInput {
+  setTitle: string;
+  /** เอกสารของเวอร์ชันที่ใช้อยู่ */
+  before: SourceDocument[];
+  /** เอกสารของเวอร์ชันใหม่ */
+  after: SourceDocument[];
 }
 
 export interface RegenerateInput {
@@ -70,6 +80,8 @@ export type ModelResult<T> = { ok: true; value: T } | { ok: false; error: string
 export interface ExamModel {
   generateForms(input: GenerateInput): Promise<ModelResult<GeneratedQuestion[][]>>;
   regenerateQuestion(input: RegenerateInput): Promise<ModelResult<GeneratedQuestion>>;
+  /** สรุปว่าเวอร์ชันใหม่เปลี่ยนอะไร ให้ผู้อนุมัติเลือกเปลี่ยนเล็ก/ใหญ่ และให้ผู้เรียนที่ผ่านแล้วอ่าน (spec §7) */
+  summarizeChanges(input: SummarizeInput): Promise<ModelResult<string>>;
 }
 
 // ── ตรวจผลของ AI ────────────────────────────────────────────────────────────
@@ -188,7 +200,14 @@ export function claudeExamModel(client?: Anthropic): ExamModel | null {
 ออกข้อสอบ ${input.formCount} ชุด ชุดละ ${slots(input.blueprint).length} ข้อ ทุกชุดใช้สัดส่วนเดียวกันนี้:
 ${slotLines(input.blueprint)}
 
-คำถามห้ามซ้ำกันทั้งภายในชุดและข้ามชุด · แต่ละชุดควรครอบคลุมรุ่น/หัวข้อต่างกันในเอกสาร`,
+คำถามห้ามซ้ำกันทั้งภายในชุดและข้ามชุด · แต่ละชุดควรครอบคลุมรุ่น/หัวข้อต่างกันในเอกสาร${
+                    input.focus
+                      ? `
+
+ถามเฉพาะส่วนที่เปลี่ยนจากเวอร์ชันก่อนตามสรุปนี้เท่านั้น ห้ามถามส่วนที่ไม่เปลี่ยน:
+${input.focus}`
+                      : ""
+                  }`,
                 },
               ],
             },
@@ -239,7 +258,55 @@ ${input.avoid.map((t) => `- ${t}`).join("\n")}`,
         return { ok: false, error: apiError(err) };
       }
     },
+
+    summarizeChanges: (input) => summarize(c, input),
   };
+}
+
+const SUMMARY_SYSTEM = `คุณเทียบเอกสารสินค้า/เอกสารการขายของบริษัทเฟอร์นิเจอร์สำนักงาน Work Station สองเวอร์ชัน
+แล้วสรุปเป็นภาษาไทยว่าเวอร์ชันใหม่เปลี่ยนอะไร ให้หัวหน้าตัดสินว่าเปลี่ยนเล็กหรือใหญ่ และให้พนักงานที่เรียนเวอร์ชันเก่าแล้วอ่านแทนการอ่านใหม่ทั้งเล่ม
+
+กติกา:
+- เป็นข้อ ๆ ขึ้นต้นด้วย "- " ข้อละหนึ่งเรื่อง · บอกหน้า/รุ่นที่เปลี่ยน และค่าเดิม → ค่าใหม่ เมื่อเป็นตัวเลข ราคา ขนาด
+- ตัวเลขต้องตรงกับเอกสารทุกตัวอักษร · ไม่เดาสิ่งที่ไม่มีในเอกสาร
+- ไม่ต้องบอกสิ่งที่ไม่เปลี่ยน · ไม่มีอะไรเปลี่ยนเลยให้ตอบว่า "- ไม่พบการเปลี่ยนแปลงที่มีผลต่อเนื้อหา"`;
+
+function labelled(tag: string, docs: SourceDocument[]): SourceDocument[] {
+  return docs.map((d) => ({ ...d, fileName: `[${tag}] ${d.fileName}` }));
+}
+
+/** สรุปสิ่งที่เปลี่ยน — แยกออกมาเพราะ `claudeExamModel()` ยาวแล้ว · ใช้ client เดียวกัน */
+async function summarize(c: Anthropic, input: SummarizeInput): Promise<ModelResult<string>> {
+  try {
+    const msg = await c.beta.messages.create({
+      model: EXAM_MODEL_ID,
+      max_tokens: 16000,
+      ...FALLBACK,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
+      system: SUMMARY_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content: [
+            ...documentBlocks([...labelled("เดิม", input.before), ...labelled("ใหม่", input.after)]),
+            { type: "text", text: `ชุดการเรียนรู้: ${input.setTitle}
+
+เอกสารที่ขึ้นต้นด้วย [เดิม] คือเวอร์ชันที่ใช้อยู่ · [ใหม่] คือเวอร์ชันใหม่ — สรุปสิ่งที่เปลี่ยน` },
+          ],
+        },
+      ],
+    });
+    const refused = refusalMessage(msg.stop_reason);
+    if (refused) return { ok: false, error: refused };
+    const text = msg.content
+      .flatMap((b) => (b.type === "text" ? [b.text] : []))
+      .join("\n")
+      .trim();
+    return text ? { ok: true, value: text } : { ok: false, error: "AI ไม่ได้ตอบสรุป" };
+  } catch (err) {
+    return { ok: false, error: apiError(err) };
+  }
 }
 
 function apiError(err: unknown): string {

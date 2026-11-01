@@ -99,6 +99,8 @@ export const setVersions = pgTable(
     changeKind: text("change_kind", { enum: CHANGE_KINDS }),
     /** สรุปสิ่งที่เปลี่ยนจาก AI ให้ผู้อนุมัติดู (spec §7) */
     changeSummary: text("change_summary"),
+    /** เวอร์ชันใหม่ (ที่ 2 ขึ้นไป) ส่งขออนุมัติเมื่อไร · null = ยังร่างอยู่หรือถูกตีกลับ — เวอร์ชันแรกใช้สถานะของชุดแทน */
+    submittedAt: ts("submitted_at"),
     approvedAt: ts("approved_at"),
     createdByPersonId: integer("created_by_person_id").notNull(),
     createdAt: ts("created_at").notNull().defaultNow(),

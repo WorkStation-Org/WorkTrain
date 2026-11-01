@@ -162,3 +162,30 @@ export function hhmmToMinutes(hhmm: string): number | null {
   const m = /^([01][0-9]|2[0-3]):([0-5][0-9])$/.exec(hhmm);
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;
 }
+
+/** `YYYY-MM` ตามปฏิทินไทย — เดือนของสถิติ (spec §12) */
+export function bangkokMonth(d: Date = new Date()): string {
+  return bangkokDate(d).slice(0, 7);
+}
+
+/**
+ * ช่วงของเดือนไทย `YYYY-MM` → `[ต้นเดือน, ต้นเดือนถัดไป)` ใช้ขอบบนแบบ `<`
+ * รูปแบบผิด = `null` (ไม่เดา — เหตุผลเดียวกับ `bangkokDayStart`)
+ */
+export function bangkokMonthRange(ym: string): { start: Date; end: Date } | null {
+  const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(ym.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const next = mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, "0")}`;
+  const start = bangkokDayStart(`${m[1]}-${m[2]}-01`);
+  const end = bangkokDayStart(`${next}-01`);
+  return start && end ? { start, end } : null;
+}
+
+/** `2026-11` → `พ.ย. 2569` */
+export function formatMonth(ym: string): string {
+  const [y, m] = ym.split("-").map(Number);
+  const names = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+  return `${names[(m ?? 1) - 1]} ${(y ?? 0) + 543}`;
+}

@@ -24,6 +24,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/domain/audience.ts` — เงื่อนไขผู้รับ → รายชื่อ · `src/lib/assignment-service.ts` — ผู้รับ · มอบ (`syncAssignments`) · เตือน (`runReminders`) · แจ้งเรื่องอนุมัติ
 - `src/lib/onboarding-service.ts` — เส้นทาง Onboarding (`/admin/onboarding`) · `trainingStatus()` ให้ WorkHR ·
   `src/lib/api-consumers.ts` — ด่าน `/api/v1/*` (Bearer `wtr_…` · env `WORKTRAIN_API_CONSUMERS` · `npm run api:new-key`)
+- `src/domain/stats.ts` — สถิติรายคนต่อเดือน · Leaderboard (คะแนนครั้งแรก → ความไว) · `src/lib/stats-service.ts` — `/dashboard` ·
+  การมองเห็นตามบทบาท · export CSV · ตัด TG ด้วย `fetchRolePeople("admin")` (WorkID `/v1/apps/worktrain/people`)
 - `src/app/api/cron/daily` — รอบเช้า 09:00: มอบให้คนที่เพิ่งตรงเงื่อนไข แล้วเตือนวันที่ 3 / 5 / เลยกำหนด
 - `src/domain/exam.ts` — เลือกชุด (ไม่ซ้ำจนครบ 5) · สลับข้อ/ตัวเลือก · คะแนน · ไม่ผ่าน 2 ครั้งติด = อ่านใหม่
 - `src/lib/rekognition.ts` — **ที่เดียวที่คุยกับ AWS** (`FaceApi`: liveness session · ผล liveness · CompareFaces · credential ชั่วคราวให้เบราว์เซอร์)
@@ -37,6 +39,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/set-service.ts` — สร้างชุด · ตั้งค่า · อัปโหลด (ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยันด้วย HEAD) · `getSetDetail()` (มีเฉลย — เฉพาะ `canManage`)
 - `src/lib/exam-generator.ts` — **ที่เดียวที่คุยกับ Anthropic API** (`ExamModel`) · ออก 5 ชุดในคำขอเดียว · `checkForms()` ตรวจผลของ AI ก่อนลงฐานทุกครั้ง
 - `src/lib/exam-service.ts` — ออกข้อสอบ · แก้/ออกใหม่ทีละข้อ (ลงประวัติก่อน/หลัง) · `src/lib/approval-service.ts` — ส่ง · ตีกลับ · อนุมัติ
+- `src/lib/version-service.ts` — เวอร์ชันใหม่ (spec §7): เริ่ม · สรุปด้วย AI · ส่ง · ผู้อนุมัติเลือกเล็ก/ใหญ่ · ข้อสอบส่วนที่เปลี่ยน (`DELTA_BLUEPRINT`) · อนุมัติ + แจ้งคนที่ผ่านแล้ว ·
+  ฝั่งผู้เรียน `pendingUpdate()` / `acknowledgeVersion()` ใน learn-service · เวอร์ชันแรกยังใช้สถานะของชุด (approval-service)
+- `src/lib/watermark.ts` — ประทับลายน้ำ Pricelist ทุกหน้า · `pricelistPdf()` + route `/learn/[id]/doc/[documentId]` (ไม่ส่งไฟล์ต้นฉบับ)
 - `src/lib/object-store.ts` — **ที่เดียวที่แตะ R2** · dev ไม่มี R2 = ที่เก็บในหน่วยความจำผ่าน `/api/dev-store`
 - `src/lib/time.ts` — วันที่ไทย · ห้าม `toISOString()` นอกไฟล์นี้ (มีเทสต์บังคับ)
 - ยกโครงมาจาก WorkDaily: `session.ts` · `workid.ts` · `gateway.ts` · `time.ts` · `auth.ts` · `proxy.ts` · `errmsg.ts` — แก้แล้วเทสต์ที่ติดมาต้องยังผ่าน

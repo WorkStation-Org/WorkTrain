@@ -1,4 +1,4 @@
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import {
   approvalEvents,
@@ -9,13 +9,14 @@ import {
   learningSets,
   questions,
   setVersions,
+  type FormKind,
 } from "@/db/schema";
 import type { Blueprint } from "@/domain/blueprint";
 import { aiReadable } from "@/domain/document";
 import type { Actor } from "@/lib/auth";
 import { checkForms, checkQuestion, type ExamModel, type GeneratedQuestion, type SourceDocument } from "@/lib/exam-generator";
 import { objectStore } from "@/lib/object-store";
-import { canEditDraft, type Outcome, type SetRow } from "@/lib/set-service";
+import { canEditVersion, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
 
 /**
  * ข้อสอบของชุดการเรียนรู้ — ให้ AI ออก 5 ชุด · แก้ทีละข้อ · ออกใหม่ทีละข้อ (spec §3 · §4)
@@ -33,14 +34,25 @@ async function latestVersion(setId: number) {
   return rows.at(-1) ?? null;
 }
 
-/** แก้ข้อสอบได้ไหม และในฐานะอะไร — ผู้อนุมัติแก้ตอนรออนุมัติ · ผู้สร้างแก้ตอนร่าง */
-export function examEditor(actor: Pick<Actor, "personId" | "role">, set: SetRow): "author" | "approver" | null {
-  if (set.status === "pending_approval" && set.approverPersonId === actor.personId) return "approver";
-  if (canEditDraft(actor, set)) return "author";
+/**
+ * แก้ข้อสอบของเวอร์ชันนี้ได้ไหม และในฐานะอะไร — ผู้อนุมัติแก้ตอนรออนุมัติ · ผู้สร้างแก้ตอนร่าง
+ * เวอร์ชันใหม่ (spec §7) ใช้สถานะของเวอร์ชัน ไม่ใช่ของชุด · ข้อสอบของเวอร์ชันที่อนุมัติแล้วแก้ไม่ได้
+ */
+export function examEditor(
+  actor: Pick<Actor, "personId" | "role">,
+  set: SetRow,
+  version: Pick<VersionRow, "versionNo" | "approvedAt" | "submittedAt"> | null,
+): "author" | "approver" | null {
+  if (version?.approvedAt) return null;
+  if (set.approverPersonId === actor.personId) {
+    if (set.status === "pending_approval") return "approver";
+    if (set.status === "active" && version && version.versionNo > 1 && version.submittedAt) return "approver";
+  }
+  if (canEditVersion(actor, set, version)) return "author";
   return null;
 }
 
-async function sourceDocuments(versionId: number): Promise<Outcome<{ docs: SourceDocument[] }>> {
+export async function sourceDocuments(versionId: number): Promise<Outcome<{ docs: SourceDocument[] }>> {
   const store = objectStore();
   if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
   const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder));
@@ -66,6 +78,14 @@ async function insertQuestion(formId: number, sortOrder: number, q: GeneratedQue
     .values(q.choices.map((text, i) => ({ questionId: row.id, sortOrder: i, text, isCorrect: i === q.correctIndex })));
 }
 
+/** ลงชุดข้อสอบที่ผ่าน `checkForms` แล้ว — ชุดเต็มหรือชุดส่วนที่เปลี่ยน (version-service) */
+export async function insertForms(versionId: number, kind: FormKind, forms: GeneratedQuestion[][]): Promise<void> {
+  for (const [i, form] of forms.entries()) {
+    const [f] = await db().insert(examForms).values({ versionId, kind, formNo: i + 1 }).returning({ id: examForms.id });
+    for (const [j, q] of form.entries()) await insertQuestion(f.id, j, q);
+  }
+}
+
 /**
  * ให้ AI ออก 5 ชุดใหม่ทั้งหมด — แทนของเดิมของเวอร์ชันนี้ (ตอนร่างเท่านั้น)
  *
@@ -75,9 +95,9 @@ export async function generateExams(input: { actor: Actor; setId: number; model:
   if (!input.model) return { ok: false, error: "ยังไม่ได้ตั้ง ANTHROPIC_API_KEY บนเซิร์ฟเวอร์นี้" };
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
-  if (!canEditDraft(input.actor, set)) return { ok: false, error: "ออกข้อสอบได้เฉพาะชุดร่างของตัวเอง" };
   const version = await latestVersion(set.id);
   if (!version) return { ok: false, error: "ชุดนี้ยังไม่มีเอกสาร" };
+  if (!canEditVersion(input.actor, set, version)) return { ok: false, error: "ออกข้อสอบได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
   const src = await sourceDocuments(version.id);
   if (!src.ok) return src;
 
@@ -88,21 +108,15 @@ export async function generateExams(input: { actor: Actor; setId: number; model:
   if (bad) return { ok: false, error: `AI ออกข้อสอบไม่ครบตามที่ตั้งไว้ (${bad}) — ลองกดออกใหม่` };
 
   // ของเดิมลบได้เพราะยังเป็นร่าง ไม่มีใครสอบ (attempts อ้างชุดข้อสอบด้วย restrict — ถ้ามีจะล้มตรงนี้ ไม่ใช่ลบเงียบ)
-  await db().delete(examForms).where(eq(examForms.versionId, version.id));
-  for (const [i, form] of out.value.entries()) {
-    const [f] = await db()
-      .insert(examForms)
-      .values({ versionId: version.id, kind: "full", formNo: i + 1 })
-      .returning({ id: examForms.id });
-    for (const [j, q] of form.entries()) await insertQuestion(f.id, j, q);
-  }
+  await db().delete(examForms).where(and(eq(examForms.versionId, version.id), eq(examForms.kind, "full")));
+  await insertForms(version.id, "full", out.value);
   await db().update(learningSets).set({ updatedAt: new Date() }).where(eq(learningSets.id, set.id));
   return { ok: true };
 }
 
 async function loadQuestion(questionId: number) {
   const [row] = await db()
-    .select({ q: questions, formId: examForms.id, versionId: setVersions.id, setId: setVersions.setId })
+    .select({ q: questions, formId: examForms.id, version: setVersions, versionId: setVersions.id, setId: setVersions.setId })
     .from(questions)
     .innerJoin(examForms, eq(examForms.id, questions.formId))
     .innerJoin(setVersions, eq(setVersions.id, examForms.versionId))
@@ -128,7 +142,7 @@ export async function editQuestion(input: { actor: Actor; questionId: number; ed
   const found = await loadQuestion(input.questionId);
   if (!found) return { ok: false, error: "ไม่พบข้อสอบ" };
   const set = await loadSet(found.setId);
-  if (!set || !examEditor(input.actor, set)) return { ok: false, error: "แก้ข้อสอบชุดนี้ไม่ได้ในตอนนี้" };
+  if (!set || !examEditor(input.actor, set, found.version)) return { ok: false, error: "แก้ข้อสอบชุดนี้ไม่ได้ในตอนนี้" };
 
   const next: GeneratedQuestion = {
     topic: found.q.topic,
@@ -172,7 +186,7 @@ export async function regenerateQuestion(input: { actor: Actor; questionId: numb
   const found = await loadQuestion(input.questionId);
   if (!found) return { ok: false, error: "ไม่พบข้อสอบ" };
   const set = await loadSet(found.setId);
-  if (!set || !examEditor(input.actor, set)) return { ok: false, error: "แก้ข้อสอบชุดนี้ไม่ได้ในตอนนี้" };
+  if (!set || !examEditor(input.actor, set, found.version)) return { ok: false, error: "แก้ข้อสอบชุดนี้ไม่ได้ในตอนนี้" };
   const src = await sourceDocuments(found.versionId);
   if (!src.ok) return src;
 
@@ -203,11 +217,15 @@ export async function regenerateQuestion(input: { actor: Actor; questionId: numb
   return { ok: true };
 }
 
-/** ข้อสอบของเวอร์ชันครบพร้อมส่ง/อนุมัติไหม — 5 ชุด · ชุดละ 10 ข้อ · ทุกข้อ 4 ตัวเลือกถูกข้อเดียว */
-export async function formsComplete(versionId: number, blueprint: Blueprint): Promise<string | null> {
+/**
+ * ข้อสอบของเวอร์ชันครบพร้อมส่ง/อนุมัติไหม — 5 ชุด · ชุดละ 10 ข้อ · ทุกข้อ 4 ตัวเลือกถูกข้อเดียว
+ * `kind = "delta"` = ข้อสอบส่วนที่เปลี่ยนใหญ่ (ADR-0008) ตาม `DELTA_BLUEPRINT`
+ */
+export async function formsComplete(versionId: number, blueprint: Blueprint, kind: FormKind = "full"): Promise<string | null> {
   const forms = await db().select().from(examForms).where(eq(examForms.versionId, versionId));
-  const full = forms.filter((f) => f.kind === "full");
-  if (full.length !== FORMS_PER_VERSION) return `ต้องมีข้อสอบ ${FORMS_PER_VERSION} ชุด (มี ${full.length})`;
+  const full = forms.filter((f) => f.kind === kind);
+  const what = kind === "delta" ? "ข้อสอบส่วนที่เปลี่ยน" : "ข้อสอบ";
+  if (full.length !== FORMS_PER_VERSION) return `ต้องมี${what} ${FORMS_PER_VERSION} ชุด (มี ${full.length})`;
   const qs = await db().select().from(questions).where(inArray(questions.formId, full.map((f) => f.id)));
   const opts = qs.length ? await db().select().from(choices).where(inArray(choices.questionId, qs.map((q) => q.id))) : [];
   const perForm = slotsPerForm(blueprint);

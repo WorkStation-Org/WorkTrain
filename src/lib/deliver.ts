@@ -38,7 +38,8 @@ export type NotificationKind =
   | "assigned"
   | "remind_day3"
   | "remind_day5"
-  | "overdue_summary";
+  | "overdue_summary"
+  | "new_version";
 
 interface Target {
   dedupeKey: string;

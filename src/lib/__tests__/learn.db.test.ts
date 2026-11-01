@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { asc, eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
+import { devStoreObjects } from "@/lib/object-store";
 import { defaultBlueprint } from "@/domain/blueprint";
 
 /**
@@ -85,7 +86,7 @@ async function startSession(at: Date) {
 }
 
 async function readAll(aId: number, docs: { id: number; pageCount: number | null; kind: string }[], at: Date) {
-  for (const d of docs.filter((x) => x.kind !== "pricelist")) {
+  for (const d of docs) {
     const pages = Array.from({ length: d.pageCount! }, (_, i) => i + 1);
     const r = await L.recordReading({ personId: ME, assignmentId: aId, documentId: d.id, pages, activeSeconds: 15, now: at });
     if (!r.ok) throw new Error(r.error);
@@ -166,12 +167,32 @@ describe("การอ่าน (spec §9)", () => {
     expect(p).toMatchObject({ pagesSeen: [2], activeSeconds: 30, completedAt: null });
   });
 
-  it("Pricelist ยังไม่อยู่ในเอกสารที่ต้องอ่าน (ADR-0010 ยังไม่ได้ทำ)", async () => {
+  it("Pricelist ต้องอ่านด้วย · เปิดผ่าน route ที่ประทับลายน้ำ ไม่ใช่ลิงก์ไฟล์ต้นฉบับ · บันทึกการเปิด (ADR-0010)", async () => {
     const { a, docs } = await seed();
     const view = await L.learnView(ME, a.id, T0);
-    expect(view?.documents.map((d) => d.fileName)).toEqual(["a.pdf", "b.pdf"]);
+    expect(view?.documents.map((d) => [d.fileName, d.kind])).toEqual([
+      ["a.pdf", "catalog"],
+      ["b.pdf", "other"],
+      ["p.pdf", "pricelist"],
+    ]);
+    const { PDFDocument } = await import("pdf-lib");
+    const src = await PDFDocument.create();
+    src.addPage();
+    src.addPage();
+    devStoreObjects().set("c", await src.save());
+
+    expect((await L.pricelistPdf({ personId: ME, email: "s@ws.co", assignmentId: a.id, documentId: docs[2].id, now: sec(1) })).ok).toBe(false);
     await startSession(T0);
-    expect((await L.recordReading({ personId: ME, assignmentId: a.id, documentId: docs[2].id, pages: [1], activeSeconds: 5, now: sec(1) })).ok).toBe(false);
+    expect(await L.documentLink({ personId: ME, assignmentId: a.id, documentId: docs[2].id, now: sec(1) })).toEqual({ ok: true, url: `/learn/${a.id}/doc/${docs[2].id}` });
+    const out = await L.pricelistPdf({ personId: ME, email: "s@ws.co", assignmentId: a.id, documentId: docs[2].id, now: sec(1) });
+    expect(out.ok).toBe(true);
+    const stamped = await PDFDocument.load((out as { bytes: Uint8Array }).bytes);
+    expect(stamped.getPageCount()).toBe(2);
+    expect(Buffer.from((out as { bytes: Uint8Array }).bytes).length).toBeGreaterThan(Buffer.from(devStoreObjects().get("c")!).length);
+    // แคตตาล็อกเปิดผ่านช่องนี้ไม่ได้
+    expect((await L.pricelistPdf({ personId: ME, email: "s@ws.co", assignmentId: a.id, documentId: docs[0].id, now: sec(1) })).ok).toBe(false);
+    const views = await testDb().select().from(schema.documentViews).where(eq(schema.documentViews.documentId, docs[2].id));
+    expect(views).toHaveLength(1);
   });
 
   it("การมอบของคนอื่นอ่านไม่ได้", async () => {
