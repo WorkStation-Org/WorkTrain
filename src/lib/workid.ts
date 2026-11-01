@@ -646,3 +646,34 @@ function devOrg(): OrgLookup | null {
   });
   return { ok: true, people };
 }
+
+// ── คนที่ถือ role ของแอปนี้ ──────────────────────────────────────────────────
+
+export type RolePeopleLookup = { ok: true; personIds: number[] } | { ok: false; why: string };
+
+/**
+ * `GET /v1/apps/worktrain/people?role=…` — รายชื่อคนที่ถือ role ของแอปนี้ (consumer ชื่อเดียวกับแอปเท่านั้นที่ถามได้)
+ * ใช้ตัด TG ออกจาก Leaderboard (ADR-0009) — WorkTrain ไม่เก็บ role ของใครเอง
+ *
+ * ถามไม่ได้ = `ok:false` ไม่ใช่ลิสต์ว่าง · หน้าจอต้องบอกว่ายังตัด TG ไม่ได้ ไม่ใช่ทำเหมือนไม่มี TG
+ * เครื่อง dev ที่ใช้ผังจำลอง = ไม่มีใครถือ role (ไม่มี WorkID ให้ถาม)
+ */
+export async function fetchRolePeople(role: Role): Promise<RolePeopleLookup> {
+  if (devOrg()) return { ok: true, personIds: [] };
+  if (!workIdConfigured()) return { ok: false, why: "workid_not_configured" };
+  let res: Response;
+  try {
+    res = await fetch(new URL(`/api/v1/apps/${encodeURIComponent(appKey())}/people?role=${encodeURIComponent(role)}`, baseUrl()), {
+      headers: authHeaders(),
+      cache: "no-store",
+      signal: AbortSignal.timeout(WORKID_SESSION_TIMEOUT_MS),
+    });
+  } catch (err) {
+    console.log(JSON.stringify({ msg: "workid_role_people_unreachable", error: errorSummary(err) }));
+    return { ok: false, why: "unreachable" };
+  }
+  if (!res.ok) return { ok: false, why: `http_${res.status}` };
+  const list = ((await readJson(res)) as { people?: unknown } | null)?.people;
+  if (!Array.isArray(list)) return { ok: false, why: "bad_shape" };
+  return { ok: true, personIds: list.flatMap((p) => positiveIntOrNull((p as { id?: unknown } | null)?.id) ?? []) };
+}

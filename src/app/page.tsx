@@ -26,6 +26,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
         <Link href="/learn" className="mt-3 block text-[13px] font-semibold text-ink underline">
           ชุดที่ต้องเรียน
         </Link>
+        <Link href="/dashboard" className="mt-2 block text-[13px] font-semibold text-ink underline">
+          Dashboard + Leaderboard
+        </Link>
         <Link href="/enroll" className="mt-2 block text-[13px] font-semibold text-ink underline">
           ลงทะเบียนใบหน้า
         </Link>

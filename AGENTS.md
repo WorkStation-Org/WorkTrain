@@ -24,6 +24,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/domain/audience.ts` — เงื่อนไขผู้รับ → รายชื่อ · `src/lib/assignment-service.ts` — ผู้รับ · มอบ (`syncAssignments`) · เตือน (`runReminders`) · แจ้งเรื่องอนุมัติ
 - `src/lib/onboarding-service.ts` — เส้นทาง Onboarding (`/admin/onboarding`) · `trainingStatus()` ให้ WorkHR ·
   `src/lib/api-consumers.ts` — ด่าน `/api/v1/*` (Bearer `wtr_…` · env `WORKTRAIN_API_CONSUMERS` · `npm run api:new-key`)
+- `src/domain/stats.ts` — สถิติรายคนต่อเดือน · Leaderboard (คะแนนครั้งแรก → ความไว) · `src/lib/stats-service.ts` — `/dashboard` ·
+  การมองเห็นตามบทบาท · export CSV · ตัด TG ด้วย `fetchRolePeople("admin")` (WorkID `/v1/apps/worktrain/people`)
 - `src/app/api/cron/daily` — รอบเช้า 09:00: มอบให้คนที่เพิ่งตรงเงื่อนไข แล้วเตือนวันที่ 3 / 5 / เลยกำหนด
 - `src/domain/exam.ts` — เลือกชุด (ไม่ซ้ำจนครบ 5) · สลับข้อ/ตัวเลือก · คะแนน · ไม่ผ่าน 2 ครั้งติด = อ่านใหม่
 - `src/lib/rekognition.ts` — **ที่เดียวที่คุยกับ AWS** (`FaceApi`: liveness session · ผล liveness · CompareFaces · credential ชั่วคราวให้เบราว์เซอร์)
