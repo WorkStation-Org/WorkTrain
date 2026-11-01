@@ -1,0 +1,1 @@
+ALTER TABLE "set_versions" ADD COLUMN "submitted_at" timestamp with time zone;

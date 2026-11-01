@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
 import {
@@ -14,6 +14,8 @@ import {
   readingProgress,
   setVersions,
   studySessions,
+  versionAcknowledgements,
+  type FormKind,
 } from "@/db/schema";
 import {
   buildLayout,
@@ -70,6 +72,55 @@ async function approvedVersion(setId: number) {
 async function requiredDocuments(versionId: number) {
   const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder));
   return rows.filter((d) => d.kind !== "pricelist" && d.pageCount !== null);
+}
+
+// ── เวอร์ชันใหม่ (spec §7 · ADR-0008) ───────────────────────────────────────
+
+type VersionRow = typeof setVersions.$inferSelect;
+
+export interface PendingUpdate {
+  version: VersionRow;
+  kind: "small" | "large";
+}
+
+/**
+ * สิ่งที่ผู้เรียนที่ผ่านแล้วยังค้างจากเวอร์ชันใหม่ — เวอร์ชันที่อนุมัติหลังวันที่ผ่าน เรียงเก่าไปใหม่ ทีละเวอร์ชัน
+ * เปลี่ยนเล็ก = ต้องกดรับทราบ · เปลี่ยนใหญ่ = ต้องสอบส่วนที่เปลี่ยนให้ผ่าน · ไม่มีค้าง = null
+ * ★ ผ่านแล้วไม่ย้อนกลับเป็นไม่ผ่าน (`passedAt` คงเดิม) — WorkHR และ Dashboard ยังนับว่าผ่าน
+ */
+export async function pendingUpdate(a: Pick<AssignmentRow, "id" | "setId" | "passedAt">): Promise<PendingUpdate | null> {
+  if (!a.passedAt) return null;
+  const later = await db()
+    .select()
+    .from(setVersions)
+    .where(and(eq(setVersions.setId, a.setId), isNotNull(setVersions.approvedAt), gt(setVersions.approvedAt, a.passedAt), gt(setVersions.versionNo, 1)))
+    .orderBy(asc(setVersions.versionNo));
+  if (!later.length) return null;
+  const acked = await db().select({ versionId: versionAcknowledgements.versionId }).from(versionAcknowledgements).where(eq(versionAcknowledgements.assignmentId, a.id));
+  const deltaPassed = await db()
+    .select({ versionId: attempts.versionId })
+    .from(attempts)
+    .where(and(eq(attempts.assignmentId, a.id), eq(attempts.kind, "delta"), eq(attempts.passed, true)));
+  const ack = new Set(acked.map((r) => r.versionId));
+  const passedDelta = new Set(deltaPassed.map((r) => r.versionId));
+  for (const v of later) {
+    if (v.changeKind === "small" && !ack.has(v.id)) return { version: v, kind: "small" };
+    if (v.changeKind === "large" && !passedDelta.has(v.id)) return { version: v, kind: "large" };
+  }
+  return null;
+}
+
+/** รับทราบเปลี่ยนเล็ก — เฉพาะเวอร์ชันที่ค้างอยู่ตอนนี้ (กดข้ามเวอร์ชันไม่ได้) */
+export async function acknowledgeVersion(input: { personId: number; assignmentId: number; versionId: number; now?: Date }): Promise<Outcome> {
+  const mine = await myAssignment(input.personId, input.assignmentId);
+  if (!mine || mine.set.status !== "active") return { ok: false, error: "ไม่พบการมอบนี้" };
+  const p = await pendingUpdate(mine.a);
+  if (!p || p.kind !== "small" || p.version.id !== input.versionId) return { ok: false, error: "ไม่มีเวอร์ชันที่ต้องรับทราบ" };
+  await db()
+    .insert(versionAcknowledgements)
+    .values({ assignmentId: mine.a.id, versionId: p.version.id, acknowledgedAt: input.now ?? new Date() })
+    .onConflictDoNothing();
+  return { ok: true };
 }
 
 // ── รอบเรียน ───────────────────────────────────────────────────────────────
@@ -203,7 +254,7 @@ export async function documentLink(input: { personId: number; assignmentId: numb
 
 // ── หน้าผู้เรียน ───────────────────────────────────────────────────────────
 
-export type LearnerState = "passed" | "relearn" | "ready" | "reading" | "in_exam";
+export type LearnerState = "passed" | "update_ack" | "update_exam" | "relearn" | "ready" | "reading" | "in_exam";
 
 /** ชุดที่ได้รับมอบของฉัน — เฉพาะชุดที่ใช้อยู่ */
 export async function myAssignments(personId: number) {
@@ -228,16 +279,21 @@ export async function learnView(personId: number, assignmentId: number, now: Dat
     .from(readingProgress)
     .where(and(eq(readingProgress.assignmentId, mine.a.id), eq(readingProgress.readRound, mine.a.readRound)));
   const past = await db()
-    .select({ id: attempts.id, endedAt: attempts.endedAt, scorePercent: attempts.scorePercent, passed: attempts.passed, endReason: attempts.endReason })
+    .select({ id: attempts.id, kind: attempts.kind, endedAt: attempts.endedAt, scorePercent: attempts.scorePercent, passed: attempts.passed, endReason: attempts.endReason })
     .from(attempts)
     .where(eq(attempts.assignmentId, mine.a.id))
     .orderBy(asc(attempts.startedAt));
   const open = await openAttempt(mine.a.id, now);
   const complete = await readingComplete(mine.a, version.id);
-  const state: LearnerState = mine.a.passedAt
-    ? "passed"
-    : open
-      ? "in_exam"
+  const update = await pendingUpdate(mine.a);
+  const state: LearnerState = open
+    ? "in_exam"
+    : mine.a.passedAt
+      ? update
+        ? update.kind === "small"
+          ? "update_ack"
+          : "update_exam"
+        : "passed"
       : mine.a.relearnRequiredAt
         ? "relearn"
         : complete
@@ -253,6 +309,7 @@ export async function learnView(personId: number, assignmentId: number, now: Dat
     }),
     attempts: past.filter((x) => x.endedAt),
     openAttemptId: open?.id ?? null,
+    update: update ? { versionId: update.version.id, label: update.version.label, kind: update.kind, summary: update.version.changeSummary ?? "" } : null,
     state,
     session: await activeSession(personId, now),
   };
@@ -284,25 +341,35 @@ export async function startAttempt(input: {
   const now = input.now ?? new Date();
   const mine = await myAssignment(input.personId, input.assignmentId);
   if (!mine || mine.set.status !== "active") return { ok: false, error: "ไม่พบการมอบนี้" };
-  if (mine.a.passedAt) return { ok: false, error: "สอบผ่านชุดนี้แล้ว" };
   if (await openAttempt(mine.a.id, now)) return { ok: false, error: "มีการสอบที่ยังค้างอยู่" };
-  if (mine.a.relearnRequiredAt) return { ok: false, error: "ไม่ผ่าน 2 ครั้งติด — กลับไปอ่านเอกสารให้ครบอีกรอบก่อนสอบ" };
-  const version = await approvedVersion(mine.set.id);
-  if (!version) return { ok: false, error: "ชุดนี้ยังไม่มีข้อสอบ" };
-  if (!(await readingComplete(mine.a, version.id))) return { ok: false, error: "ต้องอ่านเอกสารให้ครบทุกหน้าก่อนสอบ" };
+
+  // ผ่านแล้ว = สอบได้อย่างเดียวคือส่วนที่เปลี่ยนของเวอร์ชันใหม่ที่เปลี่ยนใหญ่ (ADR-0008) — ไม่ต้องอ่านใหม่ทั้งเล่ม
+  let version: VersionRow | null;
+  let kind: FormKind = "full";
+  if (mine.a.passedAt) {
+    const update = await pendingUpdate(mine.a);
+    if (!update || update.kind !== "large") return { ok: false, error: "สอบผ่านชุดนี้แล้ว" };
+    version = update.version;
+    kind = "delta";
+  } else {
+    if (mine.a.relearnRequiredAt) return { ok: false, error: "ไม่ผ่าน 2 ครั้งติด — กลับไปอ่านเอกสารให้ครบอีกรอบก่อนสอบ" };
+    version = await approvedVersion(mine.set.id);
+    if (!version) return { ok: false, error: "ชุดนี้ยังไม่มีข้อสอบ" };
+    if (!(await readingComplete(mine.a, version.id))) return { ok: false, error: "ต้องอ่านเอกสารให้ครบทุกหน้าก่อนสอบ" };
+  }
   const bad = await usableScan({ personId: input.personId, scanId: input.scanId, purpose: "exam", now });
   if (bad) return { ok: false, error: bad };
 
   const forms = await db()
     .select({ id: examForms.id })
     .from(examForms)
-    .where(and(eq(examForms.versionId, version.id), eq(examForms.kind, "full")))
+    .where(and(eq(examForms.versionId, version.id), eq(examForms.kind, kind)))
     .orderBy(asc(examForms.formNo));
   if (!forms.length) return { ok: false, error: "ชุดนี้ยังไม่มีข้อสอบ" };
   const used = await db()
     .select({ formId: attempts.formId })
     .from(attempts)
-    .where(and(eq(attempts.assignmentId, mine.a.id), eq(attempts.kind, "full")))
+    .where(and(eq(attempts.assignmentId, mine.a.id), eq(attempts.kind, kind)))
     .orderBy(asc(attempts.startedAt));
   const rng = input.rng ?? secureRng;
   const formId = pickForm(forms.map((f) => f.id), used.map((u) => u.formId), rng);
@@ -322,7 +389,7 @@ export async function startAttempt(input: {
       assignmentId: mine.a.id,
       versionId: version.id,
       formId,
-      kind: "full",
+      kind,
       scanId: input.scanId,
       layout,
       startedAt: now,

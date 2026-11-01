@@ -5,7 +5,7 @@ import { confirmedScanFor, enrollmentState, scanMode } from "@/lib/identity-serv
 import { learnView } from "@/lib/learn-service";
 import { firstParam, learnerActor } from "@/lib/page";
 import { formatBangkok } from "@/lib/time";
-import { endStudyAction } from "../actions";
+import { acknowledgeVersionAction, endStudyAction } from "../actions";
 import { ScanFlow } from "../scan-flow";
 import { Reader } from "./reader";
 
@@ -51,6 +51,28 @@ export default async function LearnSetPage({
       )}
 
       {view.state === "passed" && <p className="rounded-lg bg-success-soft px-3 py-2 text-[14px] text-success">สอบผ่านชุดนี้แล้ว 🎉</p>}
+      {view.update && (view.state === "update_ack" || view.state === "update_exam") && (
+        <Card>
+          <SectionTitle className="mb-2">มีเวอร์ชันใหม่{view.update.label ? ` · ${view.update.label}` : ""}</SectionTitle>
+          <p className="mb-3 text-[13px] text-ink-3">
+            {view.update.kind === "small"
+              ? "เปลี่ยนเล็ก — อ่านสิ่งที่เปลี่ยนแล้วกดรับทราบ ไม่ต้องสอบ"
+              : "เปลี่ยนใหญ่ — สอบเฉพาะส่วนที่เปลี่ยน 5 ข้อให้ผ่าน (ผลผ่านเดิมยังอยู่)"}
+          </p>
+          <div className="mb-4 whitespace-pre-line rounded-lg bg-surface-2 px-3 py-2 text-[13px] text-ink-2">{view.update.summary}</div>
+          {view.update.kind === "small" ? (
+            <form action={acknowledgeVersionAction}>
+              <input type="hidden" name="assignmentId" value={view.assignment.id} />
+              <input type="hidden" name="versionId" value={view.update.versionId} />
+              <Button type="submit" variant="primary">
+                อ่านแล้ว รับทราบ
+              </Button>
+            </form>
+          ) : (
+            <ScanFlow mode={mode} purpose="exam" assignmentId={view.assignment.id} label="สแกนใบหน้า · สอบส่วนที่เปลี่ยน" confirmedScanId={confirmedExam} />
+          )}
+        </Card>
+      )}
       {view.state === "relearn" && (
         <p className="rounded-lg bg-warning-soft px-3 py-2 text-[13px] text-warning">สอบไม่ผ่าน 2 ครั้งติด — อ่านเอกสารให้ครบทุกหน้าอีกรอบก่อนสอบใหม่</p>
       )}
@@ -115,7 +137,8 @@ export default async function LearnSetPage({
           <ul className="space-y-1 text-[13px]">
             {view.attempts.map((t, i) => (
               <li key={t.id} className="flex items-center gap-2">
-                ครั้งที่ {i + 1} · {t.scorePercent}% <Badge tone={t.passed ? "success" : "danger"} label={t.passed ? "ผ่าน" : "ไม่ผ่าน"} />
+                ครั้งที่ {i + 1}
+                {t.kind === "delta" ? " (ส่วนที่เปลี่ยน)" : ""} · {t.scorePercent}% <Badge tone={t.passed ? "success" : "danger"} label={t.passed ? "ผ่าน" : "ไม่ผ่าน"} />
                 <span className="text-ink-3">{REASON[t.endReason ?? ""] ?? ""}</span>
               </li>
             ))}

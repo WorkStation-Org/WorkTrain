@@ -8,18 +8,26 @@ import type { Level, Topic } from "@/db/schema";
 import { assignmentStatus, audienceRulesOf, previewAudience, type AssignmentState } from "@/lib/assignment-service";
 import { examEditor } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
-import { canEditDraft, getSetDetail, type QuestionView } from "@/lib/set-service";
+import { canEditDraft, canEditVersion, getSetDetail, type QuestionView } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { fetchOrg } from "@/lib/workid";
 import {
   approveAction,
+  approveVersionAction,
   editQuestionAction,
+  editSummaryAction,
+  generateDeltaAction,
   generateExamsAction,
   regenerateQuestionAction,
   removeDocumentAction,
   returnAction,
+  returnVersionAction,
   setAudienceAction,
+  setChangeKindAction,
+  startVersionAction,
   submitAction,
+  submitVersionAction,
+  summarizeVersionAction,
   updateSettingsAction,
 } from "../actions";
 import { Flash, STATUS } from "../ui";
@@ -52,7 +60,12 @@ export default async function SetPage({
   const sp = await searchParams;
   const { set, version, documents, forms, events } = detail;
   const editable = canEditDraft(actor, set);
-  const editor = examEditor(actor, set);
+  // เอกสาร/ข้อสอบแก้ได้ทั้งตอนร่างของชุด และตอนทำเวอร์ชันใหม่ของชุดที่ใช้อยู่ (spec §7)
+  const docsEditable = canEditVersion(actor, set, version);
+  const editor = examEditor(actor, set, version);
+  const newVersion = set.status === "active" && version && version.versionNo > 1 && !version.approvedAt ? version : null;
+  const isOwner = actor.role === "admin" || actor.personId === set.authorPersonId;
+  const isVersionApprover = Boolean(newVersion?.submittedAt) && set.approverPersonId === actor.personId;
   const isApprover = set.status === "pending_approval" && set.approverPersonId === actor.personId;
   const org = editable ? await fetchOrg() : null;
   const rules = await audienceRulesOf(set.id);
@@ -120,7 +133,10 @@ export default async function SetPage({
       )}
 
       <Card>
-        <SectionTitle className="mb-3">เอกสารต้นทาง{version?.label ? ` · ${version.label}` : ""}</SectionTitle>
+        <SectionTitle className="mb-3">
+          เอกสารต้นทาง{version?.label ? ` · ${version.label}` : ""}
+          {newVersion && <span className="ml-2 text-[12px] font-normal text-warning">เวอร์ชันที่ {newVersion.versionNo} (ยังไม่อนุมัติ — ผู้เรียนยังใช้เวอร์ชันเดิม)</span>}
+        </SectionTitle>
         {documents.length === 0 ? (
           <p className="text-[13px] text-ink-3">ยังไม่มีเอกสาร</p>
         ) : (
@@ -131,7 +147,7 @@ export default async function SetPage({
                   {d.fileName} <span className="text-ink-3">· {d.kind} · {(d.sizeBytes / 1024 / 1024).toFixed(1)} MB</span>
                   {!aiReadable(d.mimeType) && <span className="ml-2 text-warning">AI ยังอ่านไฟล์ชนิดนี้ไม่ได้</span>}
                 </span>
-                {editable && (
+                {docsEditable && (
                   <form action={removeDocumentAction}>
                     <input type="hidden" name="setId" value={set.id} />
                     <input type="hidden" name="documentId" value={d.id} />
@@ -144,18 +160,18 @@ export default async function SetPage({
             ))}
           </ul>
         )}
-        {editable && <UploadForm setId={set.id} allowPricelist={set.kind === "product"} />}
+        {docsEditable && <UploadForm setId={set.id} allowPricelist={set.kind === "product"} />}
       </Card>
 
       <Card>
         <SectionTitle
           className="mb-3"
           right={
-            editable && (
+            docsEditable && (
               <form action={generateExamsAction}>
                 <input type="hidden" name="setId" value={set.id} />
-                <Button type="submit" variant={forms.length ? "secondary" : "primary"}>
-                  {forms.length ? "ให้ AI ออกใหม่ทั้ง 5 ชุด" : "ให้ AI ออกข้อสอบ"}
+                <Button type="submit" variant={forms.some((f) => f.kind === "full") ? "secondary" : "primary"}>
+                  {forms.some((f) => f.kind === "full") ? "ให้ AI ออกใหม่ทั้ง 5 ชุด" : "ให้ AI ออกข้อสอบ"}
                 </Button>
               </form>
             )
@@ -163,14 +179,14 @@ export default async function SetPage({
         >
           ข้อสอบ ({forms.length} ชุด)
         </SectionTitle>
-        {editable && forms.length === 0 && (
+        {docsEditable && forms.length === 0 && (
           <p className="text-[13px] text-ink-3">อัปเอกสาร PDF แล้วกดให้ AI ออกข้อสอบ — ใช้เวลาหลายนาที อย่าปิดหน้านี้</p>
         )}
         <div className="space-y-3">
           {forms.map((f) => (
             <details key={f.id} className="rounded-lg border border-line" open={forms.length === 1}>
               <summary className="cursor-pointer px-4 py-2 text-[13px] font-semibold">
-                ชุดที่ {f.formNo} · {f.questions.length} ข้อ
+                {f.kind === "delta" ? "ส่วนที่เปลี่ยน · " : ""}ชุดที่ {f.formNo} · {f.questions.length} ข้อ
                 {f.questions.some((q) => q.priceCheck === "mismatch") && <span className="ml-2 text-danger">ราคาไม่ตรง Pricelist</span>}
               </summary>
               <ol className="divide-y divide-line">
@@ -182,6 +198,19 @@ export default async function SetPage({
           ))}
         </div>
       </Card>
+
+      {set.status === "active" && (isOwner || isVersionApprover || set.approverPersonId === actor.personId) && (
+        <VersionCard
+          setId={set.id}
+          version={version}
+          newVersion={newVersion}
+          isOwner={isOwner}
+          isVersionApprover={isVersionApprover}
+          docsEditable={docsEditable}
+          approverName={set.approverName}
+          hasDelta={forms.some((f) => f.kind === "delta")}
+        />
+      )}
 
       <AudienceCard
         setId={set.id}
@@ -310,6 +339,135 @@ function QuestionItem({ setId, q, no, canEdit }: { setId: number; q: QuestionVie
         </details>
       )}
     </li>
+  );
+}
+
+type VersionRow = NonNullable<Awaited<ReturnType<typeof getSetDetail>>>["version"];
+
+/** เวอร์ชันใหม่ของชุดที่ใช้อยู่ (spec §7 · ADR-0008) — ผู้สร้างเริ่ม/สรุป/ส่ง · ผู้อนุมัติเลือกเล็ก/ใหญ่ แล้วอนุมัติ */
+function VersionCard({
+  setId,
+  version,
+  newVersion,
+  isOwner,
+  isVersionApprover,
+  docsEditable,
+  approverName,
+  hasDelta,
+}: {
+  setId: number;
+  version: VersionRow;
+  newVersion: VersionRow;
+  isOwner: boolean;
+  isVersionApprover: boolean;
+  docsEditable: boolean;
+  approverName: string | null;
+  hasDelta: boolean;
+}) {
+  return (
+    <Card>
+      <SectionTitle className="mb-3">เวอร์ชันของเอกสาร</SectionTitle>
+      {!newVersion && (
+        <>
+          <p className="mb-3 text-[13px] text-ink-3">
+            ใช้อยู่: เวอร์ชันที่ {version?.versionNo ?? 1}
+            {version?.label ? ` · ${version.label}` : ""} — เอกสารเปลี่ยน (ราคา รุ่น เงื่อนไข) ให้เริ่มเวอร์ชันใหม่ ผู้เรียนยังใช้ของเดิมจนกว่าจะอนุมัติ
+          </p>
+          {isOwner && (
+            <form action={startVersionAction} className="flex flex-wrap items-end gap-2">
+              <input type="hidden" name="setId" value={setId} />
+              <label>
+                <span className={FIELD_LABEL_CLASS}>ป้ายเวอร์ชันตามเอกสาร</span>
+                <input name="label" placeholder="เช่น V.4 · 12/2026" className={INPUT_CLASS} />
+              </label>
+              <Button type="submit">เริ่มเวอร์ชันใหม่</Button>
+            </form>
+          )}
+        </>
+      )}
+      {newVersion && (
+        <div className="space-y-4 text-[13px]">
+          <p className="text-ink-3">
+            เวอร์ชันที่ {newVersion.versionNo}
+            {newVersion.label ? ` · ${newVersion.label}` : ""} ·{" "}
+            {newVersion.submittedAt ? `รออนุมัติจาก ${approverName ?? "-"}` : "ร่าง — อัปเอกสาร · ให้ AI ออกข้อสอบ 5 ชุด · สรุปสิ่งที่เปลี่ยน แล้วส่ง"}
+          </p>
+          <div>
+            <p className="mb-1 font-semibold">สิ่งที่เปลี่ยน (ผู้เรียนที่ผ่านแล้วอ่านส่วนนี้)</p>
+            {docsEditable ? (
+              <form action={editSummaryAction} className="space-y-2">
+                <input type="hidden" name="setId" value={setId} />
+                <textarea name="summary" rows={5} defaultValue={newVersion.changeSummary ?? ""} placeholder="- ราคา F331 เปลี่ยนจาก … เป็น …" className={INPUT_CLASS} />
+                <Button type="submit" size="sm" variant="secondary">
+                  บันทึกสรุป
+                </Button>
+              </form>
+            ) : (
+              <div className="whitespace-pre-line rounded-lg bg-surface-2 px-3 py-2 text-ink-2">{newVersion.changeSummary ?? "—"}</div>
+            )}
+          </div>
+          {docsEditable && (
+            <div className="flex flex-wrap gap-2">
+              <form action={summarizeVersionAction}>
+                <input type="hidden" name="setId" value={setId} />
+                <Button type="submit" variant="secondary">
+                  ให้ AI สรุปสิ่งที่เปลี่ยน
+                </Button>
+              </form>
+              <form action={submitVersionAction}>
+                <input type="hidden" name="setId" value={setId} />
+                <Button type="submit" variant="primary">
+                  ส่งเวอร์ชันใหม่ขออนุมัติ
+                </Button>
+              </form>
+            </div>
+          )}
+          {isVersionApprover && (
+            <div className="space-y-4">
+              <form action={setChangeKindAction} className="space-y-1">
+                <input type="hidden" name="setId" value={setId} />
+                <p className="font-semibold">เปลี่ยนแค่ไหน</p>
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="kind" value="small" defaultChecked={newVersion.changeKind === "small"} required />
+                  เปลี่ยนเล็ก (ราคาบางรุ่น · แก้คำผิด) — ผู้เรียนที่ผ่านแล้วกดรับทราบ
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="kind" value="large" defaultChecked={newVersion.changeKind === "large"} />
+                  เปลี่ยนใหญ่ (Series ใหม่ · เงื่อนไขการขาย) — ผู้เรียนที่ผ่านแล้วสอบส่วนที่เปลี่ยน
+                </label>
+                <Button type="submit" size="sm" variant="secondary">
+                  บันทึก
+                </Button>
+              </form>
+              {newVersion.changeKind === "large" && (
+                <form action={generateDeltaAction}>
+                  <input type="hidden" name="setId" value={setId} />
+                  <Button type="submit" variant="secondary">
+                    {hasDelta ? "ให้ AI ออกข้อสอบส่วนที่เปลี่ยนใหม่" : "ให้ AI ออกข้อสอบส่วนที่เปลี่ยน (5 ชุด × 5 ข้อ)"}
+                  </Button>
+                </form>
+              )}
+              <form action={approveVersionAction}>
+                <input type="hidden" name="setId" value={setId} />
+                <Button type="submit" variant="primary">
+                  อนุมัติเวอร์ชันใหม่
+                </Button>
+              </form>
+              <form action={returnVersionAction} className="space-y-2">
+                <input type="hidden" name="setId" value={setId} />
+                <label className="block">
+                  <span className={FIELD_LABEL_CLASS}>ตีกลับให้ผู้สร้าง</span>
+                  <textarea name="comment" required rows={2} className={INPUT_CLASS} />
+                </label>
+                <Button type="submit" variant="danger">
+                  ตีกลับ
+                </Button>
+              </form>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }
 

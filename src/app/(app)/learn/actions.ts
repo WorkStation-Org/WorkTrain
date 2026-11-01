@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { beginScan, devScan, finishScan, giveConsent, hasConsent, type ScanPurpose } from "@/lib/identity-service";
-import { answer, documentLink, endStudySession, recordLeave, recordReading, startAttempt, startStudySession } from "@/lib/learn-service";
+import { acknowledgeVersion, answer, documentLink, endStudySession, recordLeave, recordReading, startAttempt, startStudySession } from "@/lib/learn-service";
 import { awsFaceApi } from "@/lib/rekognition";
 
 /**
@@ -70,6 +70,14 @@ export async function endStudyAction(form: FormData) {
   const actor = await learner();
   await endStudySession(actor.personId);
   redirect(`/learn/${Number(form.get("assignmentId"))}`);
+}
+
+/** รับทราบเวอร์ชันใหม่ที่เปลี่ยนเล็ก (ADR-0008) */
+export async function acknowledgeVersionAction(form: FormData) {
+  const actor = await learner();
+  const assignmentId = Number(form.get("assignmentId"));
+  const out = await acknowledgeVersion({ personId: actor.personId, assignmentId, versionId: Number(form.get("versionId")) });
+  redirect(`/learn/${assignmentId}${out.ok ? "" : `?err=${encodeURIComponent(out.error)}`}`);
 }
 
 export async function documentLinkAction(input: { assignmentId: number; documentId: number }) {

@@ -81,3 +81,13 @@ export function checkBlueprint(input: unknown): BlueprintCheck {
 export function slots(blueprint: Blueprint): { topic: Topic; level: Level }[] {
   return blueprint.flatMap((c) => Array.from({ length: c.count }, () => ({ topic: c.topic, level: c.level })));
 }
+
+/**
+ * ข้อสอบเฉพาะส่วนที่เปลี่ยนใหญ่ (ADR-0008 · spec §7 "~5 ข้อ") — ไม่แยกหัวข้อ เพราะส่วนที่เปลี่ยนอาจเป็นหัวข้อเดียว
+ * ผู้เรียนที่ผ่านแล้วสอบชุดนี้แทนชุดเต็ม
+ */
+export const DELTA_BLUEPRINT: Blueprint = [
+  { topic: "general", level: "recall", count: 2 },
+  { topic: "general", level: "understand", count: 2 },
+  { topic: "general", level: "scenario", count: 1 },
+];

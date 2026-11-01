@@ -67,6 +67,9 @@ function fakeModel(overrides: Partial<ExamModel> = {}): ExamModel & { calls: num
     async regenerateQuestion(input: { topic: GeneratedQuestion["topic"]; level: GeneratedQuestion["level"] }) {
       return { ok: true as const, value: question(input.topic, input.level) };
     },
+    async summarizeChanges() {
+      return { ok: true as const, value: "- ราคา F331 เปลี่ยนจาก 12,900 เป็น 13,500" };
+    },
     ...overrides,
   };
   return m;

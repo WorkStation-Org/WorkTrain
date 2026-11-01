@@ -46,12 +46,35 @@ export function canEditDraft(actor: Pick<Actor, "personId" | "role">, set: Pick<
   return set.status === "draft" && isOwnerOrAdmin(actor, set);
 }
 
+export type VersionRow = typeof setVersions.$inferSelect;
+
+/**
+ * แก้เอกสาร/ข้อสอบของเวอร์ชันนี้ได้ไหม — ผู้สร้างหรือ TG
+ * · เวอร์ชันแรก: ตอนชุดยังเป็นร่าง (`canEditDraft`)
+ * · เวอร์ชันใหม่ของชุดที่ใช้อยู่ (spec §7): ยังไม่ส่งขออนุมัติ และยังไม่อนุมัติ — ผู้เรียนยังเรียนเวอร์ชันเดิมระหว่างนี้
+ */
+export function canEditVersion(
+  actor: Pick<Actor, "personId" | "role">,
+  set: Pick<SetRow, "authorPersonId" | "status">,
+  version: Pick<VersionRow, "versionNo" | "approvedAt" | "submittedAt"> | null,
+): boolean {
+  if (canEditDraft(actor, set)) return version === null || version.versionNo === 1;
+  return (
+    set.status === "active" &&
+    version !== null &&
+    version.versionNo > 1 &&
+    version.approvedAt === null &&
+    version.submittedAt === null &&
+    isOwnerOrAdmin(actor, set)
+  );
+}
+
 async function loadSet(setId: number): Promise<SetRow | null> {
   const [row] = await db().select().from(learningSets).where(eq(learningSets.id, setId));
   return row ?? null;
 }
 
-async function currentVersion(setId: number) {
+export async function currentVersion(setId: number) {
   const [row] = await db()
     .select()
     .from(setVersions)
@@ -177,14 +200,14 @@ export async function requestUpload(input: {
   if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
-  if (!canEditDraft(input.actor, set)) return { ok: false, error: "แก้ได้เฉพาะชุดร่างของตัวเอง" };
+  let version = await currentVersion(set.id);
+  if (!canEditVersion(input.actor, set, version)) return { ok: false, error: "แก้ได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
   if (!isDocumentMime(input.mime)) return { ok: false, error: "รับเฉพาะ PDF หรือ Excel (.xlsx)" };
   if (!Number.isInteger(input.size) || input.size <= 0 || input.size > MAX_DOCUMENT_BYTES) {
     return { ok: false, error: `ไฟล์ต้องไม่เกิน ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB` };
   }
   if (input.docKind === "pricelist" && set.kind !== "product") return { ok: false, error: "Pricelist ใช้กับชุดสินค้าเท่านั้น" };
 
-  let version = await currentVersion(set.id);
   if (!version) {
     [version] = await db()
       .insert(setVersions)
@@ -217,7 +240,10 @@ export async function confirmUpload(input: { actor: Actor; token: string; now?: 
   if (!t || t.kind !== UPLOAD_KIND || t.personId !== input.actor.personId) return { ok: false, error: "ใบอัปโหลดไม่ถูกต้อง" };
   if (t.exp < now) return { ok: false, error: "ใบอัปโหลดหมดอายุ ลองอัปใหม่" };
   const set = await loadSet(t.setId);
-  if (!set || !canEditDraft(input.actor, set)) return { ok: false, error: "แก้ได้เฉพาะชุดร่างของตัวเอง" };
+  const current = set ? await currentVersion(set.id) : null;
+  if (!set || current?.id !== t.versionId || !canEditVersion(input.actor, set, current)) {
+    return { ok: false, error: "แก้ได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
+  }
 
   const store = objectStore();
   if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
@@ -277,7 +303,10 @@ export async function removeDocument(input: { actor: Actor; documentId: number }
     .where(eq(documents.id, input.documentId));
   if (!row) return { ok: false, error: "ไม่พบเอกสาร" };
   const set = await loadSet(row.setId);
-  if (!set || !canEditDraft(input.actor, set)) return { ok: false, error: "แก้ได้เฉพาะชุดร่างของตัวเอง" };
+  const current = set ? await currentVersion(set.id) : null;
+  if (!set || current?.id !== row.doc.versionId || !canEditVersion(input.actor, set, current)) {
+    return { ok: false, error: "แก้ได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
+  }
   const used = await db().select({ id: examForms.id }).from(examForms).where(eq(examForms.versionId, row.doc.versionId)).limit(1);
   if (used.length) return { ok: false, error: "เอกสารนี้ถูกใช้ออกข้อสอบแล้ว — ลบข้อสอบก่อน" };
   await db().delete(documents).where(eq(documents.id, row.doc.id));

@@ -9,7 +9,18 @@ import { claudeExamModel } from "@/lib/exam-generator";
 import { editQuestion, generateExams, regenerateQuestion } from "@/lib/exam-service";
 import { confirmUpload, createSet, removeDocument, requestUpload, updateSettings } from "@/lib/set-service";
 import { fetchOrg } from "@/lib/workid";
-import { DOCUMENT_KINDS, SET_KINDS, type DocumentKind, type SetKind } from "@/db/schema";
+import {
+  approveVersion,
+  editSummary,
+  generateDeltaExams,
+  notifyNewVersion,
+  returnVersion,
+  setChangeKind,
+  startVersion,
+  submitVersion,
+  summarizeVersion,
+} from "@/lib/version-service";
+import { DOCUMENT_KINDS, SET_KINDS, type ChangeKind, type DocumentKind, type SetKind } from "@/db/schema";
 
 /**
  * server action ของหน้าชุดการเรียนรู้ — แปลงฟอร์มเป็นคำสั่งเข้า service · ตัวตนมาจาก session เสมอ ไม่ใช่จากฟอร์ม
@@ -149,4 +160,58 @@ export async function setAudienceAction(form: FormData) {
     return [{ kind, refId: Number.parseInt(ref, 10), label: label.join(":") }];
   });
   back(setId, await setAudience({ actor, setId, rules }), "บันทึกผู้รับแล้ว");
+}
+
+// ── เวอร์ชันใหม่ (spec §7 · ADR-0008) ─────────────────────────────────────────
+
+export async function startVersionAction(form: FormData) {
+  const actor = await requireAuthor();
+  const setId = int(form, "setId");
+  back(setId, await startVersion({ actor, setId, label: str(form, "label") }), "เริ่มเวอร์ชันใหม่แล้ว — อัปเอกสารใหม่ แล้วให้ AI ออกข้อสอบและสรุปสิ่งที่เปลี่ยน");
+}
+
+export async function summarizeVersionAction(form: FormData) {
+  const actor = await requireAuthor();
+  const setId = int(form, "setId");
+  back(setId, await summarizeVersion({ actor, setId, model: claudeExamModel() }), "AI สรุปสิ่งที่เปลี่ยนแล้ว — ตรวจ/แก้ก่อนส่ง");
+}
+
+export async function editSummaryAction(form: FormData) {
+  const actor = await requireAuthor();
+  const setId = int(form, "setId");
+  back(setId, await editSummary({ actor, setId, summary: str(form, "summary") }), "บันทึกสรุปแล้ว");
+}
+
+export async function submitVersionAction(form: FormData) {
+  const actor = await requireAuthor();
+  const setId = int(form, "setId");
+  back(setId, await notify(await submitVersion({ actor, setId })), "ส่งเวอร์ชันใหม่ขออนุมัติแล้ว");
+}
+
+export async function setChangeKindAction(form: FormData) {
+  const actor = await requireUser();
+  const setId = int(form, "setId");
+  back(setId, await setChangeKind({ actor, setId, kind: str(form, "kind") as ChangeKind }), "บันทึกแล้ว");
+}
+
+export async function generateDeltaAction(form: FormData) {
+  const actor = await requireUser();
+  const setId = int(form, "setId");
+  back(setId, await generateDeltaExams({ actor, setId, model: claudeExamModel() }), "AI ออกข้อสอบส่วนที่เปลี่ยนแล้ว — ตรวจทุกข้อก่อนอนุมัติ");
+}
+
+export async function returnVersionAction(form: FormData) {
+  const actor = await requireUser();
+  const setId = int(form, "setId");
+  back(setId, await notify(await returnVersion({ actor, setId, comment: str(form, "comment") })), "ตีกลับเวอร์ชันใหม่แล้ว");
+}
+
+export async function approveVersionAction(form: FormData) {
+  const actor = await requireUser();
+  const setId = int(form, "setId");
+  const out = await approveVersion({ actor, setId });
+  if (!out.ok) back(setId, out, "");
+  await notifyApprovalEvent(out.eventId);
+  const sent = await notifyNewVersion(out.versionId);
+  back(setId, { ok: true }, `อนุมัติเวอร์ชันใหม่แล้ว · แจ้งผู้เรียนที่ผ่านแล้ว ${sent.sent} คน${sent.failed ? ` (ส่งไม่ได้ ${sent.failed})` : ""}`);
 }
