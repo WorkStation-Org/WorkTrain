@@ -22,6 +22,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/workid.ts` — SSO · `/v1/session/check` · `fetchOrg()` (ผัง: `positionId` · `teamId` · `managedTeamIds` · `managerPersonId` · `lineGroupId`)
 - `src/lib/gateway.ts` — client ของ WorkGateWay · `src/lib/deliver.ts` — ส่งตัวต่อตัว/เข้ากลุ่มประจำตัว พร้อมจองแถวและบันทึกผล (ยกจาก WorkDaily)
 - `src/domain/audience.ts` — เงื่อนไขผู้รับ → รายชื่อ · `src/lib/assignment-service.ts` — ผู้รับ · มอบ (`syncAssignments`) · เตือน (`runReminders`) · แจ้งเรื่องอนุมัติ
+- `src/lib/onboarding-service.ts` — เส้นทาง Onboarding (`/admin/onboarding`) · `trainingStatus()` ให้ WorkHR ·
+  `src/lib/api-consumers.ts` — ด่าน `/api/v1/*` (Bearer `wtr_…` · env `WORKTRAIN_API_CONSUMERS` · `npm run api:new-key`)
 - `src/app/api/cron/daily` — รอบเช้า 09:00: มอบให้คนที่เพิ่งตรงเงื่อนไข แล้วเตือนวันที่ 3 / 5 / เลยกำหนด
 - `src/domain/exam.ts` — เลือกชุด (ไม่ซ้ำจนครบ 5) · สลับข้อ/ตัวเลือก · คะแนน · ไม่ผ่าน 2 ครั้งติด = อ่านใหม่
 - `src/lib/rekognition.ts` — **ที่เดียวที่คุยกับ AWS** (`FaceApi`: liveness session · ผล liveness · CompareFaces · credential ชั่วคราวให้เบราว์เซอร์)
