@@ -3,9 +3,13 @@
 ระบบเรียนรู้ด้วยตัวเองของเครือ Work Station — ผู้สร้าง (PD · Sales Manager ฯลฯ) ส่งเอกสาร → AI ออกข้อสอบ 5 ชุด →
 ผู้อนุมัติตรวจ → ส่งให้คนตามผังองค์กร → ผู้เรียนอ่านแล้วสอบ (ผ่าน 80%) → TG ติดตามและดูสถิติ
 
-> **สถานะ (26 ต.ค. 2569):** เขียนใหม่ทั้งหมดตาม [ADR-0001](docs/adr/0001-rewrite-on-drizzle-in-same-repo.md) ·
-> slice แรกมีโครง + ล็อกอิน WorkID + health + schema รุ่นที่ 1 · หน้าจอของผู้เรียน/ผู้สร้าง/TG ตามมาใน slice ถัดไป ·
-> ยังไม่ deploy (ยังไม่มี Neon / app key `worktrain` ที่ WorkID)
+> **สถานะ (5 พ.ย. 2569):** เขียนใหม่ทั้งหมดตาม [ADR-0001](docs/adr/0001-rewrite-on-drizzle-in-same-repo.md) ·
+> โค้ดของ spec รุ่นที่ 1 ครบแล้ว — ผู้สร้าง → AI ออกข้อสอบ → อนุมัติ · มอบงาน + เตือน LINE · หน้าผู้เรียน (ยินยอม → สแกน → อ่าน → สอบ) ·
+> สแกนใบหน้า (Rekognition · `ap-southeast-7`) · เส้นทาง Onboarding + API ให้ WorkHR · Dashboard + Leaderboard ·
+> เวอร์ชันใหม่ของเอกสาร · Pricelist พร้อมลายน้ำ
+>
+> **ยังไม่ deploy** — ยังไม่มี Neon · app key `worktrain` ที่ WorkID · consumer key ของ WorkGateWay/WorkID ·
+> branch `production` ยังเป็นแอป Prisma ตัวเก่า · เรื่องที่รอคนอื่น (PDPA ใบหน้า · `positionId` · ตัวอย่าง Pricelist) ดู [spec §14](docs/spec-release-1.md)
 
 ## เอกสาร
 
