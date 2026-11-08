@@ -9,11 +9,11 @@ import {
   examForms,
   learningSets,
   questions,
+  setKinds,
   setVersions,
   type DocumentKind,
-  type SetKind,
 } from "@/db/schema";
-import { checkBlueprint, defaultBlueprint, type Blueprint } from "@/domain/blueprint";
+import { checkBlueprint, type Blueprint } from "@/domain/blueprint";
 import { MAX_DOCUMENT_BYTES, documentKey, isDocumentMime } from "@/domain/document";
 import type { Actor } from "@/lib/auth";
 import { objectStore } from "@/lib/object-store";
@@ -97,23 +97,27 @@ async function defaultApprover(personId: number): Promise<{ personId: number; na
   return boss ? { personId: boss.personId, name: boss.name } : null;
 }
 
-export async function createSet(input: { actor: Actor; title: string; kind: SetKind }): Promise<Outcome<{ setId: number }>> {
+/** สร้างชุดร่าง — คัดลอกแม่แบบข้อสอบของชนิด ณ ตอนนี้มาเป็นของชุด (ADR-0011) · ชนิดต้องเปิดอยู่ */
+export async function createSet(input: { actor: Actor; title: string; kindId: number }): Promise<Outcome<{ setId: number }>> {
   const { actor } = input;
   if (actor.role !== "admin" && actor.role !== "author") return { ok: false, error: "บัญชีนี้สร้างชุดการเรียนรู้ไม่ได้" };
   const title = input.title.trim();
   if (!title || title.length > TITLE_MAX) return { ok: false, error: `ชื่อชุดต้องมี 1–${TITLE_MAX} ตัวอักษร` };
+  const kind = Number.isInteger(input.kindId) && input.kindId > 0 ? (await db().select().from(setKinds).where(eq(setKinds.id, input.kindId)))[0] : undefined;
+  if (!kind) return { ok: false, error: "เลือกชนิดของชุด" };
+  if (!kind.active) return { ok: false, error: `ชนิด "${kind.name}" ปิดอยู่` };
 
   const approver = await defaultApprover(actor.personId);
   const [set] = await db()
     .insert(learningSets)
     .values({
       title,
-      kind: input.kind,
+      kindId: kind.id,
       authorPersonId: actor.personId,
       authorName: actor.name,
       approverPersonId: approver?.personId ?? null,
       approverName: approver?.name ?? null,
-      blueprint: defaultBlueprint(input.kind),
+      blueprint: structuredClone(kind.blueprint),
     })
     .returning({ id: learningSets.id });
   // ไม่ใช่ atomic โดยเจตนา: ต้องรู้ id ของชุดก่อน · ถ้าแถวนี้ล้ม ได้ชุดร่างที่ไม่มีเวอร์ชัน ซึ่ง `addDocument` สร้างให้เองได้
@@ -206,7 +210,10 @@ export async function requestUpload(input: {
   if (!Number.isInteger(input.size) || input.size <= 0 || input.size > MAX_DOCUMENT_BYTES) {
     return { ok: false, error: `ไฟล์ต้องไม่เกิน ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB` };
   }
-  if (input.docKind === "pricelist" && set.kind !== "product") return { ok: false, error: "Pricelist ใช้กับชุดสินค้าเท่านั้น" };
+  if (input.docKind === "pricelist") {
+    const [kind] = await db().select({ allowPricelist: setKinds.allowPricelist }).from(setKinds).where(eq(setKinds.id, set.kindId));
+    if (!kind?.allowPricelist) return { ok: false, error: "ชนิดของชุดนี้ไม่ได้เปิดให้แนบ Pricelist" };
+  }
 
   if (!version) {
     [version] = await db()
@@ -341,6 +348,7 @@ export interface QuestionView {
 
 export interface SetDetail {
   set: SetRow;
+  kind: { id: number; name: string; allowPricelist: boolean };
   version: typeof setVersions.$inferSelect | null;
   documents: (typeof documents.$inferSelect)[];
   forms: { id: number; kind: string; formNo: number; questions: QuestionView[] }[];
@@ -352,6 +360,10 @@ export interface SetDetail {
 export async function getSetDetail(actor: Pick<Actor, "personId" | "role">, setId: number): Promise<SetDetail | null> {
   const set = await loadSet(setId);
   if (!set || !canManage(actor, set)) return null;
+  const [kind] = await db()
+    .select({ id: setKinds.id, name: setKinds.name, allowPricelist: setKinds.allowPricelist })
+    .from(setKinds)
+    .where(eq(setKinds.id, set.kindId));
   const version = await currentVersion(set.id);
   const docs = version
     ? await db().select().from(documents).where(eq(documents.versionId, version.id)).orderBy(asc(documents.sortOrder))
@@ -392,6 +404,6 @@ export async function getSetDetail(actor: Pick<Actor, "personId" | "role">, setI
           .map((c) => ({ id: c.id, sortOrder: c.sortOrder, text: c.text, isCorrect: c.isCorrect })),
       })),
   }));
-  return { set, version, documents: docs, forms, events, blueprint: set.blueprint as Blueprint };
+  return { set, kind, version, documents: docs, forms, events, blueprint: set.blueprint as Blueprint };
 }
 

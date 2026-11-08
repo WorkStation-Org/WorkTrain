@@ -84,7 +84,7 @@ async function uploadPdf(actor: Actor, setId: number, bytes = PDF) {
 }
 
 async function readySet() {
-  const created = await createSet({ actor: pd, title: "F331 Signature", kind: "product" });
+  const created = await createSet({ actor: pd, title: "F331 Signature", kindId: schema.SEEDED_KIND_IDS.product });
   if (!created.ok) throw new Error(created.error);
   const up = await uploadPdf(pd, created.setId);
   if (!up.ok) throw new Error(up.error);
@@ -109,7 +109,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 describe("สร้างชุดการเรียนรู้", () => {
   it("ผู้อนุมัติค่าเริ่มต้น = หัวหน้าตามผังของผู้สร้าง (ADR-0004) · ชุดสินค้าได้แม่แบบ PD · มีเวอร์ชัน 1", async () => {
-    const r = await createSet({ actor: pd, title: "  F331 Signature  ", kind: "product" });
+    const r = await createSet({ actor: pd, title: "  F331 Signature  ", kindId: schema.SEEDED_KIND_IDS.product });
     expect(r.ok).toBe(true);
     const detail = await getSetDetail(pd, (r as { setId: number }).setId);
     expect(detail?.set).toMatchObject({ title: "F331 Signature", status: "draft", approverPersonId: 20, approverName: "ผจก. พีดี" });
@@ -118,11 +118,11 @@ describe("สร้างชุดการเรียนรู้", () => {
   });
 
   it("ผู้เรียน (user) สร้างไม่ได้", async () => {
-    expect(await createSet({ actor: sales, title: "x", kind: "general" })).toEqual({ ok: false, error: "บัญชีนี้สร้างชุดการเรียนรู้ไม่ได้" });
+    expect(await createSet({ actor: sales, title: "x", kindId: schema.SEEDED_KIND_IDS.general })).toEqual({ ok: false, error: "บัญชีนี้สร้างชุดการเรียนรู้ไม่ได้" });
   });
 
   it("ตั้งผู้อนุมัติเป็นตัวเองไม่ได้ · สัดส่วนต้องรวม 10", async () => {
-    const r = await createSet({ actor: pd, title: "x", kind: "general" });
+    const r = await createSet({ actor: pd, title: "x", kindId: schema.SEEDED_KIND_IDS.general });
     const setId = (r as { setId: number }).setId;
     expect((await updateSettings({ actor: pd, setId, settings: { approver: { personId: 10, name: "ตัวเอง" } } })).ok).toBe(false);
     expect(await updateSettings({ actor: pd, setId, settings: { blueprint: [{ topic: "general", level: "recall", count: 3 }] } })).toEqual({
@@ -132,7 +132,7 @@ describe("สร้างชุดการเรียนรู้", () => {
   });
 
   it("ผู้อนุมัติเห็นชุดในรายการ · คนอื่นไม่เห็นและเปิดรายละเอียดไม่ได้", async () => {
-    const r = await createSet({ actor: pd, title: "x", kind: "general" });
+    const r = await createSet({ actor: pd, title: "x", kindId: schema.SEEDED_KIND_IDS.general });
     const setId = (r as { setId: number }).setId;
     expect((await listManagedSets(pdMgr)).map((s) => s.id)).toEqual([setId]);
     expect(await listManagedSets(sales)).toEqual([]);
@@ -142,7 +142,7 @@ describe("สร้างชุดการเรียนรู้", () => {
 
 describe("อัปโหลดเอกสาร", () => {
   it("อัปแล้วยืนยัน → มีแถวเอกสาร · ยืนยันซ้ำไม่ได้แถวที่สอง", async () => {
-    const r = await createSet({ actor: pd, title: "x", kind: "product" });
+    const r = await createSet({ actor: pd, title: "x", kindId: schema.SEEDED_KIND_IDS.product });
     const setId = (r as { setId: number }).setId;
     const req = await requestUpload({ actor: pd, setId, docKind: "catalog", fileName: "a.pdf", mime: "application/pdf", size: PDF.byteLength });
     if (!req.ok) throw new Error(req.error);
@@ -156,21 +156,21 @@ describe("อัปโหลดเอกสาร", () => {
   });
 
   it("ขนาดไฟล์ที่มาถึงไม่ตรงกับที่ขอ → ปฏิเสธและลบไฟล์ทิ้ง", async () => {
-    const r = await createSet({ actor: pd, title: "x", kind: "product" });
+    const r = await createSet({ actor: pd, title: "x", kindId: schema.SEEDED_KIND_IDS.product });
     const out = await uploadPdf(pd, (r as { setId: number }).setId, new Uint8Array(5));
     expect(out).toEqual({ ok: false, error: "ขนาดไฟล์ไม่ตรงกับที่แจ้งไว้" });
     expect(devStoreObjects().size).toBe(0);
   });
 
   it("ไฟล์ที่บอกว่าเป็น PDF แต่อ่านไม่ได้ → ปฏิเสธและลบทิ้ง", async () => {
-    const r = await createSet({ actor: pd, title: "x", kind: "product" });
+    const r = await createSet({ actor: pd, title: "x", kindId: schema.SEEDED_KIND_IDS.product });
     const junk = new Uint8Array(PDF.byteLength).fill(65);
     expect(await uploadPdf(pd, (r as { setId: number }).setId, junk)).toEqual({ ok: false, error: "อ่านไฟล์ PDF ไม่ได้ — ไฟล์อาจเสียหรือมีรหัสผ่าน" });
     expect(devStoreObjects().size).toBe(0);
   });
 
   it("ไม่รับชนิดไฟล์อื่น · token ของคนอื่นใช้ไม่ได้", async () => {
-    const r = await createSet({ actor: pd, title: "x", kind: "product" });
+    const r = await createSet({ actor: pd, title: "x", kindId: schema.SEEDED_KIND_IDS.product });
     const setId = (r as { setId: number }).setId;
     expect((await requestUpload({ actor: pd, setId, docKind: "other", fileName: "a.exe", mime: "application/x-msdownload", size: 10 })).ok).toBe(false);
     const req = await requestUpload({ actor: pd, setId, docKind: "catalog", fileName: "a.pdf", mime: "application/pdf", size: PDF.byteLength });
@@ -204,7 +204,7 @@ describe("AI ออกข้อสอบ", () => {
   });
 
   it("ไม่มีเอกสาร PDF → บอกตรง ๆ ไม่เรียก AI", async () => {
-    const r = await createSet({ actor: pd, title: "x", kind: "product" });
+    const r = await createSet({ actor: pd, title: "x", kindId: schema.SEEDED_KIND_IDS.product });
     const model = fakeModel();
     expect(await generateExams({ actor: pd, setId: (r as { setId: number }).setId, model })).toEqual({
       ok: false,
@@ -214,7 +214,7 @@ describe("AI ออกข้อสอบ", () => {
   });
 
   it("ไม่ได้ตั้ง API key → บอกตรง ๆ", async () => {
-    const r = await createSet({ actor: pd, title: "x", kind: "product" });
+    const r = await createSet({ actor: pd, title: "x", kindId: schema.SEEDED_KIND_IDS.product });
     expect((await generateExams({ actor: pd, setId: (r as { setId: number }).setId, model: null })).ok).toBe(false);
   });
 });
@@ -281,7 +281,7 @@ describe("การอนุมัติ", () => {
   });
 
   it("ส่งไม่ได้ถ้ายังไม่มีข้อสอบครบ หรือยังไม่มีผู้อนุมัติ", async () => {
-    const r = await createSet({ actor: pd, title: "x", kind: "product" });
+    const r = await createSet({ actor: pd, title: "x", kindId: schema.SEEDED_KIND_IDS.product });
     const setId = (r as { setId: number }).setId;
     expect((await submitForApproval({ actor: pd, setId })).ok).toBe(false);
     await updateSettings({ actor: pd, setId, settings: { approver: null } });

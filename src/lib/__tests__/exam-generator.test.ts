@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GENERAL_BLUEPRINT, slots } from "@/domain/blueprint";
-import { checkForms, checkQuestion, claudeExamModel, type GeneratedQuestion } from "@/lib/exam-generator";
+import { checkForms, checkQuestion, claudeExamModel, topicCodes, type GeneratedQuestion } from "@/lib/exam-generator";
 
 /** ผลของ AI ไม่ถูกเชื่อตรง ๆ — ตรวจรูปก่อนลงฐานทุกครั้ง */
 
@@ -58,5 +58,23 @@ describe("claudeExamModel", () => {
     } finally {
       if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
     }
+  });
+});
+
+describe("topicCodes — หัวข้อที่ TG ตั้งส่งให้ AI เป็นรหัสสั้น (ADR-0011)", () => {
+  const t = topicCodes(["กฎความปลอดภัย", "อุปกรณ์ป้องกัน"]);
+
+  it("รหัสตามลำดับ และแปลงกลับได้ (ตัดช่องว่างที่ AI เติม)", () => {
+    expect(t.code("อุปกรณ์ป้องกัน")).toBe("T2");
+    expect(t.decode(" T1 ")).toBe("กฎความปลอดภัย");
+  });
+
+  it("รหัสที่ไม่รู้จักคืนค่าเดิม → checkForms ปฏิเสธเพราะไม่ตรงช่อง", () => {
+    expect(t.decode("T9")).toBe("T9");
+    const blueprint = [{ topic: "กฎความปลอดภัย", level: "recall" as const, count: 10 }];
+    const bad = Array.from({ length: 5 }, (_, f) =>
+      Array.from({ length: 10 }, (_, i) => ({ ...ok, topic: t.decode(i === 0 ? "T9" : "T1"), text: `ชุด ${f} ข้อ ${i}` })),
+    );
+    expect(checkForms(bad, blueprint, 5)).toMatch(/ไม่ตรงกับสัดส่วน/);
   });
 });

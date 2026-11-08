@@ -30,6 +30,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
       ? [
           { href: "/admin/faces", icon: "shieldAlert" as const, title: "ตรวจภาพใบหน้า", sub: "สแกนไม่ผ่าน 3 ครั้ง · ขอลงทะเบียนใหม่" },
           { href: "/admin/onboarding", icon: "route" as const, title: "เส้นทาง Onboarding", sub: "ผูกชุดกับตำแหน่ง" },
+          { href: "/admin/kinds", icon: "grid" as const, title: "ชนิดของชุด", sub: "ชื่อ · แม่แบบข้อสอบ · เปิด/ปิด" },
         ]
       : []),
   ];

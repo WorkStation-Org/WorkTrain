@@ -20,7 +20,7 @@ import {
   submitVersion,
   summarizeVersion,
 } from "@/lib/version-service";
-import { DOCUMENT_KINDS, SET_KINDS, type ChangeKind, type DocumentKind, type SetKind } from "@/db/schema";
+import { DOCUMENT_KINDS, type ChangeKind, type DocumentKind } from "@/db/schema";
 
 /**
  * server action ของหน้าชุดการเรียนรู้ — แปลงฟอร์มเป็นคำสั่งเข้า service · ตัวตนมาจาก session เสมอ ไม่ใช่จากฟอร์ม
@@ -44,9 +44,7 @@ function back(setId: number, out: { ok: true } | { ok: false; error: string }, o
 
 export async function createSetAction(form: FormData) {
   const actor = await requireAuthor();
-  const kind = str(form, "kind") as SetKind;
-  if (!SET_KINDS.includes(kind)) redirect(`/sets?err=${encodeURIComponent("เลือกชนิดของชุด")}`);
-  const out = await createSet({ actor, title: str(form, "title"), kind });
+  const out = await createSet({ actor, title: str(form, "title"), kindId: int(form, "kindId") });
   if (!out.ok) redirect(`/sets?err=${encodeURIComponent(out.error)}`);
   redirect(`/sets/${out.setId}`);
 }

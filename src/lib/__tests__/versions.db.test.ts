@@ -77,7 +77,7 @@ const T_V2 = new Date("2026-11-05T09:00:00+07:00");
 
 /** ชุดที่ใช้อยู่ v1 · ME ผ่านแล้ว */
 async function activeSetWithPassedLearner() {
-  const c = await createSet({ actor: pd, title: "F331", kind: "general" });
+  const c = await createSet({ actor: pd, title: "F331", kindId: schema.SEEDED_KIND_IDS.general });
   if (!c.ok) throw new Error(c.error);
   await upload(pd, c.setId);
   await generateExams({ actor: pd, setId: c.setId, model });
@@ -127,7 +127,7 @@ describe("เริ่มและส่งเวอร์ชันใหม่"
     expect((await V.startVersion({ actor: other, setId })).ok).toBe(false);
     expect((await V.startVersion({ actor: pd, setId, label: "V.2" })).ok).toBe(true);
     expect(await V.startVersion({ actor: pd, setId })).toEqual({ ok: false, error: "มีเวอร์ชันใหม่ที่ยังไม่อนุมัติอยู่แล้ว" });
-    const draft = await createSet({ actor: pd, title: "ร่าง", kind: "general" });
+    const draft = await createSet({ actor: pd, title: "ร่าง", kindId: schema.SEEDED_KIND_IDS.general });
     expect((await V.startVersion({ actor: pd, setId: (draft as { setId: number }).setId })).ok).toBe(false);
   });
 

@@ -3,7 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
 import { devStoreObjects } from "@/lib/object-store";
-import { defaultBlueprint } from "@/domain/blueprint";
+import { GENERAL_BLUEPRINT } from "@/domain/blueprint";
 
 /**
  * ผู้เรียน: ยินยอม → สแกน → อ่านครบทุกหน้า → สแกน → สอบทีละข้อ → ผล (spec §8–§10 · PGlite + migration จริง)
@@ -43,12 +43,12 @@ async function seed(examMinutes = 15) {
     .insert(schema.learningSets)
     .values({
       title: "F331 Signature",
-      kind: "product",
+      kindId: schema.SEEDED_KIND_IDS.product,
       status: "active",
       approvedAt: T0,
       authorPersonId: 10,
       authorName: "พีดี",
-      blueprint: defaultBlueprint("general"),
+      blueprint: GENERAL_BLUEPRINT,
       examMinutes,
     })
     .returning();
