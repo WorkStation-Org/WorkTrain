@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Button, Card } from "@/components/ui";
+import { Alert, Button, Card, Icon } from "@/components/ui";
 import { MAX_LEAVES_BEFORE_SUBMIT } from "@/db/schema";
 import { answerAction, leaveAction } from "../../../actions";
 
@@ -65,39 +65,58 @@ export function ExamQuestion(props: {
   const mm = String(Math.floor(left / 60)).padStart(2, "0");
   const ss = String(left % 60).padStart(2, "0");
   return (
-    <Card>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-[13px] text-ink-3">
-        <span>
-          {props.title} · ข้อ {props.index + 1}/{props.total}
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <p className="kicker mb-2">
+            Question {props.index + 1} / {props.total}
+          </p>
+          <p className="truncate text-[13px] text-muted">{props.title}</p>
+        </div>
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-ui text-sm font-semibold tabular-nums ${left < 60 ? "border-danger/40 bg-danger-soft text-danger" : "border-line bg-raised text-fg"}`}
+          aria-label={`เหลือเวลา ${mm}:${ss}`}
+        >
+          <Icon name="clock" size={15} />
+          {mm}:{ss}
         </span>
-        <span className={left < 60 ? "font-semibold text-danger" : "font-semibold text-ink"}>
-          ⏱ {mm}:{ss}
-        </span>
+      </div>
+      {/* แถบความคืบหน้า — ข้อที่ตอบแล้ว */}
+      <div className="h-1 overflow-hidden rounded-full bg-subtle" aria-hidden>
+        <div className="h-full rounded-full bg-fg transition-[width] duration-300" style={{ width: `${(props.index / props.total) * 100}%` }} />
       </div>
       {leaves > 0 && (
-        <p className="mb-3 rounded-lg bg-warning-soft px-3 py-2 text-[13px] text-warning">
+        <Alert kind="warn">
           ออกจากหน้าสอบแล้ว {leaves} ครั้ง — ครบ {MAX_LEAVES_BEFORE_SUBMIT} ครั้งระบบจะส่งข้อสอบให้ทันที
-        </p>
+        </Alert>
       )}
-      <p className="mb-4 text-[16px] font-medium text-ink">{props.question.text}</p>
-      <div className="space-y-2">
-        {props.question.choices.map((c, i) => (
-          <label
-            key={i}
-            className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-[14px] ${choice === i ? "border-ink bg-surface-2" : "border-line"}`}
-          >
-            <input type="radio" name="choice" checked={choice === i} onChange={() => setChoice(i)} />
-            {c.text}
-          </label>
-        ))}
-      </div>
-      {error && <p className="mt-3 text-[13px] text-danger">{error}</p>}
-      <div className="mt-5 flex items-center justify-between">
-        <span className="text-[12px] text-ink-3">ตอบแล้วย้อนกลับไม่ได้</span>
-        <Button type="button" variant="primary" disabled={choice === null || busy} onClick={submit}>
-          {props.index + 1 === props.total ? "ส่งคำตอบ" : "ข้อถัดไป"}
-        </Button>
-      </div>
-    </Card>
+      <Card>
+        <p className="mb-5 text-[17px] leading-relaxed font-medium text-fg">{props.question.text}</p>
+        <div role="radiogroup" aria-label="ตัวเลือก" className="space-y-2">
+          {props.question.choices.map((c, i) => (
+            <label
+              key={i}
+              className={`press flex cursor-pointer items-center gap-3 rounded-[11px] border px-4 py-3 text-sm transition-colors ${choice === i ? "border-fg bg-subtle text-fg" : "border-line text-fg hover:border-line-strong hover:bg-subtle"}`}
+            >
+              <span
+                className={`flex size-7 shrink-0 items-center justify-center rounded-full border font-ui text-xs font-semibold ${choice === i ? "border-fg bg-fg text-canvas" : "border-line-strong text-muted"}`}
+                aria-hidden
+              >
+                {"กขคง"[i] ?? i + 1}
+              </span>
+              <input type="radio" name="choice" className="sr-only" checked={choice === i} onChange={() => setChoice(i)} />
+              <span className="min-w-0 flex-1">{c.text}</span>
+            </label>
+          ))}
+        </div>
+        {error && <Alert className="mt-4">{error}</Alert>}
+        <div className="mt-6 flex items-center justify-between gap-3">
+          <span className="text-xs text-muted">ตอบแล้วย้อนกลับไม่ได้</span>
+          <Button type="button" variant="primary" disabled={choice === null || busy} onClick={submit} icon={props.index + 1 === props.total ? "check" : "arrow"}>
+            {props.index + 1 === props.total ? "ส่งคำตอบ" : "ข้อถัดไป"}
+          </Button>
+        </div>
+      </Card>
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { Card } from "@/components/ui";
+import { AuthLayout } from "@/components/auth-layout";
+import { Alert, buttonClass, Icon } from "@/components/ui";
 import { workIdConfigured } from "@/lib/workid";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +14,7 @@ export const dynamic = "force-dynamic";
  *   - มี `?loggedout` → กดออกจากระบบแล้วจะถูกพากลับเข้าไปใหม่ = กดออกไม่ได้เลย
  *   - `?manual=1` เป็นทางหนีไฟ เปิดหน้านี้ตรง ๆ ได้เสมอ
  *
- * ★ หน้านี้ **ไม่มีเมนูข้าง** โดยเจตนา — เป็นหน้าก่อนล็อกอิน ยังไม่มีตัวตนให้แสดง
+ * ★ หน้านี้ **ไม่มีเมนูข้าง** โดยเจตนา — เป็นหน้าก่อนล็อกอิน ยังไม่มีตัวตนให้แสดง · หน้าตาแบบหน้าเข้าสู่ระบบของ WorkPass
  */
 const MESSAGES: Record<string, string> = {
   no_access: "บัญชีนี้ยังไม่ได้รับสิทธิ์เข้า WorkTrain — ติดต่อ TG ให้เพิ่มสิทธิ์ที่ WorkID",
@@ -48,35 +49,23 @@ export default async function LoginPage({
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6 py-16">
-      <Card>
-        <h1 className="text-2xl font-bold tracking-tight text-ink">WorkTrain</h1>
-        <p className="mt-1 text-[13px] text-ink-3">ล็อกอินด้วยบัญชี Work Station · เรียนและสอบได้ทั้งบนเว็บนี้และจาก LINE</p>
+    <AuthLayout
+      title={loggedOut ? "ออกจากระบบแล้ว" : "เข้าสู่ WorkTrain"}
+      subtitle="ล็อกอินด้วยบัญชี Work Station · เรียนและสอบได้ทั้งบนเว็บนี้และจาก LINE"
+      icon={loggedOut ? "logOut" : "book"}
+    >
+      {error && <Alert title="เข้าสู่ระบบไม่สำเร็จ">{MESSAGES[error] ?? `ล็อกอินไม่สำเร็จ (${error})`}</Alert>}
 
-        {loggedOut && (
-          <p className="mt-5 rounded-lg bg-surface-3 p-3 text-[13px] text-ink-2">ออกจากระบบแล้ว</p>
-        )}
+      <a href="/api/auth/workid/login" className={buttonClass("primary", "lg", "w-full")}>
+        <Icon name="arrow" size={18} />
+        เข้าสู่ระบบด้วย WorkID
+      </a>
 
-        {error && (
-          <p className="mt-5 rounded-lg bg-danger-soft p-3 text-[13px] text-danger">
-            {MESSAGES[error] ?? `ล็อกอินไม่สำเร็จ (${error})`}
-          </p>
-        )}
-
-        <a
-          href="/api/auth/workid/login"
-          className="mt-5 inline-flex h-11 w-full items-center justify-center rounded-lg bg-primary px-5 text-[14px] font-semibold text-white transition hover:bg-primary-hover"
-        >
-          ล็อกอินด้วยบัญชี Work Station
-        </a>
-
-        {!workIdConfigured() && (
-          <p className="mt-4 text-[11px] text-ink-3">
-            เซิร์ฟเวอร์นี้ยังไม่ได้ตั้ง <code className="font-mono">WORKID_BASE_URL</code> /{" "}
-            <code className="font-mono">WORKID_API_KEY</code> — ปุ่มด้านบนจะพากลับมาที่หน้านี้
-          </p>
-        )}
-      </Card>
-    </main>
+      {!workIdConfigured() && (
+        <Alert kind="info">
+          เซิร์ฟเวอร์นี้ยังไม่ได้ตั้ง <code className="font-mono">WORKID_BASE_URL</code> / <code className="font-mono">WORKID_API_KEY</code> — ปุ่มด้านบนจะพากลับมาที่หน้านี้
+        </Alert>
+      )}
+    </AuthLayout>
   );
 }

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Badge, Button, Card, PageHeader, SectionTitle } from "@/components/ui";
+import { Alert, Badge, Button, Card, PageHeader, SectionTitle } from "@/components/ui";
 import { confirmedScanFor, enrollmentState, scanMode } from "@/lib/identity-service";
 import { learnView } from "@/lib/learn-service";
 import { firstParam, learnerActor } from "@/lib/page";
@@ -33,24 +33,25 @@ export default async function LearnSetPage({
   const confirmedExam = await confirmedScanFor(actor.personId, "exam");
 
   return (
-    <main className="mx-auto max-w-4xl space-y-5 px-4 py-8">
+    <main className="mx-auto w-full max-w-4xl space-y-5">
       <PageHeader
+        kicker="Learning set"
         title={view.set.title}
         subtitle={`${view.versionLabel ? `${view.versionLabel} · ` : ""}กำหนดส่ง ${formatBangkok(view.assignment.dueAt)} · ผ่าน ${view.set.passPercent}% · สอบ ${view.set.examMinutes} นาที`}
-        actions={<Link href="/learn" className="text-[13px] text-ink-3 underline">ชุดทั้งหมด</Link>}
+        actions={<Button href="/learn" variant="ghost" icon="chevronLeft">ชุดทั้งหมด</Button>}
       />
-      {err && <p className="rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger">{err}</p>}
+      {err && <Alert>{err}</Alert>}
 
       {!enrolled && view.state !== "passed" && (
-        <p className="rounded-lg bg-warning-soft px-3 py-2 text-[13px] text-warning">
+        <Alert kind="warn" icon="face">
           ต้องลงทะเบียนใบหน้าก่อนเริ่มเรียน —{" "}
           <Link href="/enroll" className="font-semibold underline">
             ลงทะเบียนใบหน้า
           </Link>
-        </p>
+        </Alert>
       )}
 
-      {view.state === "passed" && <p className="rounded-lg bg-success-soft px-3 py-2 text-[14px] text-success">สอบผ่านชุดนี้แล้ว 🎉</p>}
+      {view.state === "passed" && <Alert kind="success" title="สอบผ่านชุดนี้แล้ว">ผลนี้นับในสถิติประจำเดือนและส่งให้ WorkHR แล้ว</Alert>}
       {view.update && (view.state === "update_ack" || view.state === "update_exam") && (
         <Card>
           <SectionTitle className="mb-2">มีเวอร์ชันใหม่{view.update.label ? ` · ${view.update.label}` : ""}</SectionTitle>
@@ -59,7 +60,7 @@ export default async function LearnSetPage({
               ? "เปลี่ยนเล็ก — อ่านสิ่งที่เปลี่ยนแล้วกดรับทราบ ไม่ต้องสอบ"
               : "เปลี่ยนใหญ่ — สอบเฉพาะส่วนที่เปลี่ยน 5 ข้อให้ผ่าน (ผลผ่านเดิมยังอยู่)"}
           </p>
-          <div className="mb-4 whitespace-pre-line rounded-lg bg-surface-2 px-3 py-2 text-[13px] text-ink-2">{view.update.summary}</div>
+          <div className="mb-4 whitespace-pre-line rounded-lg border border-line bg-subtle px-3.5 py-3 text-[13px] text-ink-2">{view.update.summary}</div>
           {view.update.kind === "small" ? (
             <form action={acknowledgeVersionAction}>
               <input type="hidden" name="assignmentId" value={view.assignment.id} />
@@ -74,7 +75,7 @@ export default async function LearnSetPage({
         </Card>
       )}
       {view.state === "relearn" && (
-        <p className="rounded-lg bg-warning-soft px-3 py-2 text-[13px] text-warning">สอบไม่ผ่าน 2 ครั้งติด — อ่านเอกสารให้ครบทุกหน้าอีกรอบก่อนสอบใหม่</p>
+        <Alert kind="warn" title="สอบไม่ผ่าน 2 ครั้งติด">อ่านเอกสารให้ครบทุกหน้าอีกรอบก่อนสอบใหม่</Alert>
       )}
       {view.state === "in_exam" && view.openAttemptId && (
         <Card>
@@ -134,9 +135,9 @@ export default async function LearnSetPage({
       {view.attempts.length > 0 && (
         <Card>
           <SectionTitle className="mb-3">ผลสอบที่ผ่านมา</SectionTitle>
-          <ul className="space-y-1 text-[13px]">
+          <ul className="divide-y divide-line text-[13px]">
             {view.attempts.map((t, i) => (
-              <li key={t.id} className="flex items-center gap-2">
+              <li key={t.id} className="flex flex-wrap items-center gap-2 py-2.5">
                 ครั้งที่ {i + 1}
                 {t.kind === "delta" ? " (ส่วนที่เปลี่ยน)" : ""} · {t.scorePercent}% <Badge tone={t.passed ? "success" : "danger"} label={t.passed ? "ผ่าน" : "ไม่ผ่าน"} />
                 <span className="text-ink-3">{REASON[t.endReason ?? ""] ?? ""}</span>

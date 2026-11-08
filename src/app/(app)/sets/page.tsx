@@ -16,8 +16,8 @@ export default async function SetsPage({ searchParams }: { searchParams: Promise
   const canCreate = actor.role === "admin" || actor.role === "author";
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-8">
-      <PageHeader title="ชุดการเรียนรู้" subtitle="สร้าง · ออกข้อสอบ · อนุมัติ" actions={<Link href="/" className="text-[13px] text-ink-3 underline">หน้าแรก</Link>} />
+    <main className="mx-auto w-full max-w-4xl">
+      <PageHeader kicker="Library" title="ชุดการเรียนรู้" subtitle="สร้าง · ออกข้อสอบ · อนุมัติ" />
       <Flash msg={firstParam(sp.msg)} err={firstParam(sp.err)} />
 
       {canCreate && (

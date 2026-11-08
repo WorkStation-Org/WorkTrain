@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Button, Card, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle, SELECT_CLASS } from "@/components/ui";
 import { audienceOptions } from "@/domain/audience";
@@ -73,16 +72,17 @@ export default async function SetPage({
   const status = set.status === "active" || set.status === "closed" ? await assignmentStatus(set.id) : [];
 
   return (
-    <main className="mx-auto max-w-4xl space-y-5 px-4 py-8">
+    <main className="mx-auto w-full max-w-4xl space-y-5">
       <PageHeader
+        kicker="Learning set"
         title={set.title}
         subtitle={`${set.kind === "product" ? "สินค้าใหม่ (PD)" : "ทั่วไป"} · ผู้สร้าง ${set.authorName} · ผู้อนุมัติ ${set.approverName ?? "ยังไม่ได้เลือก"}`}
         actions={
           <>
             <Badge tone={STATUS[set.status].tone} label={STATUS[set.status].label} />
-            <Link href="/sets" className="text-[13px] text-ink-3 underline">
+            <Button href="/sets" variant="ghost" icon="chevronLeft">
               ชุดทั้งหมด
-            </Link>
+            </Button>
           </>
         }
       />

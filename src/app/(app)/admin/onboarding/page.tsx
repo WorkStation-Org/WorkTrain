@@ -31,8 +31,8 @@ export default async function OnboardingPage({ searchParams }: { searchParams: P
   }
 
   return (
-    <main className="mx-auto max-w-4xl space-y-5 px-4 py-8">
-      <PageHeader title="เส้นทาง Onboarding" subtitle="ผูกชุดการเรียนรู้เข้ากับตำแหน่ง — คนในตำแหน่งได้รับมอบเอง และ WorkHR ดึงผลไปติ๊ก checklist" actions={<Link href="/" className="text-[13px] text-ink-3 underline">หน้าแรก</Link>} />
+    <main className="mx-auto w-full max-w-4xl space-y-5">
+      <PageHeader kicker="Onboarding" title="เส้นทาง Onboarding" subtitle="ผูกชุดการเรียนรู้เข้ากับตำแหน่ง — คนในตำแหน่งได้รับมอบเอง และ WorkHR ดึงผลไปติ๊ก checklist" actions={<Link href="/" className="text-[13px] text-ink-3 underline">หน้าแรก</Link>} />
       <Flash msg={firstParam(sp.msg)} err={firstParam(sp.err)} />
 
       <Card>

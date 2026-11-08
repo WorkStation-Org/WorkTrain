@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { Button, Card, PageHeader } from "@/components/ui";
 import { withdrawConsentAction } from "../learn/actions";
 import { enrollmentState, scanMode } from "@/lib/identity-service";
@@ -15,11 +14,11 @@ export default async function EnrollPage() {
   const state = await enrollmentState(actor.personId);
   const mode = scanMode();
   return (
-    <main className="mx-auto max-w-2xl px-4 py-8">
+    <main className="mx-auto w-full max-w-2xl">
       <PageHeader
+        kicker="Face ID"
         title="ลงทะเบียนใบหน้า"
         subtitle="ใช้เทียบตอนเริ่มเรียนและเริ่มสอบ"
-        actions={<Link href="/learn" className="text-[13px] text-ink-3 underline">ชุดที่ต้องเรียน</Link>}
       />
       <Card>
         {state.state === "none" && (
