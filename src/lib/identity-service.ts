@@ -48,11 +48,48 @@ export async function hasConsent(personId: number): Promise<boolean> {
 /** ยินยอม — ฉบับเก่าที่ยังมีผลถูกปิดก่อน (ยินยอมที่มีผลได้แถวเดียวต่อคน · ฐานบังคับ) */
 export async function giveConsent(personId: number, now: Date = new Date()): Promise<void> {
   if (await hasConsent(personId)) return;
-  await db()
-    .update(faceConsents)
-    .set({ withdrawnAt: now })
-    .where(and(eq(faceConsents.personId, personId), isNull(faceConsents.withdrawnAt)));
-  await db().insert(faceConsents).values({ personId, consentVersion: CONSENT_VERSION, consentedAt: now });
+  // ปิดฉบับเก่ากับลงฉบับใหม่ต้องไปด้วยกัน — ล้มระหว่างกลางไม่ทิ้งคนไว้แบบไม่มีความยินยอมเลย
+  await atomic([
+    db()
+      .update(faceConsents)
+      .set({ withdrawnAt: now })
+      .where(and(eq(faceConsents.personId, personId), isNull(faceConsents.withdrawnAt))),
+    db().insert(faceConsents).values({ personId, consentVersion: CONSENT_VERSION, consentedAt: now }),
+  ]);
+}
+
+/**
+ * ถอนความยินยอม (spec §8) — ลบใบหน้าที่ลงทะเบียน (ใช้อยู่ + ที่รอ TG) ออกจาก R2 · ปิดรอบเรียนที่เปิดอยู่
+ * แล้วใช้แอปไม่ได้จนกว่าจะยินยอมใหม่ (ยินยอมใหม่ = ต้องลงทะเบียนใบหน้าใหม่)
+ *
+ * ★ ลบไฟล์ก่อน แล้วค่อยลงฐานพร้อมกันใน `atomic()` — ล้มกลางทาง = ยังถือว่ายินยอมอยู่ กดถอนซ้ำได้
+ *   (ไม่มีทางที่ฐานบอกว่าลบแล้วแต่ภาพยังอยู่)
+ * ★ ภาพจากการสแกนยังอยู่จนครบ 90 วันตามที่แจ้งไว้ในหน้ายินยอม (หลักฐานการเรียน/สอบที่ผ่านมา)
+ */
+export async function withdrawConsent(personId: number, now: Date = new Date()): Promise<Outcome<{ imagesDeleted: number }>> {
+  if (!(await hasConsent(personId))) return { ok: false, error: "ยังไม่ได้ให้ความยินยอม" };
+  const faces = await db()
+    .select()
+    .from(faceEnrollments)
+    .where(and(eq(faceEnrollments.personId, personId), inArray(faceEnrollments.status, ["active", "pending"])));
+  const withImage = faces.filter((f) => f.objectKey);
+  if (withImage.length) {
+    const store = objectStore();
+    // ลบไม่ได้ = ไม่ถอน (ไม่บอกผู้ใช้ว่าลบแล้วทั้งที่ภาพยังอยู่)
+    if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้ — ลบภาพไม่ได้ แจ้ง TG" };
+    for (const f of withImage) await store.delete(f.objectKey!);
+  }
+  await atomic([
+    db()
+      .update(faceConsents)
+      .set({ withdrawnAt: now })
+      .where(and(eq(faceConsents.personId, personId), isNull(faceConsents.withdrawnAt))),
+    ...(faces.length
+      ? [db().update(faceEnrollments).set({ status: "deleted", objectKey: null }).where(inArray(faceEnrollments.id, faces.map((f) => f.id)))]
+      : []),
+    db().update(studySessions).set({ endedAt: now, endReason: "logout" }).where(and(eq(studySessions.personId, personId), isNull(studySessions.endedAt))),
+  ]);
+  return { ok: true, imagesDeleted: withImage.length };
 }
 
 // ── ลงทะเบียนใบหน้า ─────────────────────────────────────────────────────────
@@ -169,8 +206,16 @@ export async function finishScan(input: { personId: number; ticket: string; api:
   if (purpose === "enroll") {
     const enrollKey = imageKey(input.personId, "enroll");
     await store.put(enrollKey, live.referenceImage!, "image/jpeg");
-    const hadActive = (await activeEnrollment(input.personId)) !== null;
-    const status = hadActive ? "pending" : "active";
+    // เคยมีใบหน้ามาก่อน (ใช้อยู่ · ถูกแทน · ถูกลบตอนถอนความยินยอม) = ลงทะเบียนใหม่ ต้องให้ TG อนุมัติ
+    // — ไม่อย่างนั้น "ถอนแล้วยินยอมใหม่" จะเป็นทางลงทะเบียนหน้าคนอื่นแทนโดยไม่มีใครดู
+    const hadBefore = (
+      await db()
+        .select({ id: faceEnrollments.id })
+        .from(faceEnrollments)
+        .where(and(eq(faceEnrollments.personId, input.personId), inArray(faceEnrollments.status, ["active", "superseded", "deleted"])))
+        .limit(1)
+    ).length > 0;
+    const status = hadBefore ? "pending" : "active";
     await db().insert(faceEnrollments).values({ personId: input.personId, objectKey: enrollKey, status, createdAt: now });
     return { ok: true, ...(await record("pass", null)), passed: true, enrollment: status };
   }

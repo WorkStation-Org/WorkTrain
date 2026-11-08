@@ -2,9 +2,10 @@
 
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { beginScan, devScan, finishScan, giveConsent, hasConsent, type ScanPurpose } from "@/lib/identity-service";
+import { beginScan, devScan, finishScan, giveConsent, hasConsent, withdrawConsent, type ScanPurpose } from "@/lib/identity-service";
 import { acknowledgeVersion, answer, documentLink, endStudySession, recordLeave, recordReading, startAttempt, startStudySession } from "@/lib/learn-service";
 import { awsFaceApi } from "@/lib/rekognition";
+import { alertTgQuietly } from "@/lib/tg-alerts";
 
 /**
  * server action ของผู้เรียน — ตัวตนมาจาก session เสมอ · service ตรวจเองว่าการมอบ/ครั้งที่สอบเป็นของคนนี้
@@ -33,6 +34,15 @@ export async function consentAction() {
   redirect("/learn");
 }
 
+/** ถอนความยินยอม — ฟอร์มต้องติ๊กยืนยัน · สำเร็จแล้วกลับไปหน้ายินยอม (ใช้แอปไม่ได้จนกว่าจะยินยอมใหม่) */
+export async function withdrawConsentAction(form: FormData) {
+  const actor = await requireUser();
+  if (form.get("confirm") !== "yes") redirect("/enroll");
+  const out = await withdrawConsent(actor.personId);
+  if (!out.ok) throw new Error(out.error);
+  redirect("/consent?withdrawn=1");
+}
+
 export async function beginScanAction(purpose: string) {
   const actor = await learner();
   return beginScan({ personId: actor.personId, purpose: purposeOf(purpose), api: awsFaceApi() });
@@ -48,7 +58,10 @@ export async function livenessCredentialsAction() {
 
 export async function finishScanAction(ticket: string) {
   const actor = await learner();
-  return finishScan({ personId: actor.personId, ticket, api: awsFaceApi() });
+  const out = await finishScan({ personId: actor.personId, ticket, api: awsFaceApi() });
+  // ไม่ผ่านครบ 3 ครั้ง / ขอลงทะเบียนใหม่ = มีงานเข้าคิว TG → แจ้งทาง LINE (spec §11)
+  if (out.ok && (!out.passed || out.enrollment === "pending")) await alertTgQuietly();
+  return out;
 }
 
 export async function devScanAction(purpose: string) {

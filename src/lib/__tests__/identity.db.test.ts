@@ -211,6 +211,32 @@ describe("TG ตรวจเมื่อไม่ผ่าน 3 ครั้ง�
   });
 });
 
+describe("ถอนความยินยอม (spec §8)", () => {
+  it("ถอน → ลบภาพใบหน้าที่ลงทะเบียน (ใช้อยู่ + รอ TG) · ใช้แอปไม่ได้ · ยินยอมใหม่แล้วลงทะเบียนต้องรอ TG", async () => {
+    await I.giveConsent(ME, T0);
+    await scan("enroll", fakeApi());
+    await scan("enroll", fakeApi());
+    expect([...devStoreObjects().keys()].filter((k) => k.startsWith("faces/enroll/"))).toHaveLength(2);
+
+    expect(await I.withdrawConsent(ME, at(60))).toEqual({ ok: true, imagesDeleted: 2 });
+    expect(await I.hasConsent(ME)).toBe(false);
+    expect([...devStoreObjects().keys()].filter((k) => k.startsWith("faces/enroll/"))).toEqual([]);
+    const rows = await testDb().select().from(schema.faceEnrollments);
+    expect(rows.map((r) => [r.status, r.objectKey])).toEqual([
+      ["deleted", null],
+      ["deleted", null],
+    ]);
+    expect(await I.enrollmentState(ME)).toEqual({ state: "none" });
+    expect((await I.withdrawConsent(ME)).ok).toBe(false);
+
+    // ยินยอมใหม่ → ลงทะเบียนได้ แต่ไม่ใช้ได้ทันที (กัน "ถอนแล้วยินยอมใหม่" เป็นทางลัดข้าม TG)
+    await I.giveConsent(ME, at(120));
+    expect(await I.hasConsent(ME)).toBe(true);
+    expect(await scan("enroll", fakeApi(), at(130))).toMatchObject({ ok: true, enrollment: "pending" });
+    expect(await I.enrollmentState(ME)).toEqual({ state: "pending_only" });
+  });
+});
+
 describe("ทางลัด dev และการลบภาพ", () => {
   it("devScan: ลงทะเบียนครั้งแรก แล้วสแกนผ่าน · ยังไม่ลงทะเบียนสแกนไม่ได้", async () => {
     expect((await I.devScan({ personId: ME, purpose: "study" })).ok).toBe(false);

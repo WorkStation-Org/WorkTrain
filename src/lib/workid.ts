@@ -661,7 +661,11 @@ export type RolePeopleLookup = { ok: true; personIds: number[] } | { ok: false; 
  * เครื่อง dev ที่ใช้ผังจำลอง = ไม่มีใครถือ role (ไม่มี WorkID ให้ถาม)
  */
 export async function fetchRolePeople(role: Role): Promise<RolePeopleLookup> {
-  if (devOrg()) return { ok: true, personIds: [] };
+  // เครื่อง dev: ผังปลอมมาจาก env — role ปลอมก็มาจาก env (`WORKTRAIN_DEV_ADMINS="1,2"`) · ไม่ตั้ง = ไม่มี TG
+  if (devOrg()) {
+    const ids = role === "admin" ? (process.env.WORKTRAIN_DEV_ADMINS ?? "").split(",").flatMap((s) => positiveIntOrNull(Number(s.trim())) ?? []) : [];
+    return { ok: true, personIds: ids };
+  }
   if (!workIdConfigured()) return { ok: false, why: "workid_not_configured" };
   let res: Response;
   try {
