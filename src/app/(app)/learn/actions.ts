@@ -90,7 +90,7 @@ export async function readingBeatAction(input: { assignmentId: number; documentI
   return recordReading({ personId: actor.personId, ...input });
 }
 
-export async function answerAction(input: { attemptId: number; questionId: number; choiceId: number }) {
+export async function answerAction(input: { attemptId: number; questionId: number; choiceIndex: number }) {
   const actor = await learner();
   return answer({ personId: actor.personId, ...input });
 }

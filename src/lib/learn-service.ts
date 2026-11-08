@@ -1,7 +1,8 @@
 import { randomInt } from "node:crypto";
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
+import { isUniqueViolation } from "@/db/errors";
 import {
   assignments,
   attempts,
@@ -10,6 +11,7 @@ import {
   documents,
   examForms,
   learningSets,
+  MAX_LEAVES_BEFORE_SUBMIT,
   questions,
   readingProgress,
   setVersions,
@@ -52,6 +54,7 @@ type AssignmentRow = typeof assignments.$inferSelect;
 type SetRow = typeof learningSets.$inferSelect;
 
 async function myAssignment(personId: number, assignmentId: number): Promise<{ a: AssignmentRow; set: SetRow } | null> {
+  if (!Number.isSafeInteger(assignmentId) || assignmentId <= 0) return null;
   const [row] = await db()
     .select({ a: assignments, set: learningSets })
     .from(assignments)
@@ -92,10 +95,20 @@ export interface PendingUpdate {
  */
 export async function pendingUpdate(a: Pick<AssignmentRow, "id" | "setId" | "passedAt">): Promise<PendingUpdate | null> {
   if (!a.passedAt) return null;
+  // เทียบกับเวอร์ชันที่สอบผ่านจริง ไม่ใช่เวลาที่ผ่าน — เริ่มสอบ v1 แล้ว v2 อนุมัติระหว่างสอบ ผ่านทีหลัง
+  // ยังต้องตามเวอร์ชัน 2 · ไม่มีครั้งที่สอบผ่าน (ข้อมูลเก่า/นำเข้า) ค่อยใช้เวลาแทน
+  const passedNo = await passedVersionNo(a.id);
   const later = await db()
     .select()
     .from(setVersions)
-    .where(and(eq(setVersions.setId, a.setId), isNotNull(setVersions.approvedAt), gt(setVersions.approvedAt, a.passedAt), gt(setVersions.versionNo, 1)))
+    .where(
+      and(
+        eq(setVersions.setId, a.setId),
+        isNotNull(setVersions.approvedAt),
+        passedNo !== null ? gt(setVersions.versionNo, passedNo) : gt(setVersions.approvedAt, a.passedAt),
+        gt(setVersions.versionNo, 1),
+      ),
+    )
     .orderBy(asc(setVersions.versionNo));
   if (!later.length) return null;
   const acked = await db().select({ versionId: versionAcknowledgements.versionId }).from(versionAcknowledgements).where(eq(versionAcknowledgements.assignmentId, a.id));
@@ -110,6 +123,18 @@ export async function pendingUpdate(a: Pick<AssignmentRow, "id" | "setId" | "pas
     if (v.changeKind === "large" && !passedDelta.has(v.id)) return { version: v, kind: "large" };
   }
   return null;
+}
+
+/** เลขเวอร์ชันของครั้งที่สอบ (ทั้งเล่ม) ที่ผ่านครั้งแรก · null = ไม่มี */
+async function passedVersionNo(assignmentId: number): Promise<number | null> {
+  const [row] = await db()
+    .select({ no: setVersions.versionNo })
+    .from(attempts)
+    .innerJoin(setVersions, eq(setVersions.id, attempts.versionId))
+    .where(and(eq(attempts.assignmentId, assignmentId), eq(attempts.kind, "full"), eq(attempts.passed, true)))
+    .orderBy(asc(attempts.startedAt))
+    .limit(1);
+  return row?.no ?? null;
 }
 
 /** รับทราบเปลี่ยนเล็ก — เฉพาะเวอร์ชันที่ค้างอยู่ตอนนี้ (กดข้ามเวอร์ชันไม่ได้) */
@@ -153,11 +178,17 @@ export async function startStudySession(input: { personId: number; scanId: numbe
     .update(studySessions)
     .set({ endedAt: now, endReason: "expired" })
     .where(and(eq(studySessions.personId, input.personId), isNull(studySessions.endedAt)));
-  const [row] = await db()
-    .insert(studySessions)
-    .values({ personId: input.personId, scanId: input.scanId, startedAt: now, lastActiveAt: now })
-    .returning({ id: studySessions.id });
-  return { ok: true, sessionId: row.id };
+  try {
+    const [row] = await db()
+      .insert(studySessions)
+      .values({ personId: input.personId, scanId: input.scanId, startedAt: now, lastActiveAt: now })
+      .returning({ id: studySessions.id });
+    return { ok: true, sessionId: row.id };
+  } catch (err) {
+    // สองคำขอพร้อมกัน — ฐานกันไว้แล้ว ตอบคำขอที่แพ้เป็นข้อความ ไม่ใช่ 500
+    if (isUniqueViolation(err)) return { ok: false, error: "ผลสแกนนี้ถูกใช้ไปแล้ว หรือมีรอบเรียนที่เพิ่งเริ่ม ลองรีเฟรช" };
+    throw err;
+  }
 }
 
 export async function endStudySession(personId: number, now: Date = new Date()): Promise<void> {
@@ -405,7 +436,8 @@ export async function startAttempt(input: {
   const used = await db()
     .select({ formId: attempts.formId })
     .from(attempts)
-    .where(and(eq(attempts.assignmentId, mine.a.id), eq(attempts.kind, kind)))
+    // ชุดของเวอร์ชันนี้เท่านั้น — ชุดของเวอร์ชันเก่าไม่นับในรอบ "ไม่ซ้ำจนครบ 5"
+    .where(and(eq(attempts.assignmentId, mine.a.id), eq(attempts.kind, kind), eq(attempts.versionId, version.id)))
     .orderBy(asc(attempts.startedAt));
   const rng = input.rng ?? secureRng;
   const formId = pickForm(forms.map((f) => f.id), used.map((u) => u.formId), rng);
@@ -419,26 +451,35 @@ export async function startAttempt(input: {
     qs.map((q) => ({ id: q.id, choiceIds: cs.filter((c) => c.questionId === q.id).map((c) => c.id) })),
     rng,
   );
-  const [row] = await db()
-    .insert(attempts)
-    .values({
-      assignmentId: mine.a.id,
-      versionId: version.id,
-      formId,
-      kind,
-      scanId: input.scanId,
-      readRound: mine.a.readRound,
-      layout,
-      startedAt: now,
-      deadlineAt: new Date(now.getTime() + mine.set.examMinutes * 60 * 1000),
-    })
-    .returning({ id: attempts.id });
+  let row: { id: number };
+  try {
+    [row] = await db()
+      .insert(attempts)
+      .values({
+        assignmentId: mine.a.id,
+        versionId: version.id,
+        formId,
+        kind,
+        scanId: input.scanId,
+        readRound: mine.a.readRound,
+        layout,
+        startedAt: now,
+        deadlineAt: new Date(now.getTime() + mine.set.examMinutes * 60 * 1000),
+      })
+      .returning({ id: attempts.id });
+  } catch (err) {
+    // สองคำขอพร้อมกัน (กดซ้ำ · สแกนเดียวใช้สองชุด) — ฐานกันไว้แล้ว ตอบคำขอที่แพ้เป็นข้อความ ไม่ใช่ 500
+    if (isUniqueViolation(err)) return { ok: false, error: "ผลสแกนนี้ถูกใช้ไปแล้ว หรือมีการสอบที่เพิ่งเริ่ม ลองรีเฟรช" };
+    throw err;
+  }
   // เริ่มสอบ = จบรอบเรียน (เอกสารถูกล็อกระหว่างสอบ)
   await endStudySession(input.personId, now);
   return { ok: true, attemptId: row.id };
 }
 
 async function myAttempt(personId: number, attemptId: number) {
+  // id จาก URL ที่ไม่ใช่ตัวเลข = ไม่พบ (ไม่ส่ง NaN ไปถึงฐาน)
+  if (!Number.isSafeInteger(attemptId) || attemptId <= 0) return null;
   const [row] = await db()
     .select({ t: attempts, personId: assignments.personId })
     .from(attempts)
@@ -498,7 +539,11 @@ export interface AttemptView {
   /** ระหว่างสอบ */
   index?: number;
   total: number;
-  question?: { id: number; text: string; choices: { id: number; text: string }[] };
+  /**
+   * ตัวเลือกส่งเฉพาะข้อความตามลำดับที่สลับแล้ว — ตอบด้วยตำแหน่ง (0–3) ไม่ใช่ id ของตัวเลือก
+   * (id เรียงตามลำดับที่ AI วาง ถ้าส่งออกไป เรียง id ก็ได้ลำดับเดิมคืน = การสลับไม่มีผล)
+   */
+  question?: { id: number; text: string; choices: { text: string }[] };
   secondsLeft?: number;
   leaveCount: number;
   /** หลังสอบ — แสดงข้อที่ผิด ไม่เฉลยคำตอบที่ถูก (ADR-0009) */
@@ -541,7 +586,12 @@ export async function attemptView(personId: number, attemptId: number, now: Date
     };
   }
 
-  const idx = currentIndex(layout, answers)!;
+  const idx = currentIndex(layout, answers);
+  if (idx === null) {
+    // ตอบครบแล้วแต่ยังไม่ปิด (ล้มระหว่างบันทึกคำตอบสุดท้ายกับการตรวจ) — ปิดให้ตอนนี้ แทนที่หน้าจะพัง
+    await finalize(t, "submitted", now);
+    return attemptView(personId, attemptId, now);
+  }
   const item = layout[idx];
   const [q] = await db().select({ id: questions.id, text: questions.text }).from(questions).where(eq(questions.id, item.questionId));
   const cs = await db().select({ id: choices.id, text: choices.text }).from(choices).where(inArray(choices.id, item.choiceIds));
@@ -549,13 +599,17 @@ export async function attemptView(personId: number, attemptId: number, now: Date
     ...base,
     ended: false,
     index: idx,
-    question: { id: q.id, text: q.text, choices: item.choiceIds.map((id) => cs.find((c) => c.id === id)!) },
+    question: { id: q.id, text: q.text, choices: item.choiceIds.map((id) => ({ text: cs.find((c) => c.id === id)!.text })) },
     secondsLeft: Math.max(0, Math.ceil((t.deadlineAt.getTime() - now.getTime()) / 1000)),
   };
 }
 
-/** ตอบข้อปัจจุบัน — ต้องเป็นข้อที่กำลังแสดง (ย้อนกลับ/ข้ามไม่ได้) · ตอบครบ = ส่งเอง */
-export async function answer(input: { personId: number; attemptId: number; questionId: number; choiceId: number; now?: Date }): Promise<Outcome> {
+/**
+ * ตอบข้อปัจจุบันด้วยตำแหน่งของตัวเลือกที่แสดง — ต้องเป็นข้อที่กำลังแสดง (ย้อนกลับ/ข้ามไม่ได้) · ตอบครบ = ส่งเอง
+ * ★ เขียนคำตอบด้วย SQL ข้อเดียว และเฉพาะข้อที่ยังไม่มีคำตอบ — สองคำขอพร้อมกันตอบข้อเดียวกันได้ครั้งเดียว
+ *   และคำขอเก่าที่มาช้าทับคำตอบที่ลงไปแล้วไม่ได้
+ */
+export async function answer(input: { personId: number; attemptId: number; questionId: number; choiceIndex: number; now?: Date }): Promise<Outcome> {
   const now = input.now ?? new Date();
   const t = await myAttempt(input.personId, input.attemptId);
   if (!t) return { ok: false, error: "ไม่พบการสอบนี้" };
@@ -565,24 +619,37 @@ export async function answer(input: { personId: number; attemptId: number; quest
     return { ok: false, error: "หมดเวลาสอบ" };
   }
   const layout = t.layout as LayoutItem[];
-  const answers = { ...(t.answers as Record<string, number>) };
-  const idx = currentIndex(layout, answers);
+  const idx = currentIndex(layout, t.answers as Record<string, number>);
   if (idx === null || layout[idx].questionId !== input.questionId) return { ok: false, error: "ตอบได้เฉพาะข้อที่กำลังแสดง" };
-  if (!layout[idx].choiceIds.includes(input.choiceId)) return { ok: false, error: "ตัวเลือกไม่ถูกต้อง" };
-  answers[String(input.questionId)] = input.choiceId;
-  await db().update(attempts).set({ answers }).where(and(eq(attempts.id, t.id), isNull(attempts.endedAt)));
-  if (currentIndex(layout, answers) === null) await finalize({ ...t, answers }, "submitted", now);
+  const choiceId = Number.isInteger(input.choiceIndex) ? layout[idx].choiceIds[input.choiceIndex] : undefined;
+  if (choiceId === undefined) return { ok: false, error: "ตัวเลือกไม่ถูกต้อง" };
+  const key = String(input.questionId);
+  const [saved] = await db()
+    .update(attempts)
+    .set({ answers: sql`${attempts.answers} || jsonb_build_object(${key}::text, ${choiceId}::int)` })
+    .where(and(eq(attempts.id, t.id), isNull(attempts.endedAt), sql`not jsonb_exists(${attempts.answers}, ${key}::text)`))
+    .returning();
+  if (!saved) return { ok: false, error: "ตอบข้อนี้ไปแล้ว" };
+  if (currentIndex(layout, saved.answers as Record<string, number>) === null) await finalize(saved, "submitted", now);
   return { ok: true };
 }
 
-/** ออกจากหน้าสอบ (สลับแท็บ/ย่อจอ) — ครั้งที่ 1–4 เตือน · ครั้งที่ 5 ส่งเอง · บันทึกทุกครั้งให้ TG เห็น */
+/**
+ * ออกจากหน้าสอบ (สลับแท็บ/ย่อจอ) — ครั้งที่ 1–4 เตือน · ครั้งที่ 5 ส่งเอง · บันทึกทุกครั้งให้ TG เห็น
+ * ★ บวกในฐาน (`leave_count + 1`) ไม่ใช่อ่านแล้วเขียนทับ — สองคำขอพร้อมกันนับครบทั้งสองครั้ง
+ */
 export async function recordLeave(input: { personId: number; attemptId: number; now?: Date }): Promise<Outcome<{ leaveCount: number; submitted: boolean }>> {
   const now = input.now ?? new Date();
   const t = await myAttempt(input.personId, input.attemptId);
   if (!t || t.endedAt) return { ok: false, error: "การสอบนี้จบแล้ว" };
-  const leaveCount = t.leaveCount + 1;
-  await db().update(attempts).set({ leaveCount }).where(and(eq(attempts.id, t.id), isNull(attempts.endedAt)));
-  const submitted = leaveForcesSubmit(leaveCount);
-  if (submitted) await finalize({ ...t, leaveCount }, "left_page", now);
-  return { ok: true, leaveCount, submitted };
+  const [saved] = await db()
+    .update(attempts)
+    .set({ leaveCount: sql`${attempts.leaveCount} + 1` })
+    .where(and(eq(attempts.id, t.id), isNull(attempts.endedAt), lt(attempts.leaveCount, MAX_LEAVES_BEFORE_SUBMIT)))
+    .returning();
+  if (!saved) return { ok: false, error: "การสอบนี้จบแล้ว" };
+  const submitted = leaveForcesSubmit(saved.leaveCount);
+  // ตรวจจากแถวที่เพิ่งเขียน — มีคำตอบล่าสุดครบ ไม่ใช่สำเนาก่อนหน้า
+  if (submitted) await finalize(saved, "left_page", now);
+  return { ok: true, leaveCount: saved.leaveCount, submitted };
 }

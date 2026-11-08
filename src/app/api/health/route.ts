@@ -36,7 +36,8 @@ export async function GET() {
         ok: false,
         status: "fail",
         db: "fail",
-        reason: errorSummary(err),
+        // endpoint นี้เปิดให้ทุกคน — บอกแค่ว่าอะไรล้ม รายละเอียด (host · ข้อความจากไดรเวอร์) อยู่ใน log ด้านบน
+        reason: "database_unreachable",
         latencyMs: Date.now() - startedAt,
       },
       { status: 503 },
