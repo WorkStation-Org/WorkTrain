@@ -39,7 +39,9 @@ export type NotificationKind =
   | "remind_day3"
   | "remind_day5"
   | "overdue_summary"
-  | "new_version";
+  | "new_version"
+  | "tg_scan_review"
+  | "tg_enroll_request";
 
 interface Target {
   dedupeKey: string;
@@ -92,6 +94,35 @@ async function claim(row: Target & { lineGroupId: string | null }): Promise<Fini
       .where(and(eq(notifications.id, rowId), eq(notifications.status, "pending")));
     return status;
   };
+}
+
+/**
+ * ข้อความรวม (`groupKey`) ส่งถึงแล้ว → ลงแถวของแต่ละเรื่องในข้อความนั้นเป็น `sent` ด้วย jobId เดียวกัน
+ * — เรื่องเดียวกันไม่ถูกส่งซ้ำแยกทีหลัง และยังตามได้ทีละเรื่องว่าแจ้งไปกับข้อความไหน (ไม่มี jobId = ไม่ลง)
+ */
+export async function markCoveredBy(groupKey: string, items: Omit<Target, "text">[]): Promise<void> {
+  const [g] = await db().select().from(notifications).where(and(eq(notifications.dedupeKey, groupKey), eq(notifications.status, "sent")));
+  if (!g || g.jobIds.length === 0 || items.length === 0) return;
+  await db()
+    .insert(notifications)
+    .values(
+      items.map((i) => ({
+        dedupeKey: i.dedupeKey,
+        kind: i.kind,
+        personId: i.personId,
+        setId: i.setId ?? null,
+        assignmentId: i.assignmentId ?? null,
+        lineGroupId: g.lineGroupId,
+        status: "sent" as const,
+        jobIds: g.jobIds,
+        detail: `ส่งรวมใน ${groupKey}`,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: notifications.dedupeKey,
+      set: { status: "sent", jobIds: g.jobIds, detail: `ส่งรวมใน ${groupKey}` },
+      setWhere: sql`${notifications.status} <> 'sent'`,
+    });
 }
 
 /** เหตุที่ส่งตัวต่อตัวไม่ได้ — บันทึกใน `notifications.detail` ให้ TG เห็นว่าใครตั้งค่าไม่ครบ */

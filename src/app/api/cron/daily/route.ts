@@ -2,6 +2,7 @@ import { errorSummary } from "@/lib/errmsg";
 import { reportHeartbeat } from "@/lib/gateway";
 import { retryApprovalNotices, runReminders, syncAssignments } from "@/lib/assignment-service";
 import { deleteExpiredScanImages, deleteRetiredEnrollmentImages } from "@/lib/identity-service";
+import { alertTgOfFaceQueue } from "@/lib/tg-alerts";
 import { retryNewVersionNotices } from "@/lib/version-service";
 
 export const runtime = "nodejs";
@@ -28,11 +29,16 @@ export async function GET(req: Request) {
     const sync = await syncAssignments({ now });
     const remind = await runReminders({ now });
     // ข้อความที่ล้มไปแล้วของเหตุการณ์ที่ไม่เกิดซ้ำเอง (อนุมัติ · เวอร์ชันใหม่)
-    const retries = { approvals: await retryApprovalNotices(), versions: await retryNewVersionNotices() };
+    const retries = {
+      approvals: await retryApprovalNotices(),
+      versions: await retryNewVersionNotices(),
+      // คิวใบหน้าที่ค้าง — แจ้ง TG ที่ยังไม่ได้รับ (ส่งล้มตอนสแกน · TG เพิ่งได้ role) · ที่แจ้งแล้วไม่ซ้ำ
+      tgFaces: await alertTgOfFaceQueue(),
+    };
     const imagesDeleted = (await deleteExpiredScanImages(now)) + (await deleteRetiredEnrollmentImages());
-    const failed =
-      sync.notified.failed + remind.day3.failed + remind.day5.failed + remind.overdue.failed + retries.approvals.failed + retries.versions.failed;
-    const sent = sync.notified.sent + remind.day3.sent + remind.day5.sent + remind.overdue.sent + retries.approvals.sent + retries.versions.sent;
+    const groups = [sync.notified, remind.day3, remind.day5, remind.overdue, retries.approvals, retries.versions, retries.tgFaces];
+    const failed = groups.reduce((n, g) => n + g.failed, 0);
+    const sent = groups.reduce((n, g) => n + g.sent, 0);
     const healthy = sync.ok && remind.ok && failed === 0;
     await reportHeartbeat(HB_JOB, healthy, {
       ...HB,

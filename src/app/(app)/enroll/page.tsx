@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Card, PageHeader } from "@/components/ui";
+import { Button, Card, PageHeader } from "@/components/ui";
+import { withdrawConsentAction } from "../learn/actions";
 import { enrollmentState, scanMode } from "@/lib/identity-service";
 import { learnerActor } from "@/lib/page";
 import { ScanFlow } from "../learn/scan-flow";
@@ -37,6 +38,23 @@ export default async function EnrollPage() {
         {(state.state === "pending_only" || (state.state === "active" && state.pending)) && (
           <p className="text-[13px] text-warning">มีคำขอลงทะเบียนใบหน้าใหม่ที่รอ TG อนุมัติ</p>
         )}
+      </Card>
+
+      {/* ถอนความยินยอม (spec §8) — ต้องติ๊กยืนยันก่อน กันกดพลาด */}
+      <Card className="mt-6">
+        <p className="mb-1 text-[14px] font-semibold text-ink">ถอนความยินยอม</p>
+        <p className="mb-3 text-[13px] text-ink-3">
+          ภาพใบหน้าที่ลงทะเบียนจะถูกลบทันที และจะใช้ WorkTrain ไม่ได้จนกว่าจะยินยอมใหม่ · ยินยอมใหม่แล้วต้องลงทะเบียนใบหน้าใหม่และรอ TG อนุมัติ
+        </p>
+        <form action={withdrawConsentAction} className="space-y-3">
+          <label className="flex items-center gap-2 text-[13px] text-ink-2">
+            <input type="checkbox" name="confirm" value="yes" required />
+            เข้าใจแล้ว ต้องการถอนความยินยอมและลบภาพใบหน้า
+          </label>
+          <Button type="submit" variant="danger">
+            ถอนความยินยอม
+          </Button>
+        </form>
       </Card>
     </main>
   );

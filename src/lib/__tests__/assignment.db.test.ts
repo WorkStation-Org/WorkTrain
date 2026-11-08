@@ -223,9 +223,33 @@ describe("เตือนแบบไล่ระดับ (spec §11)", () => {
     });
     const out = await runReminders({ now: MON });
     expect(pushes.map((p) => p.to)).toContain(TEAM_GROUP);
-    expect(pushes.find((p) => p.to === TEAM_GROUP)?.text).toContain("หนึ่ง ยังสอบไม่ผ่าน");
+    expect(pushes.find((p) => p.to === TEAM_GROUP)?.text).toContain("- หนึ่ง · ชุด");
     // คนที่ไม่มีกลุ่ม → ส่งตัวต่อตัว แต่ WorkID ตอบไม่ได้ = failed (ลองใหม่รอบถัดไป) ไม่ใช่ "ส่งแล้ว"
     expect(out.day5).toMatchObject({ sent: 1, failed: 1 });
+  });
+
+  it("วันที่ 5 คนในกลุ่ม LINE เดียวกันรวมเป็นข้อความเดียว · รันซ้ำวันถัดไปไม่เตือนซ้ำ", async () => {
+    // สองคนใช้กลุ่มประจำตัวเดียวกัน (หัวหน้าคนเดียว)
+    vi.stubEnv("WORKTRAIN_DEV_ORG", JSON.stringify(ORG.map((p) => (p.personId === 32 ? { ...p, lineGroupId: TEAM_GROUP } : p))));
+    clearOrgCache();
+    await assignedDaysAgo(5);
+    vi.stubEnv("TEST_LINE_GROUP_ID", "");
+    const out = await runReminders({ now: MON });
+    expect(out.day5).toMatchObject({ sent: 2 });
+    const toGroup = pushes.filter((p) => p.to === TEAM_GROUP);
+    expect(toGroup).toHaveLength(1);
+    expect(toGroup[0].text).toContain("ยังสอบไม่ผ่าน (2)");
+    expect(toGroup[0].text).toContain("หนึ่ง");
+    expect(toGroup[0].text).toContain("เซล สอง");
+    // แต่ละการมอบลงว่าเตือนแล้วด้วย jobId ของข้อความรวม
+    const rows = await testDb().select().from(schema.notifications).where(eq(schema.notifications.kind, "remind_day5"));
+    expect(rows.filter((r) => r.dedupeKey.startsWith("remind-day5:")).map((r) => [r.status, r.jobIds.length > 0])).toEqual([
+      ["sent", true],
+      ["sent", true],
+    ]);
+    pushes = [];
+    expect((await runReminders({ now: new Date(MON.getTime() + DAY) })).day5).toMatchObject({ sent: 0 });
+    expect(pushes.filter((p) => p.to === TEAM_GROUP)).toHaveLength(0);
   });
 
   it("เลยกำหนดส่ง → สรุปให้หัวหน้าเฉพาะวันจันทร์", async () => {

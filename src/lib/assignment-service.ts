@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, eq, gt, inArray, isNull, lt } from "drizzle-orm";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
@@ -16,7 +17,7 @@ import {
 } from "@/db/schema";
 import { resolveAudience, type AudienceRule } from "@/domain/audience";
 import type { Actor } from "@/lib/auth";
-import { MAX_SEND_ATTEMPTS, sendToGroup, sendToPerson, type SendResult } from "@/lib/deliver";
+import { markCoveredBy, MAX_SEND_ATTEMPTS, sendToGroup, sendToPerson, type SendResult } from "@/lib/deliver";
 import { canEditDraft, type Outcome } from "@/lib/set-service";
 import { ageInDays, bangkokDate, bangkokParts, formatBangkok } from "@/lib/time";
 import { fetchOrg, type OrgPerson } from "@/lib/workid";
@@ -175,6 +176,16 @@ export async function syncAssignments(input: { now?: Date; setId?: number } = {}
   return { ok: true, assigned: inserted.length, notified: tally(results) };
 }
 
+/** dedupe key ไหนในนี้ที่ส่งแล้วหรือข้ามแล้ว (ไม่ต้องส่งอีก) */
+async function sentOrSkipped(keys: string[]): Promise<Set<string>> {
+  if (!keys.length) return new Set();
+  const rows = await db()
+    .select({ key: notifications.dedupeKey })
+    .from(notifications)
+    .where(and(inArray(notifications.dedupeKey, keys), inArray(notifications.status, ["sent", "skipped"])));
+  return new Set(rows.map((r) => r.key));
+}
+
 /** การมอบที่ยังเปิด (ยังไม่ผ่าน · ยังไม่เลยกำหนด · คนยังอยู่ในผัง) ที่ข้อความวันที่ 0 ยังไม่ `sent`/`skipped` */
 async function unsentDayZero(setIds: number[], inOrg: Set<number>, skip: Set<number>, now: Date) {
   const open = (
@@ -261,20 +272,54 @@ export async function runReminders(input: { now?: Date } = {}): Promise<Reminder
     ),
   );
 
-  const day5Results = await Promise.all(
-    day5.map(async (r) => {
-      const p = inOrg.get(r.a.personId)!;
-      const msg = {
-        dedupeKey: `remind-day5:${r.a.id}`,
-        kind: "remind_day5" as const,
-        personId: r.a.personId,
-        setId: r.a.setId,
-        assignmentId: r.a.id,
-        text: `⚠️ ${p.nickname ?? p.name} ยังสอบไม่ผ่าน: ${r.title}\nกำหนดส่ง ${formatBangkok(r.a.dueAt)}\n${appUrl()}`,
-      };
-      return p.lineGroupId ? sendToGroup({ ...msg, lineGroupId: p.lineGroupId }) : sendToPerson(msg, org.people);
+  // วันที่ 5 — รวมตามกลุ่ม LINE ก่อนส่ง (spec §11): หัวหน้าคนเดียวอยู่กลุ่มเดียวกับลูกทีมหลายคน
+  // ไม่ควรได้ข้อความแยกทีละคน · ส่งแล้ว (หรือข้ามแล้ว) ต่อการมอบไม่ส่งซ้ำ
+  const day5Done = await sentOrSkipped(day5.map((r) => `remind-day5:${r.a.id}`));
+  const day5Pending = day5.filter((r) => !day5Done.has(`remind-day5:${r.a.id}`));
+  const byGroup = new Map<string, typeof day5Pending>();
+  const day5Solo: typeof day5Pending = [];
+  for (const r of day5Pending) {
+    const g = inOrg.get(r.a.personId)!.lineGroupId;
+    if (g) byGroup.set(g, [...(byGroup.get(g) ?? []), r]);
+    else day5Solo.push(r);
+  }
+  const line5 = (r: (typeof day5Pending)[number]) => {
+    const p = inOrg.get(r.a.personId)!;
+    return `- ${p.nickname ?? p.name} · ${r.title} · กำหนดส่ง ${formatBangkok(r.a.dueAt)}`;
+  };
+  const soloResults = await Promise.all(
+    day5Solo.map((r) =>
+      sendToPerson(
+        {
+          dedupeKey: `remind-day5:${r.a.id}`,
+          kind: "remind_day5",
+          personId: r.a.personId,
+          setId: r.a.setId,
+          assignmentId: r.a.id,
+          text: `⚠️ ยังสอบไม่ผ่าน\n${line5(r)}\n${appUrl()}`,
+        },
+        org.people,
+      ),
+    ),
+  );
+  const groupResults = await Promise.all(
+    [...byGroup.entries()].map(async ([lineGroupId, rows]) => {
+      const ids = rows.map((r) => r.a.id).sort((x, y) => x - y);
+      // คีย์ของข้อความรวม = ชุดการมอบในข้อความ — ส่งล้มแล้วรอบถัดไปชุดเดิมจองซ้ำได้ · มีคนเพิ่ม = ข้อความใหม่เฉพาะที่ยังค้าง
+      const groupKey = `remind-day5-group:${createHash("sha256").update(ids.join(",")).digest("hex").slice(0, 32)}`;
+      const out = await sendToGroup({
+        dedupeKey: groupKey,
+        kind: "remind_day5",
+        personId: rows.length === 1 ? rows[0].a.personId : null,
+        lineGroupId,
+        text: [`⚠️ ยังสอบไม่ผ่าน (${rows.length})`, ...rows.map(line5), appUrl()].join("\n"),
+      });
+      // ส่งถึงแล้ว = ทุกการมอบในข้อความนี้นับว่าเตือนวันที่ 5 แล้ว (ใช้ jobId ของข้อความรวม)
+      if (out === "sent") await markCoveredBy(groupKey, rows.map((r) => ({ dedupeKey: `remind-day5:${r.a.id}`, kind: "remind_day5", personId: r.a.personId, setId: r.a.setId, assignmentId: r.a.id })));
+      return rows.map(() => out);
     }),
   );
+  const day5Results = [...soloResults, ...groupResults.flat()];
 
   let overdueResults: SendResult[] = [];
   if (isMonday(now)) {
