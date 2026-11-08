@@ -12,11 +12,11 @@ export function AuthLayout({ title, subtitle, icon = "book", children }: { title
         <div>
           <p className="kicker text-[#b0b2b7]">The WorkTrain experience</p>
           <p className="mt-9 font-display text-[44px] leading-[1.12] xl:text-[54px]">
-            Learn the product.
+            Learn at your pace.
             <br />
-            Pass with confidence.
+            Grow with every lesson.
           </p>
-          <p className="mt-6 max-w-xs text-sm leading-loose text-[#aeb1b7]">เรียนรู้สินค้าใหม่ด้วยตัวเอง สอบให้ผ่าน แล้วพร้อมขายได้ทันที</p>
+          <p className="mt-6 max-w-xs text-sm leading-loose text-[#aeb1b7]">ทุกการเรียนรู้ของ Work Station ในที่เดียว — เรียนด้วยตัวเอง สอบให้ผ่าน แล้วพร้อมทำงานได้มั่นใจ</p>
         </div>
         <div className="my-8 flex flex-col items-center gap-6 self-center">
           <span className="flex size-[150px] items-center justify-center rounded-[40px] border border-[#ffffff22] bg-[#ffffff0d] text-[#f4f4f5] shadow-[0_12px_22px_rgb(0_0_0/0.35)]">
