@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 /**
  * ความยินยอมให้สแกนใบหน้า (spec §8 · ADR-0006) — ไม่ยินยอม = ใช้ WorkTrain ไม่ได้
  *
- * ★ ข้อความนี้เป็นร่าง — ต้องให้ HR / ฝ่ายกฎหมายรับรองก่อนเปิดใช้ (spec §14) · แก้ข้อความ = เปลี่ยน `CONSENT_VERSION`
+ * ★ ข้อความนี้ HR / ฝ่ายกฎหมายตรวจรับรองแล้ว (8 พ.ย. 2569) — แก้ข้อความ = ต้องให้ตรวจใหม่ และเปลี่ยน `CONSENT_VERSION` (ทุกคนยินยอมใหม่)
  */
 export default async function ConsentPage({ searchParams }: { searchParams: Promise<{ withdrawn?: string }> }) {
   const actor = await pageActor();
@@ -33,7 +33,6 @@ export default async function ConsentPage({ searchParams }: { searchParams: Prom
             <li>ผู้ที่เห็นภาพได้คือทีม TG เมื่อการสแกนไม่ผ่านและต้องตรวจด้วยตา</li>
             <li>ถอนความยินยอมได้ แต่จะใช้ WorkTrain ไม่ได้จนกว่าจะยินยอมใหม่</li>
           </ul>
-          <p className="text-[12px] text-warning">ร่าง — รอ HR / ฝ่ายกฎหมายรับรองข้อความ</p>
         </div>
         <form action={consentAction} className="mt-5">
           <Button type="submit" variant="primary">
