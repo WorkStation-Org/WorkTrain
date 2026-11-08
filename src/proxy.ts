@@ -91,7 +91,8 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
       epoch: verdict.epoch,
       checkedAt: Math.floor(Date.now() / 1000),
     }),
-    sessionCookieOptions(),
+    // อายุ cookie นับจากตอนล็อกอิน — ต่ออายุ role/epoch ได้ แต่ไม่ยืดเพดาน 12 ชม.
+    sessionCookieOptions(session.loginAt),
   );
   return res;
 }

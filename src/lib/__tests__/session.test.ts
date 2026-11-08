@@ -4,6 +4,7 @@ import {
   SESSION_TTL_SEC,
   type SessionData,
   needsRecheck,
+  sessionCookieOptions,
   signSession,
   verifySession,
 } from "@/lib/session";
@@ -39,13 +40,13 @@ describe("session cookie", () => {
     vi.stubEnv("SESSION_SECRET", SECRET);
     const { nickname: _, ...old } = actor;
     const token = await signSession(old);
-    await expect(verifySession(token)).resolves.toEqual({ ...old, nickname: null });
+    await expect(verifySession(token)).resolves.toEqual({ ...old, nickname: null, loginAt: expect.any(Number) });
   });
 
   it("เซ็นแล้วอ่านกลับได้ครบทุกฟิลด์", async () => {
     vi.stubEnv("SESSION_SECRET", SECRET);
     const token = await signSession(actor);
-    await expect(verifySession(token)).resolves.toEqual(actor);
+    await expect(verifySession(token)).resolves.toEqual({ ...actor, loginAt: expect.any(Number) });
   });
 
   it("แก้ payload แล้วต้องไม่ผ่าน — ไม่ใช่แค่ค่าเพี้ยน", async () => {
@@ -74,8 +75,25 @@ describe("session cookie", () => {
     const issuedAt = Date.UTC(2026, 8, 9, 8, 0, 0);
     const token = await signSession(actor, issuedAt);
 
-    await expect(verifySession(token, issuedAt + (SESSION_TTL_SEC - 60) * 1000)).resolves.toEqual(actor);
+    await expect(verifySession(token, issuedAt + (SESSION_TTL_SEC - 60) * 1000)).resolves.toEqual({ ...actor, loginAt: issuedAt / 1000 });
     await expect(verifySession(token, issuedAt + (SESSION_TTL_SEC + 60) * 1000)).resolves.toBeNull();
+  });
+
+  it("ต่ออายุ (เซ็นใหม่ทุก 5 นาที) ไม่ยืดเพดาน — หมดอายุ 12 ชม. นับจากตอนล็อกอิน", async () => {
+    vi.stubEnv("SESSION_SECRET", SECRET);
+    const loginMs = Date.UTC(2026, 8, 9, 8, 0, 0);
+    let token = await signSession(actor, loginMs);
+    // proxy อ่าน cookie แล้วเซ็นใหม่ทุกชั่วโมง ตลอด 11 ชม.
+    for (let h = 1; h <= 11; h++) {
+      const now = loginMs + h * 3600_000;
+      const s = await verifySession(token, now);
+      expect(s?.loginAt).toBe(loginMs / 1000);
+      token = await signSession({ ...s!, checkedAt: now / 1000 }, now);
+    }
+    await expect(verifySession(token, loginMs + (SESSION_TTL_SEC - 60) * 1000)).resolves.not.toBeNull();
+    await expect(verifySession(token, loginMs + (SESSION_TTL_SEC + 60) * 1000)).resolves.toBeNull();
+    // cookie ที่เซ็นใหม่หมดพร้อมเพดานเดิม
+    expect(sessionCookieOptions(loginMs / 1000, loginMs + 11 * 3600_000).maxAge).toBe(3600);
   });
 
   it("token ที่ 'ออกในอนาคต' ไม่ผ่าน — ของปลอมที่เลื่อนเวลาหนีการหมดอายุ", async () => {

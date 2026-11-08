@@ -289,4 +289,12 @@ describe("การอนุมัติ", () => {
     await generateExams({ actor: pd, setId, model: fakeModel() });
     expect(await submitForApproval({ actor: pd, setId })).toEqual({ ok: false, error: "ยังไม่ได้เลือกผู้อนุมัติ" });
   });
+
+  it("TG ที่เป็นผู้อนุมัติกดส่งชุดของคนอื่นเองไม่ได้ (ต้องมีคนที่สองดูเสมอ)", async () => {
+    const setId = await readySet();
+    const tgApprover: Actor = { ...pdMgr, role: "admin" };
+    expect(await submitForApproval({ actor: tgApprover, setId })).toEqual({ ok: false, error: "ผู้ส่งต้องไม่ใช่ผู้อนุมัติ — ให้ผู้สร้างกดส่ง หรือเปลี่ยนผู้อนุมัติ" });
+    expect((await getSetDetail(pd, setId))?.set.status).toBe("draft");
+    expect((await submitForApproval({ actor: pd, setId })).ok).toBe(true);
+  });
 });

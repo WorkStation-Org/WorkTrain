@@ -187,6 +187,37 @@ describe("เปลี่ยนเล็ก", () => {
       .returning();
     expect(await L.pendingUpdate(late)).toBeNull();
   });
+
+  it("เริ่มสอบเวอร์ชัน 1 แล้วเวอร์ชัน 2 อนุมัติระหว่างสอบ → ผ่านทีหลังก็ยังต้องตามเวอร์ชัน 2", async () => {
+    const { setId } = await activeSetWithPassedLearner();
+    await draftV2(setId);
+    await V.submitVersion({ actor: pd, setId });
+    await V.setChangeKind({ actor: mgr, setId, kind: "small" });
+    await V.approveVersion({ actor: mgr, setId, now: T_V2 });
+    const [v1] = await testDb().select().from(schema.setVersions).where(eq(schema.setVersions.versionNo, 1));
+    const [form] = await testDb().select().from(schema.examForms).where(eq(schema.examForms.versionId, v1.id)).limit(1);
+    const started = new Date(T_V2.getTime() - 5 * 60_000);
+    const passed = new Date(T_V2.getTime() + 5 * 60_000);
+    const [mid] = await testDb()
+      .insert(schema.assignments)
+      .values({ setId, personId: 32, personName: "กลางทาง", source: "audience", assignedAt: T_PASS, dueAt: T_V2, passedAt: passed })
+      .returning();
+    await testDb().insert(schema.attempts).values({
+      assignmentId: mid.id,
+      versionId: v1.id,
+      formId: form.id,
+      kind: "full",
+      scanId: await examScan(started),
+      layout: [],
+      startedAt: started,
+      deadlineAt: passed,
+      endedAt: passed,
+      endReason: "submitted",
+      scorePercent: 100,
+      passed: true,
+    });
+    expect(await L.pendingUpdate(mid)).toMatchObject({ kind: "small", version: { versionNo: 2 } });
+  });
 });
 
 describe("เปลี่ยนใหญ่", () => {
@@ -211,7 +242,9 @@ describe("เปลี่ยนใหญ่", () => {
       const v = (await L.attemptView(ME, attemptId, at))!;
       if (v.ended) break;
       const cs = await testDb().select().from(schema.choices).where(eq(schema.choices.questionId, v.question!.id));
-      await L.answer({ personId: ME, attemptId, questionId: v.question!.id, choiceId: cs.find((c) => c.isCorrect)!.id, now: at });
+      const [t] = await testDb().select().from(schema.attempts).where(eq(schema.attempts.id, attemptId));
+      const shown = (t.layout as { questionId: number; choiceIds: number[] }[]).find((l) => l.questionId === v.question!.id)!.choiceIds;
+      await L.answer({ personId: ME, attemptId, questionId: v.question!.id, choiceIndex: shown.indexOf(cs.find((c) => c.isCorrect)!.id), now: at });
     }
     const done = (await L.attemptView(ME, attemptId, at))!;
     expect(done.result).toMatchObject({ percent: 100, passed: true });

@@ -2,6 +2,7 @@ import { errorSummary } from "@/lib/errmsg";
 import { reportHeartbeat } from "@/lib/gateway";
 import { retryApprovalNotices, runReminders, syncAssignments } from "@/lib/assignment-service";
 import { deleteExpiredScanImages, deleteRetiredEnrollmentImages } from "@/lib/identity-service";
+import { retryNewVersionNotices } from "@/lib/version-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,10 +27,12 @@ export async function GET(req: Request) {
     const now = new Date();
     const sync = await syncAssignments({ now });
     const remind = await runReminders({ now });
-    const approvals = await retryApprovalNotices();
+    // ข้อความที่ล้มไปแล้วของเหตุการณ์ที่ไม่เกิดซ้ำเอง (อนุมัติ · เวอร์ชันใหม่)
+    const retries = { approvals: await retryApprovalNotices(), versions: await retryNewVersionNotices() };
     const imagesDeleted = (await deleteExpiredScanImages(now)) + (await deleteRetiredEnrollmentImages());
-    const failed = sync.notified.failed + remind.day3.failed + remind.day5.failed + remind.overdue.failed + approvals.failed;
-    const sent = sync.notified.sent + remind.day3.sent + remind.day5.sent + remind.overdue.sent + approvals.sent;
+    const failed =
+      sync.notified.failed + remind.day3.failed + remind.day5.failed + remind.overdue.failed + retries.approvals.failed + retries.versions.failed;
+    const sent = sync.notified.sent + remind.day3.sent + remind.day5.sent + remind.overdue.sent + retries.approvals.sent + retries.versions.sent;
     const healthy = sync.ok && remind.ok && failed === 0;
     await reportHeartbeat(HB_JOB, healthy, {
       ...HB,
@@ -37,8 +40,8 @@ export async function GET(req: Request) {
       failed,
       message: `assigned=${sync.assigned} sent=${sent} failed=${failed} imagesDeleted=${imagesDeleted}${sync.why ? ` sync=${sync.why}` : ""}${remind.why ? ` remind=${remind.why}` : ""}`,
     });
-    console.log(JSON.stringify({ msg: "cron_daily_done", sync, remind, approvals, imagesDeleted }));
-    return Response.json({ ok: healthy, sync, remind, approvals, imagesDeleted });
+    console.log(JSON.stringify({ msg: "cron_daily_done", sync, remind, retries, imagesDeleted }));
+    return Response.json({ ok: healthy, sync, remind, retries, imagesDeleted });
   } catch (err) {
     await reportHeartbeat(HB_JOB, false, { ...HB, message: errorSummary(err) });
     console.log(JSON.stringify({ msg: "cron_daily_failed", error: errorSummary(err) }));

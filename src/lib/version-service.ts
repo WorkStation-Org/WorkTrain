@@ -1,10 +1,10 @@
-import { and, asc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull, lt } from "drizzle-orm";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
-import { approvalEvents, assignments, documents, examForms, FORMS_PER_VERSION, learningSets, setVersions, type ChangeKind } from "@/db/schema";
+import { approvalEvents, assignments, documents, examForms, FORMS_PER_VERSION, learningSets, notifications, setVersions, type ChangeKind } from "@/db/schema";
 import { DELTA_BLUEPRINT, type Blueprint } from "@/domain/blueprint";
 import type { Actor } from "@/lib/auth";
-import { sendToPerson, type SendResult } from "@/lib/deliver";
+import { MAX_SEND_ATTEMPTS, sendToPerson, type SendResult } from "@/lib/deliver";
 import { checkForms, type ExamModel } from "@/lib/exam-generator";
 import { formsComplete, insertForms, sourceDocuments } from "@/lib/exam-service";
 import { canEditVersion, currentVersion, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
@@ -105,6 +105,9 @@ export async function submitVersion(input: { actor: Actor; setId: number; now?: 
   const v = await newVersion(set);
   if (!v || !canEditVersion(input.actor, set, v)) return { ok: false, error: "ส่งได้เฉพาะเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
   if (!set.approverPersonId) return { ok: false, error: "ยังไม่ได้เลือกผู้อนุมัติ" };
+  // กติกาเดียวกับเวอร์ชันแรก (approval-service) — ต้องมีคนที่สองดูเสมอ
+  if (set.approverPersonId === set.authorPersonId) return { ok: false, error: "ผู้อนุมัติต้องไม่ใช่ผู้สร้างเอง" };
+  if (set.approverPersonId === input.actor.personId) return { ok: false, error: "ผู้ส่งต้องไม่ใช่ผู้อนุมัติ — ให้ผู้สร้างกดส่ง หรือเปลี่ยนผู้อนุมัติ" };
   const docs = await db().select({ id: documents.id }).from(documents).where(eq(documents.versionId, v.id));
   if (!docs.length) return { ok: false, error: "เวอร์ชันใหม่ยังไม่มีเอกสาร" };
   const incomplete = await formsComplete(v.id, set.blueprint as Blueprint);
@@ -232,5 +235,37 @@ export async function notifyNewVersion(versionId: number): Promise<Record<SendRe
     ),
   );
   for (const r of results) tally[r] += 1;
+  return tally;
+}
+
+/**
+ * ส่งข้อความ "เวอร์ชันใหม่" ที่ล้มไปแล้วซ้ำ — รันใน cron เช้า · ใช้ข้อความเดิมที่บันทึกไว้ (`notifications.text`)
+ * ข้ามคนที่ไม่ต้องรู้แล้ว (การมอบหายหรือชุดเลิกใช้) · `claim()` คุมเพดานจำนวนครั้งและกันส่งซ้ำ
+ */
+export async function retryNewVersionNotices(): Promise<Record<SendResult, number>> {
+  const tally: Record<SendResult, number> = { sent: 0, failed: 0, skipped: 0, duplicate: 0 };
+  const rows = await db()
+    .select({ n: notifications })
+    .from(notifications)
+    .innerJoin(learningSets, eq(learningSets.id, notifications.setId))
+    .where(
+      and(
+        eq(notifications.kind, "new_version"),
+        eq(notifications.status, "failed"),
+        lt(notifications.attempts, MAX_SEND_ATTEMPTS),
+        eq(learningSets.status, "active"),
+        isNotNull(notifications.personId),
+        isNotNull(notifications.text),
+      ),
+    );
+  if (!rows.length) return tally;
+  const org = await fetchOrg();
+  for (const { n } of rows) {
+    const out = await sendToPerson(
+      { dedupeKey: n.dedupeKey, kind: "new_version", personId: n.personId!, setId: n.setId, assignmentId: n.assignmentId, text: n.text! },
+      org.ok ? org.people : null,
+    );
+    tally[out] += 1;
+  }
   return tally;
 }

@@ -127,5 +127,7 @@ describe("Leaderboard", () => {
 describe("CSV", () => {
   it("BOM · ครอบค่าที่มีจุลภาค · กันสูตร Excel", () => {
     expect(S.toCsv(["a", "b"], [["x,y", "=SUM(A1)"], [null, 5]])).toBe('﻿a,b\r\n"x,y",\'=SUM(A1)\r\n,5\r\n');
+    // tab นำหน้า (OWASP) — บางโปรแกรมตัดช่องว่างแล้วตีความเป็นสูตร
+    expect(S.toCsv(["a"], [["\t=HYPERLINK(1)"]])).toBe("﻿a\r\n'\t=HYPERLINK(1)\r\n");
   });
 });

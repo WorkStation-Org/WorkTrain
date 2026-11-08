@@ -191,11 +191,12 @@ export async function monthLeaderboard(ym: string): Promise<LeaderboardView | nu
 
 // ── Export ─────────────────────────────────────────────────────────────────
 
-/** ค่าในไฟล์ CSV — ครอบด้วย `"` เมื่อมีจุลภาค/ขึ้นบรรทัด · กันสูตร Excel (ขึ้นต้น = + - @) */
+/** ค่าในไฟล์ CSV — ครอบด้วย `"` เมื่อมีจุลภาค/ขึ้นบรรทัด · กันสูตร Excel (ขึ้นต้น = + - @ tab CR) */
 export function csvCell(v: string | number | null): string {
   if (v === null) return "";
   let s = String(v);
-  if (typeof v === "string" && /^[=+\-@]/.test(s)) s = `'${s}`;
+  // รวม tab และ CR ด้วย (OWASP) — บางโปรแกรมตัดช่องว่างหน้าแล้วตีความ `\t=...` เป็นสูตร
+  if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

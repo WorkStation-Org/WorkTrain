@@ -17,7 +17,8 @@ export function ExamQuestion(props: {
   total: number;
   secondsLeft: number;
   leaveCount: number;
-  question: { id: number; text: string; choices: { id: number; text: string }[] };
+  /** ตัวเลือกมีแต่ข้อความ — ตอบด้วยตำแหน่งที่แสดง (0–3) */
+  question: { id: number; text: string; choices: { text: string }[] };
 }) {
   const router = useRouter();
   const [choice, setChoice] = useState<number | null>(null);
@@ -56,7 +57,7 @@ export function ExamQuestion(props: {
   async function submit() {
     if (choice === null) return;
     setBusy(true);
-    const out = await answerAction({ attemptId: props.attemptId, questionId: props.question.id, choiceId: choice });
+    const out = await answerAction({ attemptId: props.attemptId, questionId: props.question.id, choiceIndex: choice });
     if (!out.ok) setError(out.error);
     router.refresh();
   }
@@ -80,12 +81,12 @@ export function ExamQuestion(props: {
       )}
       <p className="mb-4 text-[16px] font-medium text-ink">{props.question.text}</p>
       <div className="space-y-2">
-        {props.question.choices.map((c) => (
+        {props.question.choices.map((c, i) => (
           <label
-            key={c.id}
-            className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-[14px] ${choice === c.id ? "border-ink bg-surface-2" : "border-line"}`}
+            key={i}
+            className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-[14px] ${choice === i ? "border-ink bg-surface-2" : "border-line"}`}
           >
-            <input type="radio" name="choice" checked={choice === c.id} onChange={() => setChoice(c.id)} />
+            <input type="radio" name="choice" checked={choice === i} onChange={() => setChoice(i)} />
             {c.text}
           </label>
         ))}

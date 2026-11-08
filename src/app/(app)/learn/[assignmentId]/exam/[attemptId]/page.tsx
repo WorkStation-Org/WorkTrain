@@ -13,7 +13,8 @@ const REASON: Record<string, string> = { submitted: "ตอบครบ", timeou
 export default async function ExamPage({ params }: { params: Promise<{ assignmentId: string; attemptId: string }> }) {
   const actor = await learnerActor();
   const p = await params;
-  const view = await attemptView(actor.personId, Number.parseInt(p.attemptId, 10));
+  // `Number()` ไม่ใช่ `parseInt()` — "12abc" ต้องเป็นไม่พบ ไม่ใช่ครั้งที่สอบ 12
+  const view = await attemptView(actor.personId, Number(p.attemptId));
   if (!view || String(view.assignmentId) !== p.assignmentId) notFound();
 
   if (view.ended && view.result) {

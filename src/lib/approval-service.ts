@@ -29,6 +29,8 @@ export async function submitForApproval(input: { actor: Actor; setId: number; no
   if (!canEditDraft(input.actor, set)) return { ok: false, error: "ส่งขออนุมัติได้เฉพาะชุดร่างของตัวเอง" };
   if (!set.approverPersonId) return { ok: false, error: "ยังไม่ได้เลือกผู้อนุมัติ" };
   if (set.approverPersonId === set.authorPersonId) return { ok: false, error: "ผู้อนุมัติต้องไม่ใช่ผู้สร้างเอง" };
+  // TG แก้ร่างของคนอื่นได้ — ถ้าตั้งตัวเองเป็นผู้อนุมัติแล้วกดส่งเอง จะอนุมัติเองได้โดยไม่มีคนที่สองดู
+  if (set.approverPersonId === input.actor.personId) return { ok: false, error: "ผู้ส่งต้องไม่ใช่ผู้อนุมัติ — ให้ผู้สร้างกดส่ง หรือเปลี่ยนผู้อนุมัติ" };
   const version = await latestVersion(set.id);
   if (!version) return { ok: false, error: "ชุดนี้ยังไม่มีเอกสาร" };
   const incomplete = await formsComplete(version.id, set.blueprint as Blueprint);

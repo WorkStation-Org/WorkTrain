@@ -52,6 +52,11 @@ export interface SessionData {
   epoch: number;
   /** unix seconds ของครั้งล่าสุดที่ยืนยันสิทธิ์กับ WorkID สำเร็จ */
   checkedAt: number;
+  /**
+   * unix seconds ตอนล็อกอิน — ติดไปกับทุกครั้งที่เซ็นใหม่ (ต่ออายุทุก 5 นาที) อายุ session นับจากตัวนี้
+   * ไม่ใช่จาก `iat` ไม่อย่างนั้นการต่ออายุจะเลื่อนเพดาน 12 ชม. ไปเรื่อย ๆ · ไม่มี (cookie รุ่นก่อน) = ใช้ `iat`
+   */
+  loginAt?: number;
 }
 
 interface SignedPayload extends SessionData {
@@ -113,7 +118,8 @@ function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 export async function signSession(data: SessionData, nowMs: number = Date.now()): Promise<string> {
-  const payload: SignedPayload = { ...data, iat: Math.floor(nowMs / 1000) };
+  const iat = Math.floor(nowMs / 1000);
+  const payload: SignedPayload = { ...data, loginAt: data.loginAt ?? iat, iat };
   const encoded = b64urlEncode(enc.encode(JSON.stringify(payload)));
   return `${encoded}.${b64urlEncode(await hmac(encoded))}`;
 }
@@ -138,7 +144,8 @@ function asSessionData(value: unknown): SignedPayload | null {
     typeof v.epoch !== "number" ||
     !Number.isInteger(v.epoch) ||
     typeof v.checkedAt !== "number" ||
-    typeof v.iat !== "number"
+    typeof v.iat !== "number" ||
+    (v.loginAt !== undefined && typeof v.loginAt !== "number")
   ) {
     return null;
   }
@@ -150,6 +157,7 @@ function asSessionData(value: unknown): SignedPayload | null {
     role: v.role as Role,
     epoch: v.epoch,
     checkedAt: v.checkedAt,
+    loginAt: typeof v.loginAt === "number" ? v.loginAt : v.iat,
     iat: v.iat,
   };
 }
@@ -188,6 +196,8 @@ export async function verifySession(
   const now = Math.floor(nowMs / 1000);
   if (payload.iat > now + CLOCK_SKEW_SEC) return null; // ออกในอนาคต = ของปลอม
   if (now - payload.iat > SESSION_TTL_SEC) return null;
+  // เพดานจริง: 12 ชม. นับจากล็อกอิน — การต่ออายุทุก 5 นาทีไม่ยืดเพดานนี้
+  if (payload.loginAt! > payload.iat || now - payload.loginAt! > SESSION_TTL_SEC) return null;
 
   const { iat: _iat, ...data } = payload;
   return data;
@@ -198,14 +208,16 @@ export function needsRecheck(data: SessionData, nowMs: number = Date.now()): boo
   return Math.floor(nowMs / 1000) - data.checkedAt >= RECHECK_AFTER_SEC;
 }
 
-export function sessionCookieOptions() {
+/** `loginAt` = ตอนเซ็นใหม่ระหว่างทาง ให้ cookie หมดพร้อมเพดานเดิม ไม่ใช่นับ 12 ชม. ใหม่ */
+export function sessionCookieOptions(loginAt?: number, nowMs: number = Date.now()) {
+  const left = loginAt === undefined ? SESSION_TTL_SEC : SESSION_TTL_SEC - (Math.floor(nowMs / 1000) - loginAt);
   return {
     httpOnly: true,
     sameSite: "lax" as const,
     // production เท่านั้น — dev รันบน http://localhost ถ้าบังคับ secure cookie จะไม่ถูกเก็บ
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: SESSION_TTL_SEC,
+    maxAge: Math.max(0, Math.min(SESSION_TTL_SEC, left)),
   };
 }
 
