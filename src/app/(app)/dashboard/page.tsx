@@ -26,7 +26,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const board = await monthLeaderboard(month);
   if (!data || !board) {
     return (
-      <main className="mx-auto max-w-md px-4 py-8">
+      <main className="mx-auto w-full max-w-md">
         <p className="text-[13px] text-danger">เดือนไม่ถูกต้อง — ใช้รูปแบบ ปปปป-ดด</p>
         <Link href="/dashboard" className="text-[13px] underline">
           เดือนนี้
@@ -37,11 +37,11 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const qs = new URLSearchParams(Object.entries({ month, team: filter.teamId, manager: filter.managerPersonId, set: filter.setId }).flatMap(([k, v]) => (v ? [[k, String(v)]] : [])));
 
   return (
-    <main className="mx-auto max-w-6xl space-y-5 px-4 py-8">
+    <main className="mx-auto w-full max-w-6xl space-y-5">
       <PageHeader
+        kicker="Insights"
         title="Dashboard"
         subtitle={`${formatMonth(month)} · ${data.scope === "all" ? "ทุกคน" : "ของคุณ ทีมที่คุณดูแล และชุดที่คุณสร้าง"}`}
-        actions={<Link href="/" className="text-[13px] text-ink-3 underline">หน้าแรก</Link>}
       />
 
       <Card>

@@ -27,8 +27,8 @@ export default async function FacesPage({ searchParams }: { searchParams: Promis
   const enrollCards = await Promise.all(enrollments.map(async (e) => ({ e, url: await link(e.objectKey) })));
 
   return (
-    <main className="mx-auto max-w-4xl space-y-5 px-4 py-8">
-      <PageHeader title="ตรวจภาพใบหน้า" subtitle="สแกนไม่ผ่าน 3 ครั้งติด · คำขอลงทะเบียนใหม่" actions={<Link href="/" className="text-[13px] text-ink-3 underline">หน้าแรก</Link>} />
+    <main className="mx-auto w-full max-w-4xl space-y-5">
+      <PageHeader kicker="Face review" title="ตรวจภาพใบหน้า" subtitle="สแกนไม่ผ่าน 3 ครั้งติด · คำขอลงทะเบียนใหม่" actions={<Link href="/" className="text-[13px] text-ink-3 underline">หน้าแรก</Link>} />
       <Flash msg={firstParam(sp.msg)} err={firstParam(sp.err)} />
 
       <Card>

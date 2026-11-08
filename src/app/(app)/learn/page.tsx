@@ -12,11 +12,11 @@ export default async function LearnPage() {
   const rows = await myAssignments(actor.personId);
   const now = new Date();
   return (
-    <main className="mx-auto max-w-3xl px-4 py-8">
+    <main className="mx-auto w-full max-w-3xl">
       <PageHeader
+        kicker="Your learning"
         title="ชุดที่ต้องเรียน"
         subtitle="อ่านเอกสารให้ครบทุกหน้า แล้วสอบให้ผ่าน 80%"
-        actions={<Link href="/" className="text-[13px] text-ink-3 underline">หน้าแรก</Link>}
       />
       {rows.length === 0 ? (
         <EmptyState title="ยังไม่มีชุดที่ได้รับมอบ" />

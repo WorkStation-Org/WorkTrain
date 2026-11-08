@@ -1,64 +1,183 @@
 @import "tailwindcss";
 
+/*
+ * หน้าตาของ WorkTrain ยกมาจาก WorkPass (`apps/web/src/app/globals.css`) — โทนขาว-ดำ-เงิน มีโหมดมืด
+ *
+ * ฟอนต์ (ไฟล์อยู่ใน src/app/fonts · โหลดด้วย next/font/local ใน layout.tsx — build ไม่ต้องต่อเน็ต)
+ *   font-sans     ตัวหนังสือทั่วไป: ละตินเป็น Old Standard TT · ไทยเป็น Noto Sans Thai (Old Standard ไม่มีอักษรไทย เบราว์เซอร์ข้ามไปเอง)
+ *   font-display  หัวข้อภาษาอังกฤษ / wordmark (Old Standard TT)
+ *   font-ui       ช่องกรอก ตัวเลข และข้อความที่ต้องอ่านเร็ว (Noto Sans Thai ทั้งไทยและละติน)
+ * breakpoint nav (720px): ต่ำกว่านี้เมนูซ้ายเป็น drawer
+ */
 @theme {
-  /* ระบบสีของ WorkTrain — ยกโครงมาจาก Notification_Content (ซึ่งอิง TikTok Studio)
-     พื้นเป็นขาวล้วน · ไล่หมึกจาก #161823 ลดความเข้มลงเป็นสีทึบ เพื่อให้เส้นขอบกับ
-     ตัวอักษรผสมกันได้สะอาด
+  --font-sans: var(--font-latin), var(--font-thai), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-latin), var(--font-thai), ui-serif, Georgia, serif;
+  --font-ui: var(--font-thai), ui-sans-serif, system-ui, sans-serif;
+  --breakpoint-nav: 45rem;
 
-     ★ สีทุกสีของแอปอยู่ในบล็อกนี้บล็อกเดียว มีเทสต์บังคับ
-       (`src/lib/__tests__/design-tokens.test.ts`) — เขียนสีดิบที่หน้าจอไหนก็ตาม
-       เทสต์จะล้ม เพราะสีที่กระจายอยู่ตามไฟล์คือสีที่ไม่มีใครแก้พร้อมกันได้ */
+  --animate-fade-in: fade-in 180ms ease-out both;
+  --animate-fade-up: fade-up 220ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  --animate-slide-in: slide-in 220ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  --animate-pop: fade-up 180ms ease-out both;
 
-  /* พื้น */
-  --color-surface: #ffffff;
-  --color-surface-2: #f8f8f8;
-  --color-surface-3: #f1f1f2;
-  --color-line: #e6e6e8;
-  --color-line-strong: #cfcfd3;
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes slide-in {
+    from { transform: translateX(-100%); }
+    to { transform: none; }
+  }
+}
 
-  /* ตัวอักษร */
-  --color-ink: #161823;
-  --color-ink-2: #5b5c62;
-  --color-ink-3: #8a8b93;
-  --color-ink-4: #b9bac0;
+/*
+ * สี (design token) — ค่าจริงอยู่ที่ตัวแปร --wt-* ข้างล่าง (สว่าง/มืด) · หน้าจอใช้ชื่อคลาสเท่านั้น ห้ามเขียนสีดิบ
+ *
+ *   ชื่อแบบ WorkPass   canvas (พื้นหน้า) · raised (การ์ด/แผง/เมนูซ้าย) · subtle (พื้นจาง/hover) · line · fg · muted · accent
+ *   ชื่อเดิมของ WorkTrain (หน้าเดิมยังใช้) ชี้ไปที่ค่าชุดเดียวกัน:
+ *     surface = raised · surface-2 = canvas · surface-3 = subtle · ink = fg · ink-2/ink-3 = ตัวรอง · primary = accent
+ *     warning/caution = warn · info/neutral = โทนเทา (WorkPass ไม่มีสีน้ำเงิน — สีมีไว้บอกสถานะเท่านั้น)
+ */
+@theme inline {
+  --color-canvas: var(--wt-canvas);
+  --color-raised: var(--wt-raised);
+  --color-subtle: var(--wt-subtle);
+  --color-line: var(--wt-line);
+  --color-line-strong: var(--wt-line-strong);
+  --color-fg: var(--wt-fg);
+  --color-muted: var(--wt-muted);
+  --color-accent: var(--wt-accent);
+  --color-accent-fg: var(--wt-accent-fg);
+  --color-accent-soft: var(--wt-accent-soft);
+  --color-danger: var(--wt-danger);
+  --color-danger-fg: var(--wt-danger-fg);
+  --color-danger-soft: var(--wt-danger-soft);
+  --color-warn: var(--wt-warn);
+  --color-warn-soft: var(--wt-warn-soft);
+  --color-success: var(--wt-success);
+  --color-success-soft: var(--wt-success-soft);
 
-  /* สีหลัก — WorkTrain ใช้ดำเทา ไม่ใช่ชมพูแดงแบบต้นแบบ
-     hover **ไล่ขึ้น** ไม่ใช่ไล่ลง เพราะ #292929 เหลือระยะถึงดำแค่ 41 สเต็ป
-     ไล่ลงแล้วคนกดแทบไม่เห็นว่าปุ่มตอบสนอง
-     soft เข้มกว่า surface-3 (#f1f1f2) หนึ่งขั้นโดยตั้งใจ — ไม่งั้น "ถูกเลือก"
-     กับ "เอาเมาส์ชี้" จะเป็นสีเดียวกันเป๊ะ */
-  --color-primary: #292929;
-  --color-primary-hover: #3d3d3d;
-  --color-primary-soft: #e9e9ea;
+  /* ชื่อเดิมของ WorkTrain */
+  --color-surface: var(--wt-raised);
+  --color-surface-2: var(--wt-canvas);
+  --color-surface-3: var(--wt-subtle);
+  --color-ink: var(--wt-fg);
+  --color-ink-2: var(--wt-ink-2);
+  --color-ink-3: var(--wt-muted);
+  --color-ink-4: var(--wt-ink-4);
+  --color-primary: var(--wt-accent);
+  --color-primary-hover: var(--wt-accent-hover);
+  --color-primary-soft: var(--wt-accent-soft);
+  --color-on-primary: var(--wt-accent-fg);
+  --color-warning: var(--wt-warn);
+  --color-warning-soft: var(--wt-warn-soft);
+  --color-caution: var(--wt-warn);
+  --color-caution-soft: var(--wt-warn-soft);
+  --color-info: var(--wt-muted);
+  --color-info-soft: var(--wt-subtle);
+  --color-neutral: var(--wt-muted);
+  --color-neutral-soft: var(--wt-subtle);
 
-  /* สีบอกความหมาย — danger **ไม่ตาม** primary ไปเป็นดำเทา
-     ปุ่มทำลาย (ยกเลิกเคส) กับปุ่มปกติต้องต่างกันด้วยสี ไม่ใช่ต่างแค่ตำแหน่งบนหน้าจอ */
-  --color-danger: #fe2c55;
-  --color-danger-soft: #fff0f3;
-  --color-warning: #ff7a1a;
-  --color-warning-soft: #fff2e8;
-  --color-caution: #d99a00;
-  --color-caution-soft: #fff8db;
-  --color-success: #12a150;
-  --color-success-soft: #e8f7ee;
-  --color-info: #2f6fed;
-  --color-info-soft: #ebf1ff;
-  --color-neutral: #8a8b93;
-  --color-neutral-soft: #f1f1f2;
-
-  --font-sans: var(--font-noto-sans-thai), ui-sans-serif, system-ui, -apple-system,
-    "Segoe UI", sans-serif;
-
-  --shadow-pop: 0 8px 32px rgb(22 24 35 / 0.12);
-  --shadow-card: 0 1px 2px rgb(22 24 35 / 0.04);
+  --shadow-pop: var(--wt-shadow);
+  --shadow-card: none;
 }
 
 :root {
   color-scheme: light;
+  --wt-canvas: #f7f7f8;
+  --wt-raised: #ffffff;
+  --wt-subtle: #f0f0f2;
+  --wt-line: #e7e8ea;
+  --wt-line-strong: #d3d5d8;
+  --wt-fg: #1b1c1e;
+  --wt-ink-2: #45484d;
+  --wt-muted: #6c7077;
+  --wt-ink-4: #a4a7ad;
+  --wt-accent: #161719;
+  --wt-accent-hover: #2c2e32;
+  --wt-accent-fg: #ffffff;
+  --wt-accent-soft: #f0f0f2;
+  --wt-danger: #a84444;
+  --wt-danger-fg: #ffffff;
+  --wt-danger-soft: #f8eded;
+  --wt-warn: #8a5a12;
+  --wt-warn-soft: #f8f1e4;
+  --wt-success: #2f6b45;
+  --wt-success-soft: #e9f2ec;
+  --wt-shadow: 0 9px 30px rgb(0 0 0 / 0.12);
 }
 
-html {
-  scroll-behavior: smooth;
+/* ค่าโหมดมืดมีสองที่ (ตามเครื่อง และเลือกเอง) — แก้ให้ตรงกันทั้งคู่ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --wt-canvas: #131416;
+    --wt-raised: #1b1c1f;
+    --wt-subtle: #24262a;
+    --wt-line: #2c2e32;
+    --wt-line-strong: #3d4045;
+    --wt-fg: #f1f1f2;
+    --wt-ink-2: #c9cbcf;
+    --wt-muted: #9b9fa6;
+    --wt-ink-4: #6b6f75;
+    --wt-accent: #ebebed;
+    --wt-accent-hover: #d6d7da;
+    --wt-accent-fg: #131416;
+    --wt-accent-soft: #24262a;
+    --wt-danger: #e08a8a;
+    --wt-danger-fg: #131416;
+    --wt-danger-soft: #2d1f20;
+    --wt-warn: #e0b46a;
+    --wt-warn-soft: #2b2417;
+    --wt-success: #8fcfa4;
+    --wt-success-soft: #1a2a20;
+    --wt-shadow: 0 9px 30px rgb(0 0 0 / 0.45);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --wt-canvas: #131416;
+  --wt-raised: #1b1c1f;
+  --wt-subtle: #24262a;
+  --wt-line: #2c2e32;
+  --wt-line-strong: #3d4045;
+  --wt-fg: #f1f1f2;
+  --wt-ink-2: #c9cbcf;
+  --wt-muted: #9b9fa6;
+  --wt-ink-4: #6b6f75;
+  --wt-accent: #ebebed;
+  --wt-accent-hover: #d6d7da;
+  --wt-accent-fg: #131416;
+  --wt-accent-soft: #24262a;
+  --wt-danger: #e08a8a;
+  --wt-danger-fg: #131416;
+  --wt-danger-soft: #2d1f20;
+  --wt-warn: #e0b46a;
+  --wt-warn-soft: #2b2417;
+  --wt-success: #8fcfa4;
+  --wt-success-soft: #1a2a20;
+  --wt-shadow: 0 9px 30px rgb(0 0 0 / 0.45);
+}
+
+/* ภาษาไทยต้องการระยะบรรทัดมากกว่าภาษาอังกฤษ · ห้ามใส่ letter-spacing ให้ตัวไทย (สระ/วรรณยุกต์แยกจากพยัญชนะ) */
+body {
+  line-height: 1.6;
+  background: var(--wt-canvas);
+  color: var(--wt-fg);
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ช่องกรอกใช้ Noto Sans Thai ทั้งไทยและละติน — อ่านค่าที่พิมพ์ได้ชัดกว่าตัวมีเชิง */
+input,
+select,
+textarea {
+  font-family: var(--font-ui);
 }
 
 button:not(:disabled),
@@ -70,78 +189,66 @@ input[type="checkbox"],
 input[type="radio"] {
   cursor: pointer;
 }
-
 button:disabled,
 [aria-disabled="true"] {
   cursor: not-allowed;
 }
 
-body {
-  background: var(--color-surface);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-}
-
 ::selection {
-  background: var(--color-primary);
-  color: #fff;
+  background: var(--wt-accent);
+  color: var(--wt-accent-fg);
 }
 
-@keyframes pop {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.99);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-.animate-pop {
-  animation: pop 0.18s ease-out both;
+/* ป้ายตัวพิมพ์ใหญ่ภาษาอังกฤษ (YOUR LEARNING · DASHBOARD) — ใช้ letter-spacing ได้เฉพาะคลาสนี้ · ห้ามใช้กับข้อความไทย */
+@utility kicker {
+  font-size: 0.6875rem;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--wt-muted);
 }
 
-@keyframes slide-in-left {
-  from {
-    transform: translateX(-100%);
+/* กดแล้วย่อเล็กน้อย (เหมือน Tap ของแอปมือถือ) */
+@utility press {
+  transition-property: transform, background-color, border-color, color, opacity, box-shadow;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+  &:active:not(:disabled) {
+    transform: scale(0.97);
   }
-  to {
-    transform: none;
-  }
-}
-.animate-slide-in-left {
-  animation: slide-in-left 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+/* วงโฟกัสเดียวกันทั้งแอป — เห็นชัดเฉพาะตอนใช้คีย์บอร์ด */
+:focus-visible {
+  outline: 2px solid var(--wt-muted);
+  outline-offset: 2px;
 }
-.animate-fade-in {
-  animation: fade-in 0.18s ease-out both;
-}
-/* หน้ากำลังโหลด — รอ 150ms ก่อนโผล่ เปลี่ยนหน้าเร็วจะไม่เห็นโครงกะพริบ
-   ต้องเป็นคลาสแยก: `[animation-delay:…]` ของ Tailwind อยู่ใน layer จึงแพ้ shorthand ข้างบน */
+
+/* หน้ากำลังโหลด — รอ 150ms ก่อนโผล่ เปลี่ยนหน้าเร็วจะไม่เห็นโครงกะพริบ */
 .animate-fade-in-late {
   animation: fade-in 0.2s ease-out 0.15s both;
 }
 
-/* แถบเลื่อนบางในกล่องที่เลื่อนได้ */
+/* แถบเลื่อนบาง ๆ ในเมนูซ้ายและกล่องที่เลื่อนได้ */
+.thin-scroll,
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-line-strong) transparent;
+  scrollbar-color: var(--wt-line-strong) transparent;
 }
 
+/* แผงซ้ายของหน้าเข้าสู่ระบบ: พื้นโลหะเข้ม (แบบเดียวกับ WorkPass) */
+.auth-editorial {
+  background:
+    repeating-linear-gradient(0deg, #ffffff03 0 1px, #00000002 1px 2px),
+    radial-gradient(ellipse at 10% 10%, #56595d, #202226 55%, #101113);
+}
+
+/* ผู้ใช้เปิด "ลดการเคลื่อนไหว" → ไม่มีแอนิเมชัน/transition ทั้งแอป */
 @media (prefers-reduced-motion: reduce) {
   *,
-  *::before,
-  *::after {
+  ::before,
+  ::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;

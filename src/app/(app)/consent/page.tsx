@@ -16,8 +16,8 @@ export default async function ConsentPage({ searchParams }: { searchParams: Prom
   if (await hasConsent(actor.personId)) redirect("/learn");
   const withdrawn = (await searchParams).withdrawn === "1";
   return (
-    <main className="mx-auto max-w-2xl px-4 py-8">
-      <PageHeader title="ความยินยอมให้สแกนใบหน้า" subtitle="ต้องยินยอมก่อนใช้ WorkTrain" />
+    <main className="mx-auto w-full max-w-2xl">
+      <PageHeader kicker="Privacy" title="ความยินยอมให้สแกนใบหน้า" subtitle="ต้องยินยอมก่อนใช้ WorkTrain" />
       {withdrawn && (
         <p className="mb-4 rounded-lg bg-surface-2 px-3 py-2 text-[13px] text-ink-2">
           ถอนความยินยอมแล้ว — ลบภาพใบหน้าที่ลงทะเบียนแล้ว · ยินยอมใหม่ได้ทุกเมื่อ (ต้องลงทะเบียนใบหน้าใหม่และรอ TG อนุมัติ)
