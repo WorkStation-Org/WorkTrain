@@ -130,21 +130,49 @@ export async function finishScan(input: { personId: number; ticket: string; api:
   if ((t.exp ?? 0) < now.getTime()) return { ok: false, error: "ใบสแกนหมดอายุ สแกนใหม่" };
   const purpose = t.purpose;
 
+  // จอง liveness session ก่อนอ่านผล — ใบสแกนหนึ่งใบได้ผลแถวเดียว (ส่งซ้ำ/ส่งพร้อมกัน = ปฏิเสธ)
+  // แถวเริ่มเป็น `error` แล้วแก้เป็นผลจริงด้านล่าง · ล้มกลางทางค้างเป็น `error` ซึ่งใช้เริ่มอะไรไม่ได้
+  const [claimed] = await db()
+    .insert(faceScans)
+    .values({
+      personId: input.personId,
+      purpose,
+      result: "error",
+      livenessSessionId: t.sessionId,
+      deleteAfter: new Date(now.getTime() + SCAN_RETENTION_MS),
+      createdAt: now,
+    })
+    .onConflictDoNothing()
+    .returning({ id: faceScans.id });
+  if (!claimed) return { ok: false, error: "ใบสแกนนี้ใช้ไปแล้ว สแกนใหม่" };
+  const scanId = claimed.id;
+  const record = async (result: ScanResult, similarity: number | null) => {
+    await db()
+      .update(faceScans)
+      .set({ result, similarity: similarity === null ? null : similarity.toFixed(2) })
+      .where(eq(faceScans.id, scanId));
+    return { scanId };
+  };
+
   const live = await input.api.livenessResult(t.sessionId);
   const isLive = live.status === "SUCCEEDED" && (live.confidence ?? 0) >= LIVENESS_MIN_CONFIDENCE && live.referenceImage !== null;
-  let objectKey: string | null = null;
-  if (live.referenceImage) {
-    // ลงทะเบียนที่ไม่ผ่าน liveness ไม่ได้เป็นใบหน้าที่ลงทะเบียน → เก็บแบบภาพสแกน (ลบเมื่อครบ 90 วัน)
-    objectKey = imageKey(input.personId, purpose === "enroll" && isLive ? "enroll" : "scan");
-    await store.put(objectKey, live.referenceImage, "image/jpeg");
+  let scanImageKey: string | null = null;
+  if (live.referenceImage && !(purpose === "enroll" && isLive)) {
+    // ภาพสแกน (รวมการลงทะเบียนที่ไม่ผ่าน liveness) ลบเมื่อครบ 90 วัน — ลงคีย์ในแถวก่อนอัปโหลด
+    // ให้ cron เห็นเสมอแม้ขั้นถัดไปล้ม (ไม่มีภาพกำพร้าใน R2)
+    scanImageKey = imageKey(input.personId, "scan");
+    await db().update(faceScans).set({ objectKey: scanImageKey }).where(eq(faceScans.id, scanId));
+    await store.put(scanImageKey, live.referenceImage, "image/jpeg");
   }
-  if (!isLive) return { ok: true, ...(await insertScan(input.personId, purpose, "liveness_fail", null, objectKey, now)), passed: false };
+  if (!isLive) return { ok: true, ...(await record("liveness_fail", null)), passed: false };
 
   if (purpose === "enroll") {
+    const enrollKey = imageKey(input.personId, "enroll");
+    await store.put(enrollKey, live.referenceImage!, "image/jpeg");
     const hadActive = (await activeEnrollment(input.personId)) !== null;
     const status = hadActive ? "pending" : "active";
-    await db().insert(faceEnrollments).values({ personId: input.personId, objectKey, status, createdAt: now });
-    return { ok: true, ...(await insertScan(input.personId, purpose, "pass", null, null, now)), passed: true, enrollment: status };
+    await db().insert(faceEnrollments).values({ personId: input.personId, objectKey: enrollKey, status, createdAt: now });
+    return { ok: true, ...(await record("pass", null)), passed: true, enrollment: status };
   }
 
   const enrolled = await activeEnrollment(input.personId);
@@ -152,28 +180,13 @@ export async function finishScan(input: { personId: number; ticket: string; api:
   if (!enrolledBytes) return { ok: false, error: "ไม่พบภาพใบหน้าที่ลงทะเบียน — ขอลงทะเบียนใหม่" };
   const similarity = await input.api.compareFaces(enrolledBytes, live.referenceImage!);
   const result: ScanResult = similarity !== null && similarity >= MATCH_MIN_SIMILARITY ? "pass" : "no_match";
-  return { ok: true, ...(await insertScan(input.personId, purpose, result, similarity, objectKey, now)), passed: result === "pass" };
+  return { ok: true, ...(await record(result, similarity)), passed: result === "pass" };
 }
 
-async function insertScan(
-  personId: number,
-  purpose: ScanPurpose,
-  result: ScanResult,
-  similarity: number | null,
-  objectKey: string | null,
-  now: Date,
-): Promise<{ scanId: number }> {
+async function insertScan(personId: number, purpose: ScanPurpose, result: ScanResult, now: Date): Promise<{ scanId: number }> {
   const [row] = await db()
     .insert(faceScans)
-    .values({
-      personId,
-      purpose,
-      result,
-      similarity: similarity === null ? null : similarity.toFixed(2),
-      objectKey,
-      deleteAfter: new Date(now.getTime() + SCAN_RETENTION_MS),
-      createdAt: now,
-    })
+    .values({ personId, purpose, result, deleteAfter: new Date(now.getTime() + SCAN_RETENTION_MS), createdAt: now })
     .returning({ id: faceScans.id });
   return { scanId: row.id };
 }
@@ -189,10 +202,10 @@ export async function devScan(input: { personId: number; purpose: ScanPurpose; n
   if (input.purpose === "enroll") {
     if (state.state !== "none") return { ok: false, error: "ลงทะเบียนใบหน้าแล้ว" };
     await db().insert(faceEnrollments).values({ personId: input.personId, objectKey: null, status: "active", createdAt: now });
-    return { ok: true, ...(await insertScan(input.personId, "enroll", "pass", null, null, now)), passed: true, enrollment: "active" };
+    return { ok: true, ...(await insertScan(input.personId, "enroll", "pass", now)), passed: true, enrollment: "active" };
   }
   if (state.state !== "active") return { ok: false, error: "ต้องลงทะเบียนใบหน้าก่อน" };
-  return { ok: true, ...(await insertScan(input.personId, input.purpose, "pass", null, null, now)), passed: true };
+  return { ok: true, ...(await insertScan(input.personId, input.purpose, "pass", now)), passed: true };
 }
 
 /**
@@ -208,6 +221,16 @@ export async function usableScan(input: { personId: number; scanId: number; purp
   if (scan.purpose !== input.purpose) return "ผลสแกนนี้ใช้กับขั้นตอนอื่น";
   const confirmed = scan.review === "confirmed" && scan.reviewedAt !== null;
   if (scan.result !== "pass" && !confirmed) return "สแกนใบหน้าไม่ผ่าน";
+  if (scan.result !== "pass" && confirmed) {
+    // TG ยืนยันทั้งชุดพร้อมกัน แต่ใช้แทนการสแกนได้ครั้งเดียว — เฉพาะสแกนล่าสุดของชุด
+    const [latest] = await db()
+      .select({ id: faceScans.id })
+      .from(faceScans)
+      .where(and(eq(faceScans.personId, input.personId), eq(faceScans.review, "confirmed"), eq(faceScans.reviewedAt, scan.reviewedAt!)))
+      .orderBy(desc(faceScans.createdAt), desc(faceScans.id))
+      .limit(1);
+    if (latest?.id !== scan.id) return "ผลที่ TG ยืนยันใช้ได้ครั้งเดียว";
+  }
   const freshFrom = confirmed ? scan.reviewedAt!.getTime() : scan.createdAt.getTime();
   const window = confirmed ? REVIEW_VALID_MS : SCAN_FRESH_MS;
   if (freshFrom < input.now.getTime() - window) return "ผลสแกนหมดอายุ สแกนใหม่";
@@ -274,6 +297,7 @@ export async function reviewFailedScans(input: { reviewerPersonId: number; perso
   Outcome<{ scanId: number }>
 > {
   const now = input.now ?? new Date();
+  if (input.reviewerPersonId === input.personId) return { ok: false, error: "ตรวจการสแกนของตัวเองไม่ได้ — ให้ TG คนอื่นตรวจ" };
   const n = await consecutiveFails(input.personId);
   if (n < FAILS_BEFORE_REVIEW) return { ok: false, error: "ไม่มีชุดสแกนที่รอตรวจของคนนี้" };
   const rows = await db()
@@ -294,21 +318,44 @@ export async function reviewEnrollment(input: { reviewerPersonId: number; enroll
   const now = input.now ?? new Date();
   const [e] = await db().select().from(faceEnrollments).where(eq(faceEnrollments.id, input.enrollmentId));
   if (!e || e.status !== "pending") return { ok: false, error: "ไม่มีคำขอนี้ หรือมีคนตัดสินไปแล้ว" };
+  if (e.personId === input.reviewerPersonId) return { ok: false, error: "อนุมัติใบหน้าของตัวเองไม่ได้ — ให้ TG คนอื่นตรวจ" };
   if (!input.approve) {
     await db()
       .update(faceEnrollments)
       .set({ status: "rejected", reviewedByPersonId: input.reviewerPersonId, reviewedAt: now })
       .where(eq(faceEnrollments.id, e.id));
-    return { ok: true };
+  } else {
+    await atomic([
+      db()
+        .update(faceEnrollments)
+        .set({ status: "superseded" })
+        .where(and(eq(faceEnrollments.personId, e.personId), eq(faceEnrollments.status, "active"))),
+      db().update(faceEnrollments).set({ status: "active", reviewedByPersonId: input.reviewerPersonId, reviewedAt: now }).where(eq(faceEnrollments.id, e.id)),
+    ]);
   }
-  await atomic([
-    db()
-      .update(faceEnrollments)
-      .set({ status: "superseded" })
-      .where(and(eq(faceEnrollments.personId, e.personId), eq(faceEnrollments.status, "active"))),
-    db().update(faceEnrollments).set({ status: "active", reviewedByPersonId: input.reviewerPersonId, reviewedAt: now }).where(eq(faceEnrollments.id, e.id)),
-  ]);
+  // ภาพที่ถูกปฏิเสธ/ถูกแทนไม่มีเหตุให้เก็บต่อ (spec §8 · PDPA) — ล้มตรงนี้ cron เช้าลบซ้ำให้
+  await deleteRetiredEnrollmentImages(e.personId);
   return { ok: true };
+}
+
+/**
+ * ลบภาพของใบหน้าที่ถูกแทน (`superseded`) หรือถูกปฏิเสธ (`rejected`) — ลบจาก R2 ก่อนแล้วค่อยล้างคีย์
+ * (ลบไม่สำเร็จ = คีย์ยังอยู่ รอบถัดไปลองใหม่) · `personId` = เฉพาะคนนั้น · ไม่ใส่ = ทุกคน (cron) · คืนจำนวนที่ลบ
+ */
+export async function deleteRetiredEnrollmentImages(personId?: number, limit = 500): Promise<number> {
+  const store = objectStore();
+  if (!store) return 0;
+  const retired = and(inArray(faceEnrollments.status, ["superseded", "rejected"]), isNotNull(faceEnrollments.objectKey));
+  const rows = await db()
+    .select({ id: faceEnrollments.id, objectKey: faceEnrollments.objectKey })
+    .from(faceEnrollments)
+    .where(personId === undefined ? retired : and(retired, eq(faceEnrollments.personId, personId)))
+    .limit(limit);
+  for (const r of rows) {
+    await store.delete(r.objectKey!);
+    await db().update(faceEnrollments).set({ objectKey: null }).where(eq(faceEnrollments.id, r.id));
+  }
+  return rows.length;
 }
 
 /** ลิงก์ดูภาพใบหน้าอายุสั้น — TG เท่านั้น (ผู้เรียกตรวจสิทธิ์) */

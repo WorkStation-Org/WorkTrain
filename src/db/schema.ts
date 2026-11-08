@@ -417,12 +417,17 @@ export const faceScans = pgTable(
     similarity: numeric("similarity", { precision: 5, scale: 2 }),
     objectKey: text("object_key"),
     deleteAfter: ts("delete_after").notNull(),
+    /** liveness session ของ AWS ที่ให้ผลนี้ — ใช้ได้ครั้งเดียว (กันส่งใบสแกนเดิมซ้ำเพื่อได้ผลผ่านหลายแถว) · null = ทางลัด dev */
+    livenessSessionId: text("liveness_session_id"),
     reviewedByPersonId: integer("reviewed_by_person_id"),
     review: text("review", { enum: SCAN_REVIEWS }),
     reviewedAt: ts("reviewed_at"),
     createdAt: ts("created_at").notNull().defaultNow(),
   },
-  (t) => [index("face_scans_person_idx").on(t.personId, t.createdAt)],
+  (t) => [
+    index("face_scans_person_idx").on(t.personId, t.createdAt),
+    uniqueIndex("face_scans_liveness_session_uniq").on(t.livenessSessionId),
+  ],
 );
 
 // ── การเรียนและการสอบ ──────────────────────────────────────────────────────
@@ -447,6 +452,8 @@ export const studySessions = pgTable(
   (t) => [
     check("study_sessions_end_pair", sql`(${t.endedAt} is null) = (${t.endReason} is null)`),
     uniqueIndex("study_sessions_open_uniq").on(t.personId).where(sql`${t.endedAt} is null`),
+    // ผลสแกนหนึ่งครั้งเริ่มได้รอบเดียว — กันสองคำขอพร้อมกันผ่านการตรวจ "ยังไม่ถูกใช้" ทั้งคู่
+    uniqueIndex("study_sessions_scan_uniq").on(t.scanId),
   ],
 );
 
@@ -497,6 +504,8 @@ export const attempts = pgTable(
     scanId: integer("scan_id")
       .notNull()
       .references(() => faceScans.id, { onDelete: "restrict" }),
+    /** รอบอ่านของการมอบตอนเริ่มสอบ — "ไม่ผ่าน 2 ครั้งติด" นับเฉพาะครั้งในรอบอ่านเดียวกัน (อ่านใหม่ = เริ่มนับใหม่) */
+    readRound: smallint("read_round").notNull().default(1),
     /** `[{ questionId, choiceIds: [...] }]` ตามลำดับที่แสดง */
     layout: jsonb("layout").notNull(),
     /** `{ [questionId]: choiceId }` */
@@ -516,6 +525,7 @@ export const attempts = pgTable(
     check("attempts_score", sql`${t.scorePercent} is null or ${t.scorePercent} between 0 and 100`),
     // สอบค้างได้ครั้งเดียวต่อการมอบ
     uniqueIndex("attempts_open_uniq").on(t.assignmentId).where(sql`${t.endedAt} is null`),
+    uniqueIndex("attempts_scan_uniq").on(t.scanId),
   ],
 );
 

@@ -54,6 +54,12 @@ async function assign(setId: number, personId: number, passedAt: string | null =
 }
 
 async function attempt(assignmentId: number, startedAt: string, score: number) {
+  // ผลสแกนหนึ่งครั้งเริ่มสอบได้ครั้งเดียว (attempts_scan_uniq) — แต่ละครั้งที่สอบจึงต้องมีสแกนของตัวเอง
+  const [sc] = await testDb()
+    .insert(schema.faceScans)
+    .values({ personId: 31, purpose: "exam", result: "pass", deleteAfter: at("2027-02-01T00:00:00") })
+    .returning();
+  const scanId = sc.id;
   await testDb()
     .insert(schema.attempts)
     .values({ assignmentId, versionId, formId, kind: "full", scanId, layout: [], startedAt: at(startedAt), deadlineAt: at(startedAt), endedAt: at(startedAt), endReason: "submitted", scorePercent: score, passed: score >= 80 });

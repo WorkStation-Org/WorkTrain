@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lt } from "drizzle-orm";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
 import {
@@ -8,6 +8,7 @@ import {
   attempts,
   audienceRules,
   learningSets,
+  notifications,
   onboardingPaths,
   readingProgress,
   AUDIENCE_KINDS,
@@ -15,9 +16,9 @@ import {
 } from "@/db/schema";
 import { resolveAudience, type AudienceRule } from "@/domain/audience";
 import type { Actor } from "@/lib/auth";
-import { sendToGroup, sendToPerson, type SendResult } from "@/lib/deliver";
+import { MAX_SEND_ATTEMPTS, sendToGroup, sendToPerson, type SendResult } from "@/lib/deliver";
 import { canEditDraft, type Outcome } from "@/lib/set-service";
-import { bangkokDate, bangkokParts, formatBangkok } from "@/lib/time";
+import { ageInDays, bangkokDate, bangkokParts, formatBangkok } from "@/lib/time";
 import { fetchOrg, type OrgPerson } from "@/lib/workid";
 
 /**
@@ -151,13 +152,13 @@ export async function syncAssignments(input: { now?: Date; setId?: number } = {}
       }
     }
   }
-  if (!toInsert.length) return { ok: true, assigned: 0, notified: tally([]) };
-
-  // ON CONFLICT DO NOTHING — สองรอบ sync ที่ชนกันไม่มอบซ้ำ และแจ้งเฉพาะแถวที่รอบนี้ลงได้จริง
-  const inserted = await db().insert(assignments).values(toInsert).onConflictDoNothing().returning();
+  // ON CONFLICT DO NOTHING — สองรอบ sync ที่ชนกันไม่มอบซ้ำ
+  const inserted = toInsert.length ? await db().insert(assignments).values(toInsert).onConflictDoNothing().returning() : [];
+  // การมอบเดิมที่ข้อความวันที่ 0 ยังไม่ถึง (ส่งล้ม · ล้มก่อนได้จอง) ลองใหม่รอบนี้ — `claim()` ตัดสินเองว่าจองซ้ำได้ไหม
+  const retry = await unsentDayZero(setIds, new Set(org.people.map((p) => p.personId)), new Set(inserted.map((a) => a.id)), now);
   const titles = new Map(sets.map((s) => [s.id, s.title]));
   const results = await Promise.all(
-    inserted.map((a) =>
+    [...inserted, ...retry].map((a) =>
       sendToPerson(
         {
           dedupeKey: `assigned:${a.id}`,
@@ -172,6 +173,23 @@ export async function syncAssignments(input: { now?: Date; setId?: number } = {}
     ),
   );
   return { ok: true, assigned: inserted.length, notified: tally(results) };
+}
+
+/** การมอบที่ยังเปิด (ยังไม่ผ่าน · ยังไม่เลยกำหนด · คนยังอยู่ในผัง) ที่ข้อความวันที่ 0 ยังไม่ `sent`/`skipped` */
+async function unsentDayZero(setIds: number[], inOrg: Set<number>, skip: Set<number>, now: Date) {
+  const open = (
+    await db()
+      .select()
+      .from(assignments)
+      .where(and(inArray(assignments.setId, setIds), isNull(assignments.passedAt), gt(assignments.dueAt, now)))
+  ).filter((a) => !skip.has(a.id) && inOrg.has(a.personId));
+  if (!open.length) return [];
+  const done = await db()
+    .select({ key: notifications.dedupeKey })
+    .from(notifications)
+    .where(and(inArray(notifications.dedupeKey, open.map((a) => `assigned:${a.id}`)), inArray(notifications.status, ["sent", "skipped"])));
+  const doneKeys = new Set(done.map((d) => d.key));
+  return open.filter((a) => !doneKeys.has(`assigned:${a.id}`));
 }
 
 // ── เตือน ──────────────────────────────────────────────────────────────────
@@ -218,10 +236,13 @@ export async function runReminders(input: { now?: Date } = {}): Promise<Reminder
   const read = await db().selectDistinct({ id: readingProgress.assignmentId }).from(readingProgress).where(inArray(readingProgress.assignmentId, ids));
   const tried = await db().selectDistinct({ id: attempts.assignmentId }).from(attempts).where(inArray(attempts.assignmentId, ids));
   const started = new Set([...read, ...tried].map((r) => r.id));
-  const ageDays = (a: { assignedAt: Date }) => Math.floor((now.getTime() - a.assignedAt.getTime()) / DAY_MS);
+  // นับตามปฏิทินไทย ไม่ใช่รอบ 24 ชม. — มอบตอนบ่ายวันที่ 0 ต้องถูกเตือนตอนเช้าวันที่ 3 ไม่ใช่วันที่ 4
+  const ageDays = (a: { assignedAt: Date }) => ageInDays(a.assignedAt, now);
+  // กำหนดส่งสั้นกว่า 6 วัน: เตือนกลุ่มก่อนครบกำหนด 1 วันแทน ไม่อย่างนั้นหัวหน้าไม่เคยได้ยินก่อนเลยกำหนด
+  const day5At = (a: { assignedAt: Date; dueAt: Date }) => Math.max(1, Math.min(REMIND_DAY5, ageInDays(a.assignedAt, a.dueAt) - 1));
 
   const day3 = live.filter((r) => ageDays(r.a) >= REMIND_DAY3 && !started.has(r.a.id) && r.a.dueAt > now);
-  const day5 = live.filter((r) => ageDays(r.a) >= REMIND_DAY5 && r.a.dueAt > now);
+  const day5 = live.filter((r) => ageDays(r.a) >= day5At(r.a) && r.a.dueAt > now);
   const overdue = live.filter((r) => r.a.dueAt <= now);
 
   const day3Results = await Promise.all(
@@ -308,8 +329,33 @@ export async function notifyApprovalEvent(eventId: number): Promise<SendResult |
   const org = await fetchOrg();
   return sendToPerson(
     { dedupeKey: `approval:${e.id}`, kind: plan.kind, personId: plan.to, setId: set.id, text: plan.text },
-    org.ok ? org.people : [],
+    org.ok ? org.people : null,
   );
+}
+
+/**
+ * ส่งข้อความเรื่องการอนุมัติที่ล้มไปแล้วซ้ำ (เช่น WorkID/GateWay ล่มตอนกดส่ง) — รันใน cron เช้า
+ * `claim()` คุมเพดานจำนวนครั้งและกันส่งซ้ำ
+ */
+export async function retryApprovalNotices(): Promise<Record<SendResult, number>> {
+  const rows = await db()
+    .select({ key: notifications.dedupeKey })
+    .from(notifications)
+    .where(
+      and(
+        inArray(notifications.kind, ["approval_requested", "approval_returned", "approval_approved"]),
+        eq(notifications.status, "failed"),
+        lt(notifications.attempts, MAX_SEND_ATTEMPTS),
+      ),
+    );
+  const results: SendResult[] = [];
+  for (const r of rows) {
+    const eventId = Number(/^approval:(\d+)$/.exec(r.key)?.[1]);
+    if (!Number.isInteger(eventId)) continue;
+    const out = await notifyApprovalEvent(eventId);
+    if (out) results.push(out);
+  }
+  return tally(results);
 }
 
 // ── อ่าน ───────────────────────────────────────────────────────────────────

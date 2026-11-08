@@ -17,7 +17,7 @@ vi.mock("@/db", async () => {
   return { db: () => get(), schema: s };
 });
 
-const { setAudience, previewAudience, syncAssignments, runReminders, notifyApprovalEvent } = await import("@/lib/assignment-service");
+const { setAudience, previewAudience, syncAssignments, runReminders, notifyApprovalEvent, retryApprovalNotices } = await import("@/lib/assignment-service");
 
 const TEST_GROUP = `C${"e".repeat(32)}`;
 const TEAM_GROUP = `C${"a".repeat(32)}`;
@@ -142,6 +142,19 @@ describe("การมอบ", () => {
     expect((await assignmentRows()).map((r) => [r.personId, r.source])).toEqual([[40, "onboarding"]]);
   });
 
+  it("แจ้งวันที่ 0 ล้ม (GateWay ล่ม) → sync รอบถัดไปส่งใหม่ให้ · ส่งได้แล้วไม่ส่งซ้ำ", async () => {
+    const set = await activeSet();
+    await setAudience({ actor: pd, setId: set.id, rules: [{ kind: "position", refId: 41, label: "Sales" }] });
+    await activate(set.id);
+    vi.stubGlobal("fetch", async () => new Response("down", { status: 503 }));
+    expect(await syncAssignments({ now: MON })).toMatchObject({ assigned: 2, notified: { sent: 0, failed: 2 } });
+    stubGateway();
+    const next = new Date(MON.getTime() + DAY);
+    expect(await syncAssignments({ now: next })).toMatchObject({ assigned: 0, notified: { sent: 2 } });
+    expect(await syncAssignments({ now: next })).toMatchObject({ assigned: 0, notified: { sent: 0 } });
+    expect(pushes.filter((p) => p.text.includes("ชุดการเรียนรู้ใหม่"))).toHaveLength(2);
+  });
+
   it("ชุดร่างไม่ถูกมอบ · ถามผังไม่ได้ = ไม่มอบอะไร", async () => {
     const set = await activeSet();
     await setAudience({ actor: pd, setId: set.id, rules: [{ kind: "position", refId: 41, label: "Sales" }] });
@@ -169,6 +182,22 @@ describe("เตือนแบบไล่ระดับ (spec §11)", () => {
     await assignedDaysAgo(3);
     expect((await runReminders({ now: MON })).day3).toMatchObject({ sent: 2 });
     expect((await runReminders({ now: MON })).day3).toMatchObject({ sent: 0, duplicate: 2 });
+  });
+
+  it("นับวันตามปฏิทินไทย — มอบบ่ายศุกร์ เตือนวันที่ 3 เช้าจันทร์ ไม่ใช่อังคาร", async () => {
+    const set = await activeSet("ชุด", 7);
+    await setAudience({ actor: pd, setId: set.id, rules: [{ kind: "position", refId: 41, label: "Sales" }] });
+    await activate(set.id);
+    await syncAssignments({ now: new Date("2026-10-30T14:00:00+07:00") });
+    pushes = [];
+    expect((await runReminders({ now: new Date("2026-11-01T09:00:00+07:00") })).day3).toMatchObject({ sent: 0 });
+    expect((await runReminders({ now: MON })).day3).toMatchObject({ sent: 2 });
+  });
+
+  it("กำหนดส่งสั้น (5 วัน) → เตือนกลุ่มก่อนครบกำหนด 1 วัน ไม่ใช่ไม่เตือนเลย", async () => {
+    await assignedDaysAgo(3, 5);
+    expect((await runReminders({ now: MON })).day5).toMatchObject({ sent: 0 });
+    expect((await runReminders({ now: new Date(MON.getTime() + DAY) })).day5).toMatchObject({ sent: 2 });
   });
 
   it("วันที่ 3 แต่เริ่มอ่านแล้ว → ไม่เตือน", async () => {
@@ -238,5 +267,26 @@ describe("แจ้งเรื่องการอนุมัติ", () => {
     expect(pushes[0].text).toContain("ถึง ผจก.");
     expect(pushes[1].text).toContain("ถึง พีดี");
     expect(pushes[1].text).toContain("ราคาผิด");
+  });
+
+  it("ถามผังไม่ได้ตอนส่ง → บันทึก failed (ไม่ใช่ skipped) แล้ว cron เช้าส่งซ้ำให้", async () => {
+    const set = await activeSet();
+    await testDb().update(schema.learningSets).set({ approverPersonId: 20, approverName: "ผจก." }).where(eq(schema.learningSets.id, set.id));
+    const [sub] = await testDb()
+      .insert(schema.approvalEvents)
+      .values({ setId: set.id, action: "submitted", actorPersonId: 10, actorName: "พีดี" })
+      .returning();
+    vi.stubEnv("TEST_LINE_GROUP_ID", "");
+    vi.stubEnv("WORKTRAIN_DEV_ORG", "");
+    vi.stubEnv("WORKID_BASE_URL", "");
+    clearOrgCache();
+    expect(await notifyApprovalEvent(sub.id)).toBe("failed");
+
+    stubGateway();
+    vi.stubEnv("WORKTRAIN_DEV_ORG", JSON.stringify(ORG));
+    clearOrgCache();
+    expect(await retryApprovalNotices()).toMatchObject({ sent: 1 });
+    expect(pushes.at(-1)?.text).toContain("ส่งข้อสอบให้ตรวจ");
+    expect(await retryApprovalNotices()).toMatchObject({ sent: 0 });
   });
 });

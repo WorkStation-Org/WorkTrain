@@ -52,7 +52,9 @@ export const WORKID_EXCHANGE_TIMEOUT_MS = 10_000;
 
 const baseUrl = () => process.env.WORKID_BASE_URL?.replace(/\/+$/, "") ?? "";
 const apiKey = () => process.env.WORKID_API_KEY ?? "";
-const appKey = () => process.env.WORKID_APP_KEY ?? "ceo";
+// ค่าเริ่มต้นต้องเป็นแอปนี้เอง — เดิมติดมาเป็น "ceo" จาก WorkDaily: ลืมตั้ง env = ล็อกอินและถาม role ของแอปอื่น
+// (admin ของแอปนั้นจะกลายเป็น TG ของ WorkTrain)
+export const appKey = () => process.env.WORKID_APP_KEY?.trim() || "worktrain";
 
 /**
  * ยังไม่ตั้ง env = ยังไม่เปิดใช้ SSO · **ทุกอย่างต้องทำงานเหมือนเดิม ห้ามพัง**

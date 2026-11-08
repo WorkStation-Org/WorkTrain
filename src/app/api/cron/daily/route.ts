@@ -1,7 +1,7 @@
 import { errorSummary } from "@/lib/errmsg";
 import { reportHeartbeat } from "@/lib/gateway";
-import { runReminders, syncAssignments } from "@/lib/assignment-service";
-import { deleteExpiredScanImages } from "@/lib/identity-service";
+import { retryApprovalNotices, runReminders, syncAssignments } from "@/lib/assignment-service";
+import { deleteExpiredScanImages, deleteRetiredEnrollmentImages } from "@/lib/identity-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,9 +26,10 @@ export async function GET(req: Request) {
     const now = new Date();
     const sync = await syncAssignments({ now });
     const remind = await runReminders({ now });
-    const imagesDeleted = await deleteExpiredScanImages(now);
-    const failed = sync.notified.failed + remind.day3.failed + remind.day5.failed + remind.overdue.failed;
-    const sent = sync.notified.sent + remind.day3.sent + remind.day5.sent + remind.overdue.sent;
+    const approvals = await retryApprovalNotices();
+    const imagesDeleted = (await deleteExpiredScanImages(now)) + (await deleteRetiredEnrollmentImages());
+    const failed = sync.notified.failed + remind.day3.failed + remind.day5.failed + remind.overdue.failed + approvals.failed;
+    const sent = sync.notified.sent + remind.day3.sent + remind.day5.sent + remind.overdue.sent + approvals.sent;
     const healthy = sync.ok && remind.ok && failed === 0;
     await reportHeartbeat(HB_JOB, healthy, {
       ...HB,
@@ -36,8 +37,8 @@ export async function GET(req: Request) {
       failed,
       message: `assigned=${sync.assigned} sent=${sent} failed=${failed} imagesDeleted=${imagesDeleted}${sync.why ? ` sync=${sync.why}` : ""}${remind.why ? ` remind=${remind.why}` : ""}`,
     });
-    console.log(JSON.stringify({ msg: "cron_daily_done", sync, remind, imagesDeleted }));
-    return Response.json({ ok: healthy, sync, remind, imagesDeleted });
+    console.log(JSON.stringify({ msg: "cron_daily_done", sync, remind, approvals, imagesDeleted }));
+    return Response.json({ ok: healthy, sync, remind, approvals, imagesDeleted });
   } catch (err) {
     await reportHeartbeat(HB_JOB, false, { ...HB, message: errorSummary(err) });
     console.log(JSON.stringify({ msg: "cron_daily_failed", error: errorSummary(err) }));
