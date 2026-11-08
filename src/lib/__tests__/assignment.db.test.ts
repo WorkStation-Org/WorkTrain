@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { asc, eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
-import { defaultBlueprint } from "@/domain/blueprint";
+import { PRODUCT_BLUEPRINT } from "@/domain/blueprint";
 import type { Actor } from "@/lib/auth";
 import { clearOrgCache } from "@/lib/workid";
 
@@ -53,7 +53,7 @@ function stubGateway() {
 async function activeSet(title = "F331 Signature", dueDays = 7) {
   const [set] = await testDb()
     .insert(schema.learningSets)
-    .values({ title, kind: "product", authorPersonId: 10, authorName: "พีดี", blueprint: defaultBlueprint("product"), dueDays })
+    .values({ title, kindId: schema.SEEDED_KIND_IDS.product, authorPersonId: 10, authorName: "พีดี", blueprint: PRODUCT_BLUEPRINT, dueDays })
     .returning();
   return set;
 }

@@ -50,6 +50,20 @@
       "when": 1794111646852,
       "tag": "0006_deep_review_fixes",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794154105106,
+      "tag": "0007_set_kinds",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794154109685,
+      "tag": "0008_drop_set_kind_enum",
+      "breakpoints": true
     }
   ]
 }

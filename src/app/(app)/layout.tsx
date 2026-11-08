@@ -36,6 +36,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           ? [
               { href: "/admin/faces", label: "ตรวจภาพใบหน้า", icon: "shieldAlert" },
               { href: "/admin/onboarding", label: "เส้นทาง Onboarding", icon: "route" },
+              { href: "/admin/kinds", label: "ชนิดของชุด", icon: "grid" },
             ]
           : [],
     },

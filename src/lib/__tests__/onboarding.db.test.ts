@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
-import { defaultBlueprint } from "@/domain/blueprint";
+import { GENERAL_BLUEPRINT } from "@/domain/blueprint";
 import { consumerEntry, findConsumer, newConsumerKey, parseConsumers, requireConsumer } from "@/lib/api-consumers";
 import type { Actor } from "@/lib/auth";
 import { clearOrgCache } from "@/lib/workid";
@@ -34,7 +34,7 @@ const ORG = [
 async function newSet(title: string, status: schema.SetStatus = "active") {
   const [s] = await testDb()
     .insert(schema.learningSets)
-    .values({ title, kind: "general", authorPersonId: 10, authorName: "พีดี", blueprint: defaultBlueprint("general"), status, approvedAt: status === "active" ? new Date() : null })
+    .values({ title, kindId: schema.SEEDED_KIND_IDS.general, authorPersonId: 10, authorName: "พีดี", blueprint: GENERAL_BLUEPRINT, status, approvedAt: status === "active" ? new Date() : null })
     .returning();
   return s;
 }

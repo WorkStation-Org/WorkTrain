@@ -4,6 +4,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 import { sql } from "drizzle-orm";
 import * as schema from "@/db/schema";
+import { GENERAL_BLUEPRINT, PRODUCT_BLUEPRINT } from "@/domain/blueprint";
 
 /**
  * Postgres จริงในหน่วยความจำ (PGlite) สำหรับเทสต์ — ยกแนวทางมาจาก WorkService `tests/helpers/pgdb.ts`
@@ -65,4 +66,18 @@ export async function truncateAll(): Promise<void> {
   const rows = await db.execute<{ tablename: string }>(sql`select tablename from pg_tables where schemaname = 'public'`);
   const names = rows.rows.map((r) => `"${r.tablename}"`).join(", ");
   if (names) await db.execute(sql.raw(`truncate table ${names} restart identity cascade`));
+  await reseedKinds();
+}
+
+/**
+ * ใส่สองชนิดตั้งต้นกลับ (ที่ migration 0007 ใส่ไว้) หลังล้างตาราง — production มีแถวนี้เสมอ
+ * เทสต์ "ค่าใน migration ตรงกับค่าคงที่" อยู่ใน `kinds.db.test.ts`
+ */
+async function reseedKinds(): Promise<void> {
+  const db = testDb();
+  await db.insert(schema.setKinds).values([
+    { id: schema.SEEDED_KIND_IDS.product, name: "สินค้าใหม่ (PD)", blueprint: PRODUCT_BLUEPRINT, allowPricelist: true },
+    { id: schema.SEEDED_KIND_IDS.general, name: "ทั่วไป", blueprint: GENERAL_BLUEPRINT, allowPricelist: false },
+  ]);
+  await db.execute(sql`select setval(pg_get_serial_sequence('set_kinds', 'id'), 2)`);
 }

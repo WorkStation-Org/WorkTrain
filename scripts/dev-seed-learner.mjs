@@ -36,8 +36,8 @@ const blueprint = JSON.stringify([
   { topic: "general", level: "scenario", count: 2 },
 ]);
 const set = await one(
-  `insert into learning_sets (title, kind, status, author_person_id, author_name, blueprint, approved_at)
-   values ('ชุดทดลอง (dev seed)', 'general', 'active', 10, 'พีดี ผู้สร้าง', $1, now()) returning id`,
+  `insert into learning_sets (title, kind_id, status, author_person_id, author_name, blueprint, approved_at)
+   values ('ชุดทดลอง (dev seed)', 2, 'active', 10, 'พีดี ผู้สร้าง', $1, now()) returning id`,
   [blueprint],
 );
 const version = await one(

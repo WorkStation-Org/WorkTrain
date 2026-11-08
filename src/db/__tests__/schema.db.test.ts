@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { SEEDED_KIND_IDS } from "@/db/schema";
 import { sql } from "drizzle-orm";
 import { setupTestDb, testDb, truncateAll } from "./pgdb";
 import { errorSummary } from "@/lib/errmsg";
@@ -40,7 +41,7 @@ async function seedSet() {
   const db = testDb();
   const [set] = await db
     .insert(learningSets)
-    .values({ title: "F331 Signature", kind: "product", authorPersonId: 1, authorName: "PD", blueprint: BLUEPRINT })
+    .values({ title: "F331 Signature", kindId: SEEDED_KIND_IDS.product, authorPersonId: 1, authorName: "PD", blueprint: BLUEPRINT })
     .returning();
   const [version] = await db
     .insert(setVersions)

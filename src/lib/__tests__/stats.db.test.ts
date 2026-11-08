@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
-import { defaultBlueprint } from "@/domain/blueprint";
+import { PRODUCT_BLUEPRINT } from "@/domain/blueprint";
 import { clearOrgCache } from "@/lib/workid";
 
 /**
@@ -34,7 +34,7 @@ let scanId = 0;
 async function seed() {
   const [set] = await testDb()
     .insert(schema.learningSets)
-    .values({ title: "F331", kind: "product", authorPersonId: 10, authorName: "พีดี", approverPersonId: 20, blueprint: defaultBlueprint("product"), status: "active", approvedAt: at("2026-11-01T09:00:00") })
+    .values({ title: "F331", kindId: schema.SEEDED_KIND_IDS.product, authorPersonId: 10, authorName: "พีดี", approverPersonId: 20, blueprint: PRODUCT_BLUEPRINT, status: "active", approvedAt: at("2026-11-01T09:00:00") })
     .returning();
   const [v] = await testDb().insert(schema.setVersions).values({ setId: set.id, versionNo: 1, changeKind: "initial", createdByPersonId: 10 }).returning();
   const [f] = await testDb().insert(schema.examForms).values({ versionId: v.id, kind: "full", formNo: 1 }).returning();

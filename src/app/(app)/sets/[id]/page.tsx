@@ -1,9 +1,9 @@
 import { notFound } from "next/navigation";
 import { Badge, Button, Card, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle, SELECT_CLASS } from "@/components/ui";
 import { audienceOptions } from "@/domain/audience";
-import { LEVEL_LABELS, TOPIC_LABELS } from "@/domain/blueprint";
+import { LEVEL_LABELS, topicLabel } from "@/domain/blueprint";
 import { aiReadable } from "@/domain/document";
-import type { Level, Topic } from "@/db/schema";
+import type { Level } from "@/db/schema";
 import { assignmentStatus, audienceRulesOf, previewAudience, type AssignmentState } from "@/lib/assignment-service";
 import { examEditor } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
@@ -76,7 +76,7 @@ export default async function SetPage({
       <PageHeader
         kicker="Learning set"
         title={set.title}
-        subtitle={`${set.kind === "product" ? "สินค้าใหม่ (PD)" : "ทั่วไป"} · ผู้สร้าง ${set.authorName} · ผู้อนุมัติ ${set.approverName ?? "ยังไม่ได้เลือก"}`}
+        subtitle={`${detail.kind.name} · ผู้สร้าง ${set.authorName} · ผู้อนุมัติ ${set.approverName ?? "ยังไม่ได้เลือก"}`}
         actions={
           <>
             <Badge tone={STATUS[set.status].tone} label={STATUS[set.status].label} />
@@ -160,7 +160,7 @@ export default async function SetPage({
             ))}
           </ul>
         )}
-        {docsEditable && <UploadForm setId={set.id} allowPricelist={set.kind === "product"} />}
+        {docsEditable && <UploadForm setId={set.id} allowPricelist={detail.kind.allowPricelist} />}
       </Card>
 
       <Card>
@@ -298,7 +298,7 @@ function QuestionItem({ setId, q, no, canEdit }: { setId: number; q: QuestionVie
   return (
     <li className="px-4 py-3 text-[13px]">
       <p className="mb-1 text-[11px] text-ink-3">
-        {TOPIC_LABELS[q.topic as Topic]} · {LEVEL_LABELS[q.level as Level]} · ที่มา {q.sourceRef}
+        {topicLabel(q.topic)} · {LEVEL_LABELS[q.level as Level]} · ที่มา {q.sourceRef}
       </p>
       <p className="font-medium text-ink">
         {no}. {q.text}

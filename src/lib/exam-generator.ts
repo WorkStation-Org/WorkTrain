@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
-import { LEVELS, TOPICS, type Level, type Topic } from "@/db/schema";
-import { LEVEL_LABELS, TOPIC_LABELS, slots, type Blueprint } from "@/domain/blueprint";
+import { LEVELS, type Level, type Topic } from "@/db/schema";
+import { LEVEL_LABELS, slots, topicLabel, topicsOf, type Blueprint } from "@/domain/blueprint";
 import { errorSummary } from "@/lib/errmsg";
 
 /**
@@ -10,6 +10,7 @@ import { errorSummary } from "@/lib/errmsg";
  * โค้ดอื่นคุยกับ `ExamModel` · เทสต์แทนด้วยตัวปลอมที่ขอบนี้
  *
  * ★ ออก 5 ชุดในคำขอเดียว ไม่ใช่ 5 คำขอ — ให้ AI เห็นทุกชุดพร้อมกันจึงไม่ซ้ำข้ามชุด และจบในเวลาเดียวของ function
+ * ★ หัวข้อเป็นข้อความที่ TG ตั้ง (ADR-0011) — ส่งให้ AI เป็นรหัสสั้น `T1` `T2` … แล้วแปลงกลับ ไม่ให้ AI พิมพ์ชื่อหัวข้อซ้ำเอง
  * ★ ผลของ AI ไม่ถูกเชื่อตรง ๆ: ตรวจช่องหัวข้อ×ระดับครบตาม blueprint · 4 ตัวเลือกไม่ซ้ำ · มีที่มา (`checkForms`)
  *   แล้วผู้อนุมัติตรวจทุกข้ออีกชั้น (ADR-0004)
  */
@@ -17,7 +18,7 @@ import { errorSummary } from "@/lib/errmsg";
 export const EXAM_MODEL_ID = "claude-opus-5-5";
 
 const QuestionSchema = z.object({
-  topic: z.enum(TOPICS),
+  topic: z.string(),
   level: z.enum(LEVELS),
   text: z.string(),
   choices: z.array(z.string()),
@@ -88,9 +89,17 @@ export interface ExamModel {
 
 type RawQuestion = z.infer<typeof QuestionSchema>;
 
-function toQuestion(q: RawQuestion): GeneratedQuestion {
+/** รหัสหัวข้อที่ส่งให้ AI ↔ หัวข้อจริง */
+export function topicCodes(topics: readonly Topic[]): { code: (t: Topic) => string; decode: (code: string) => Topic } {
+  const codes = new Map(topics.map((t, i) => [t, `T${i + 1}`]));
+  const back = new Map([...codes].map(([t, c]) => [c, t]));
+  // รหัสที่ไม่รู้จักคืนค่าเดิม — `checkForms` ปฏิเสธเองเพราะไม่ตรงช่อง
+  return { code: (t) => codes.get(t) ?? t, decode: (c) => back.get(c.trim()) ?? c };
+}
+
+function toQuestion(q: RawQuestion, decode: (code: string) => Topic): GeneratedQuestion {
   return {
-    topic: q.topic,
+    topic: decode(q.topic),
     level: q.level,
     text: q.text.trim(),
     choices: q.choices.map((c) => c.trim()),
@@ -136,19 +145,20 @@ export function checkForms(forms: GeneratedQuestion[][], blueprint: Blueprint, f
 // ── Claude ──────────────────────────────────────────────────────────────────
 
 const SYSTEM = `คุณออกข้อสอบปรนัยภาษาไทยให้พนักงานบริษัทเฟอร์นิเจอร์สำนักงาน Work Station
-เพื่อวัดว่าเข้าใจเอกสารสินค้าหรือเอกสารการขายที่แนบมาจริง ไม่ใช่แค่ท่องจำ
+เพื่อวัดว่าเข้าใจเอกสารที่แนบมาจริง ไม่ใช่แค่ท่องจำ — เอกสารอาจเป็นเรื่องสินค้า การขาย ขั้นตอนงาน นโยบาย หรือเรื่องอื่นของบริษัท
 
 กติกา:
 - ทุกข้อต้องตอบได้จากเอกสารที่แนบเท่านั้น และต้องระบุที่มาใน source_ref ให้คนตรวจตามไปเปิดดูได้ เช่น "Signature.pdf หน้า 5"
-- 4 ตัวเลือก ถูกข้อเดียว ตัวเลือกผิดต้องฟังดูเป็นไปได้ (เช่น ขนาดหรือราคาของรุ่นอื่นในเอกสารเดียวกัน) ไม่ใช่ผิดชัดจนเดาได้
-- ตัวเลข ราคา ขนาด รหัสสินค้า ต้องตรงกับเอกสารทุกตัวอักษร
-- ระดับ "จำ" = ถามข้อเท็จจริงในเอกสาร · "เข้าใจ" = เปรียบเทียบหรืออธิบายเหตุผล · "สถานการณ์" = ลูกค้าต้องการแบบนี้ ควรเสนออะไร
+- 4 ตัวเลือก ถูกข้อเดียว ตัวเลือกผิดต้องฟังดูเป็นไปได้ (เช่น ค่าหรือขั้นตอนของเรื่องอื่นในเอกสารเดียวกัน) ไม่ใช่ผิดชัดจนเดาได้
+- ตัวเลข ราคา ขนาด รหัส ชื่อเฉพาะ ต้องตรงกับเอกสารทุกตัวอักษร
+- ระดับ "จำ" = ถามข้อเท็จจริงในเอกสาร · "เข้าใจ" = เปรียบเทียบหรืออธิบายเหตุผล · "สถานการณ์" = เจอเหตุการณ์ในงานจริงแบบนี้ ควรทำหรือเสนออะไร (เช่น ลูกค้าต้องการแบบนี้ ควรเสนออะไร)
+- ช่อง topic ใส่รหัสหัวข้อตามที่สั่ง (เช่น "T1") ไม่ใช่ชื่อหัวข้อ
 - ห้ามใช้ "ถูกทุกข้อ" หรือ "ไม่มีข้อใดถูก" และอย่าให้ตัวเลือกที่ถูกยาวกว่าตัวอื่นอย่างเห็นได้ชัด
 - กระจายตำแหน่งเฉลยให้ไม่ซ้ำรูปแบบ`;
 
-function slotLines(blueprint: Blueprint): string {
+function slotLines(blueprint: Blueprint, code: (t: Topic) => string): string {
   return blueprint
-    .map((c) => `- ${TOPIC_LABELS[c.topic]} (topic="${c.topic}") ระดับ${LEVEL_LABELS[c.level]} (level="${c.level}"): ${c.count} ข้อ`)
+    .map((c) => `- หัวข้อ "${topicLabel(c.topic)}" (topic="${code(c.topic)}") ระดับ${LEVEL_LABELS[c.level]} (level="${c.level}"): ${c.count} ข้อ`)
     .join("\n");
 }
 
@@ -180,6 +190,7 @@ export function claudeExamModel(client?: Anthropic): ExamModel | null {
 
   return {
     async generateForms(input) {
+      const topics = topicCodes(topicsOf(input.blueprint));
       try {
         const stream = c.beta.messages.stream({
           model: EXAM_MODEL_ID,
@@ -198,9 +209,9 @@ export function claudeExamModel(client?: Anthropic): ExamModel | null {
                   text: `ชุดการเรียนรู้: ${input.setTitle}
 
 ออกข้อสอบ ${input.formCount} ชุด ชุดละ ${slots(input.blueprint).length} ข้อ ทุกชุดใช้สัดส่วนเดียวกันนี้:
-${slotLines(input.blueprint)}
+${slotLines(input.blueprint, topics.code)}
 
-คำถามห้ามซ้ำกันทั้งภายในชุดและข้ามชุด · แต่ละชุดควรครอบคลุมรุ่น/หัวข้อต่างกันในเอกสาร${
+คำถามห้ามซ้ำกันทั้งภายในชุดและข้ามชุด · แต่ละชุดควรครอบคลุมส่วนต่าง ๆ ของเอกสารไม่ซ้ำกัน${
                     input.focus
                       ? `
 
@@ -217,13 +228,14 @@ ${input.focus}`
         const refused = refusalMessage(msg.stop_reason);
         if (refused) return { ok: false, error: refused };
         if (!msg.parsed_output) return { ok: false, error: "อ่านผลของ AI ไม่ได้" };
-        return { ok: true, value: msg.parsed_output.forms.map((f) => f.questions.map(toQuestion)) };
+        return { ok: true, value: msg.parsed_output.forms.map((f) => f.questions.map((q) => toQuestion(q, topics.decode))) };
       } catch (err) {
         return { ok: false, error: apiError(err) };
       }
     },
 
     async regenerateQuestion(input) {
+      const topics = topicCodes([input.topic]);
       try {
         const msg = await c.beta.messages.parse({
           model: EXAM_MODEL_ID,
@@ -242,7 +254,7 @@ ${input.focus}`
                   text: `ชุดการเรียนรู้: ${input.setTitle}
 
 ออกข้อสอบใหม่ 1 ข้อ แทนข้อนี้: "${input.replacing}"
-หัวข้อ ${TOPIC_LABELS[input.topic]} (topic="${input.topic}") ระดับ${LEVEL_LABELS[input.level]} (level="${input.level}")
+หัวข้อ "${topicLabel(input.topic)}" (topic="${topics.code(input.topic)}") ระดับ${LEVEL_LABELS[input.level]} (level="${input.level}")
 ห้ามซ้ำกับข้อเดิมและข้อเหล่านี้:
 ${input.avoid.map((t) => `- ${t}`).join("\n")}`,
                 },
@@ -253,7 +265,7 @@ ${input.avoid.map((t) => `- ${t}`).join("\n")}`,
         const refused = refusalMessage(msg.stop_reason);
         if (refused) return { ok: false, error: refused };
         if (!msg.parsed_output) return { ok: false, error: "อ่านผลของ AI ไม่ได้" };
-        return { ok: true, value: toQuestion(msg.parsed_output.question) };
+        return { ok: true, value: toQuestion(msg.parsed_output.question, topics.decode) };
       } catch (err) {
         return { ok: false, error: apiError(err) };
       }

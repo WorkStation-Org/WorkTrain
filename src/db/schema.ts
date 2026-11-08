@@ -31,9 +31,32 @@ const ts = (name: string) => timestamp(name, { withTimezone: true });
 
 // ── ชุดการเรียนรู้ ───────────────────────────────────────────────────────────
 
-/** ชนิดของชุด — สินค้า (PD · มีแคตตาล็อก + Pricelist) หรือทั่วไป */
-export const SET_KINDS = ["product", "general"] as const;
-export type SetKind = (typeof SET_KINDS)[number];
+/**
+ * ชนิดของชุด — ทะเบียนที่ TG ดูแลที่ `/admin/kinds` (ADR-0011)
+ * แต่ละชนิดมีแม่แบบข้อสอบของตัวเอง — ชุดที่สร้าง**คัดลอก**แม่แบบไปเก็บใน `learning_sets.blueprint`
+ * แก้แม่แบบของชนิดทีหลังจึงมีผลกับชุดที่สร้างใหม่เท่านั้น · ปิดชนิด = สร้างชุดใหม่ด้วยชนิดนี้ไม่ได้ ชุดเดิมไม่กระทบ
+ *
+ * ★ ไม่มีการลบ — ชุดอ้างชนิดตลอดไป
+ * ★ แถว id 1 / 2 คือสองชนิดเดิมก่อนมีทะเบียน (migration 0007) — `SEEDED_KIND_IDS`
+ */
+export const setKinds = pgTable(
+  "set_kinds",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    /** สัดส่วนหัวข้อ × ระดับของ 10 ข้อ — `[{ topic, level, count }]` (spec §3) */
+    blueprint: jsonb("blueprint").notNull(),
+    /** แนบ Pricelist (ดูอย่างเดียว · ประทับลายน้ำ · ADR-0010) ได้ไหม */
+    allowPricelist: boolean("allow_pricelist").notNull().default(false),
+    active: boolean("active").notNull().default(true),
+    createdAt: ts("created_at").notNull().defaultNow(),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("set_kinds_name_uniq").on(sql`lower(${t.name})`)],
+);
+
+/** สองชนิดที่ migration 0007 ย้ายมาจาก enum เดิม (`product` · `general`) */
+export const SEEDED_KIND_IDS = { product: 1, general: 2 } as const;
 
 /** สถานะของชุด (spec §2) — ตีกลับ = กลับไป `draft` พร้อมเหตุการณ์ใน `approval_events` */
 export const SET_STATUSES = ["draft", "pending_approval", "active", "closed"] as const;
@@ -49,7 +72,9 @@ export const learningSets = pgTable(
   {
     id: serial("id").primaryKey(),
     title: text("title").notNull(),
-    kind: text("kind", { enum: SET_KINDS }).notNull(),
+    kindId: integer("kind_id")
+      .notNull()
+      .references(() => setKinds.id),
     status: text("status", { enum: SET_STATUSES }).notNull().default("draft"),
     authorPersonId: integer("author_person_id").notNull(),
     authorName: text("author_name").notNull(),
@@ -73,6 +98,7 @@ export const learningSets = pgTable(
     check("learning_sets_exam_minutes", sql`${t.examMinutes} between 1 and 120`),
     check("learning_sets_pass_percent", sql`${t.passPercent} between 1 and 100`),
     check("learning_sets_active_has_approval", sql`${t.status} <> 'active' or ${t.approvedAt} is not null`),
+    index("learning_sets_kind_idx").on(t.kindId),
     index("learning_sets_author_idx").on(t.authorPersonId),
     index("learning_sets_approver_idx").on(t.approverPersonId),
   ],
@@ -164,9 +190,11 @@ export const examForms = pgTable(
   ],
 );
 
-/** หัวข้อของข้อสอบ — ตามแม่แบบ "สินค้าใหม่ (PD)" · `general` = แม่แบบทั่วไป (spec §3) */
-export const TOPICS = ["spec", "price", "material", "pairing", "general"] as const;
-export type Topic = (typeof TOPICS)[number];
+/**
+ * หัวข้อของข้อสอบ — ข้อความที่ TG ตั้งในแม่แบบของชนิด (ADR-0011)
+ * ข้อสอบก่อนมีทะเบียนชนิดใช้รหัสเดิม (`spec` · `price` · `material` · `pairing` · `general`) — แสดงด้วย `topicLabel()`
+ */
+export type Topic = string;
 
 /** ระดับ — จำ 4 · เข้าใจ 4 · สถานการณ์ 2 (spec §3) */
 export const LEVELS = ["recall", "understand", "scenario"] as const;
@@ -183,7 +211,7 @@ export const questions = pgTable(
       .notNull()
       .references(() => examForms.id, { onDelete: "cascade" }),
     sortOrder: smallint("sort_order").notNull(),
-    topic: text("topic", { enum: TOPICS }).notNull(),
+    topic: text("topic").notNull(),
     level: text("level", { enum: LEVELS }).notNull(),
     text: text("text").notNull(),
     /** ที่มาในเอกสาร เช่น "แคตตาล็อก หน้า 5" หรือ "Pricelist แถว 12 คอลัมน์ราคา" — AI ต้องระบุทุกข้อ */

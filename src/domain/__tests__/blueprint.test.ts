@@ -3,9 +3,11 @@ import {
   GENERAL_BLUEPRINT,
   PRODUCT_BLUEPRINT,
   QUESTIONS_PER_FORM,
+  TOPIC_MAX,
   checkBlueprint,
-  defaultBlueprint,
   slots,
+  topicLabel,
+  topicsOf,
   type Blueprint,
 } from "@/domain/blueprint";
 
@@ -37,12 +39,6 @@ describe("แม่แบบตาม spec §3", () => {
       expect(slots(b)).toHaveLength(QUESTIONS_PER_FORM);
     }
   });
-
-  it("defaultBlueprint คืนสำเนา — แก้แล้วแม่แบบไม่เปลี่ยน", () => {
-    const b = defaultBlueprint("product");
-    b[0].count = 99;
-    expect(PRODUCT_BLUEPRINT[0].count).toBe(2);
-  });
 });
 
 describe("checkBlueprint", () => {
@@ -66,10 +62,42 @@ describe("checkBlueprint", () => {
     expect(checkBlueprint([{ topic: "general", level: "recall", count: 9 }])).toEqual({ ok: false, error: "รวมต้องได้ 10 ข้อ (ตอนนี้ 9)" });
   });
 
+  it("หัวข้อเป็นข้อความที่ TG ตั้ง — ตัดช่องว่างเกิน แล้วรวมแถวที่ชื่อเดียวกัน (ADR-0011)", () => {
+    expect(
+      checkBlueprint([
+        { topic: "  กฎความปลอดภัย  ", level: "recall", count: 4 },
+        { topic: "กฎความปลอดภัย", level: "recall", count: 2 },
+        { topic: "อุปกรณ์   ป้องกัน", level: "scenario", count: 4 },
+      ]),
+    ).toEqual({
+      ok: true,
+      blueprint: [
+        { topic: "กฎความปลอดภัย", level: "recall", count: 6 },
+        { topic: "อุปกรณ์ ป้องกัน", level: "scenario", count: 4 },
+      ],
+    });
+  });
+
   it("หัวข้อ/ระดับ/จำนวนผิด → ปฏิเสธ", () => {
-    expect(checkBlueprint([{ topic: "x", level: "recall", count: 10 }]).ok).toBe(false);
+    expect(checkBlueprint([{ topic: "   ", level: "recall", count: 10 }])).toEqual({ ok: false, error: "ตั้งชื่อหัวข้อให้ครบทุกแถว" });
+    // แถวว่างที่ยังไม่ได้กรอก (0 ข้อ) ไม่ต้องมีชื่อ
+    expect(checkBlueprint([{ topic: "", level: "recall", count: 0 }, { topic: "a", level: "recall", count: 10 }]).ok).toBe(true);
+    expect(checkBlueprint([{ topic: 5, level: "recall", count: 10 }]).ok).toBe(false);
+    expect(checkBlueprint([{ topic: "ก".repeat(TOPIC_MAX + 1), level: "recall", count: 10 }]).ok).toBe(false);
     expect(checkBlueprint([{ topic: "spec", level: "hard", count: 10 }]).ok).toBe(false);
     expect(checkBlueprint([{ topic: "spec", level: "recall", count: 2.5 }]).ok).toBe(false);
     expect(checkBlueprint("10").ok).toBe(false);
+  });
+});
+
+describe("topicLabel · topicsOf", () => {
+  it("รหัสหัวข้อเดิมแสดงชื่อเดิม · หัวข้อที่ TG ตั้งแสดงตามที่ตั้ง", () => {
+    expect(topicLabel("price")).toBe("ราคา / เงื่อนไขการขาย");
+    expect(topicLabel("general")).toBe("ทั่วไป");
+    expect(topicLabel("กฎความปลอดภัย")).toBe("กฎความปลอดภัย");
+  });
+
+  it("หัวข้อไม่ซ้ำ ตามลำดับที่ปรากฏ", () => {
+    expect(topicsOf(PRODUCT_BLUEPRINT)).toEqual(["spec", "price", "material", "pairing"]);
   });
 });

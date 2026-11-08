@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Badge, Button, Card, EmptyState, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SELECT_CLASS } from "@/components/ui";
 import { firstParam, pageActor } from "@/lib/page";
+import { activeKinds, listKinds } from "@/lib/kind-service";
 import { listManagedSets } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { createSetAction } from "./actions";
@@ -14,6 +15,8 @@ export default async function SetsPage({ searchParams }: { searchParams: Promise
   const sp = await searchParams;
   const sets = await listManagedSets(actor);
   const canCreate = actor.role === "admin" || actor.role === "author";
+  const kinds = canCreate ? await activeKinds() : [];
+  const kindNames = new Map((await listKinds()).map((k) => [k.id, k.name]));
 
   return (
     <main className="mx-auto w-full max-w-4xl">
@@ -25,13 +28,16 @@ export default async function SetsPage({ searchParams }: { searchParams: Promise
           <form action={createSetAction} className="flex flex-wrap items-end gap-3">
             <label className="min-w-60 flex-1">
               <span className={FIELD_LABEL_CLASS}>ชื่อชุด</span>
-              <input name="title" required maxLength={200} placeholder="เช่น F331 Signature Collection" className={INPUT_CLASS} />
+              <input name="title" required maxLength={200} placeholder="เช่น ขั้นตอนเบิกของ · F331 Signature Collection" className={INPUT_CLASS} />
             </label>
             <label>
               <span className={FIELD_LABEL_CLASS}>ชนิด</span>
-              <select name="kind" className={SELECT_CLASS} defaultValue="product">
-                <option value="product">สินค้าใหม่ (PD)</option>
-                <option value="general">ทั่วไป</option>
+              <select name="kindId" required className={SELECT_CLASS} defaultValue={kinds[0]?.id ?? ""}>
+                {kinds.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.name}
+                  </option>
+                ))}
               </select>
             </label>
             <Button type="submit" variant="primary">
@@ -54,7 +60,7 @@ export default async function SetsPage({ searchParams }: { searchParams: Promise
                     <Badge tone={STATUS[s.status].tone} label={STATUS[s.status].label} />
                   </div>
                   <p className="mt-1 text-[12px] text-ink-3">
-                    ผู้สร้าง {s.authorName} · ผู้อนุมัติ {s.approverName ?? "ยังไม่ได้เลือก"} · แก้ล่าสุด {formatBangkok(s.updatedAt)}
+                    {kindNames.get(s.kindId)} · ผู้สร้าง {s.authorName} · ผู้อนุมัติ {s.approverName ?? "ยังไม่ได้เลือก"} · แก้ล่าสุด {formatBangkok(s.updatedAt)}
                   </p>
                 </Card>
               </Link>
