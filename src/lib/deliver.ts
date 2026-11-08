@@ -132,12 +132,14 @@ export async function sendToGroup(m: Target & { lineGroupId: string | null }): P
  * ★ ส่งไม่ได้เพราะการตั้งค่า = `skipped` พร้อมเหตุผล ไม่ใช่ `failed` (ไม่ต้องลองซ้ำ)
  * ★ `TEST_LINE_GROUP_ID` ตั้งอยู่ = ข้อความตัวต่อตัวก็ไปกลุ่ม Test พร้อมบอกว่าจะถึงใคร
  */
-export async function sendToPerson(m: Target & { personId: number }, people: readonly OrgPerson[]): Promise<SendResult> {
+export async function sendToPerson(m: Target & { personId: number }, people: readonly OrgPerson[] | null): Promise<SendResult> {
   const testGroup = testGroupOverride();
   const finish = await claim({ ...m, lineGroupId: testGroup });
   if (!finish) return "duplicate";
+  // ถามผังไม่ได้ ≠ ไม่มีคนนี้ในผัง — ต้องเป็น `failed` (ลองใหม่ได้) ไม่ใช่ `skipped` (ทิ้งถาวร)
+  if (!people && !testGroup) return finish("failed", [], "ดึงผังองค์กรจาก WorkID ไม่ได้");
 
-  const person = people.find((p) => p.personId === m.personId);
+  const person = people?.find((p) => p.personId === m.personId);
   try {
     if (testGroup) {
       const to = person?.name ?? `personId ${m.personId}`;

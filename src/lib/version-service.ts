@@ -226,7 +226,8 @@ export async function notifyNewVersion(versionId: number): Promise<Record<SendRe
           assignmentId: a.id,
           text: `🔄 ${row.title} มีเวอร์ชันใหม่${row.v.label ? ` (${row.v.label})` : ""} — ${what}\n${appUrl(`/learn/${a.id}`)}`,
         },
-        org.ok ? org.people : [],
+        // ถามผังไม่ได้ = `failed` ไม่ใช่ `skipped` (ทิ้งถาวร)
+        org.ok ? org.people : null,
       ),
     ),
   );

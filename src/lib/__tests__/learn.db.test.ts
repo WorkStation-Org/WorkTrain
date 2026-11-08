@@ -285,4 +285,18 @@ describe("การสอบ (spec §10)", () => {
     expect((await L.learnView(ME, a.id, sec(70)))?.state).toBe("ready");
     expect((await startExam(a.id, sec(70))).ok).toBe(true);
   });
+
+  it("อ่านใหม่แล้วเริ่มนับใหม่ — ไม่ผ่านครั้งเดียวหลังอ่านใหม่ยังสอบต่อได้ · ไม่ผ่านอีก 2 ครั้งติดจึงอ่านใหม่อีกรอบ", async () => {
+    const { a, docs } = await seed();
+    await startSession(T0);
+    await readAll(a.id, docs, sec(5));
+    for (const t of [10, 30]) await answerAll(((await startExam(a.id, sec(t))) as { attemptId: number }).attemptId, 3, sec(t + 10));
+    await startSession(sec(60));
+    await readAll(a.id, docs, sec(65));
+
+    await answerAll(((await startExam(a.id, sec(70))) as { attemptId: number }).attemptId, 3, sec(80));
+    expect((await L.learnView(ME, a.id, sec(90)))?.state).toBe("ready");
+    await answerAll(((await startExam(a.id, sec(90))) as { attemptId: number }).attemptId, 3, sec(100));
+    expect((await L.learnView(ME, a.id, sec(110)))?.state).toBe("relearn");
+  });
 });

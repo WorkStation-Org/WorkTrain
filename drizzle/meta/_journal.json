@@ -43,6 +43,13 @@
       "when": 1793536903317,
       "tag": "0005_version_submitted",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794111646852,
+      "tag": "0006_deep_review_fixes",
+      "breakpoints": true
     }
   ]
 }

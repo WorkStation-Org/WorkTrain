@@ -427,6 +427,7 @@ export async function startAttempt(input: {
       formId,
       kind,
       scanId: input.scanId,
+      readRound: mine.a.readRound,
       layout,
       startedAt: now,
       deadlineAt: new Date(now.getTime() + mine.set.examMinutes * 60 * 1000),
@@ -475,10 +476,11 @@ async function finalize(t: AttemptRow, reason: "submitted" | "timeout" | "left_p
     if (!a.a.passedAt) await db().update(assignments).set({ passedAt: now }).where(eq(assignments.id, a.a.id));
     return;
   }
+  // นับเฉพาะครั้งในรอบอ่านเดียวกัน — อ่านใหม่ครบแล้วเริ่มนับ "2 ครั้งติด" ใหม่ (spec §10)
   const history = await db()
     .select({ passed: attempts.passed })
     .from(attempts)
-    .where(and(eq(attempts.assignmentId, a.a.id), eq(attempts.kind, "full")))
+    .where(and(eq(attempts.assignmentId, a.a.id), eq(attempts.kind, "full"), eq(attempts.readRound, t.readRound)))
     .orderBy(asc(attempts.startedAt));
   if (needsRelearn(history.flatMap((h) => (h.passed === null ? [] : [h.passed])))) {
     await db()
