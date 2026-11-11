@@ -23,8 +23,8 @@ function req(key: string | null) {
   return new Request("https://wt.test/api/v1/x", { headers: key ? { authorization: `Bearer ${key}` } : {} });
 }
 
-async function issue(name = "workhr", note?: string): Promise<{ id: number; key: string }> {
-  const out = await K.createApiKey({ actor: tg, name, note });
+async function issue(name = "workhr", note?: string, label = "WorkHR — production"): Promise<{ id: number; key: string }> {
+  const out = await K.createApiKey({ actor: tg, name, label, note });
   if (!out.ok) throw new Error(out.error);
   return out;
 }
@@ -34,13 +34,26 @@ beforeEach(truncateAll);
 afterEach(() => vi.restoreAllMocks());
 
 describe("ออก key", () => {
-  it("เฉพาะ TG · ชื่อผิดรูปไม่ได้ · ชื่อพิมพ์ใหญ่กลายเป็นตัวเล็ก", async () => {
-    expect(await K.createApiKey({ actor: pd, name: "workhr" })).toEqual({ ok: false, error: "เฉพาะ TG" });
-    for (const bad of ["", "w", "1hr", "work hr", "work_hr", "ข้อมูล", "a".repeat(41)]) {
-      expect((await K.createApiKey({ actor: tg, name: bad })).ok).toBe(false);
+  it("ต้องตั้งชื่อ key · ภาษาไทยได้ · ไม่เกิน 60 ตัว · ช่องว่างซ้อนยุบเหลือหนึ่ง", async () => {
+    for (const bad of ["", "   ", "ก".repeat(K.LABEL_MAX + 1)]) {
+      expect((await K.createApiKey({ actor: tg, name: "workhr", label: bad })).ok).toBe(false);
     }
-    expect((await K.createApiKey({ actor: tg, name: "x", note: "ก".repeat(K.NOTE_MAX + 1) })).ok).toBe(false);
-    const out = await K.createApiKey({ actor: tg, name: "  WorkHR " });
+    await issue("workhr", undefined, "  WorkHR   ระบบจริง ");
+    expect((await K.listApiKeys()).map((k) => k.label)).toEqual(["WorkHR ระบบจริง"]);
+  });
+
+  it("ฐานไม่รับชื่อ key ว่าง", async () => {
+    const row = { name: "workhr", keyHash: "a".repeat(64), keyHint: "aaaa", createdByPersonId: 1, createdByName: "ทีจี" };
+    await expect(testDb().insert(schema.apiConsumers).values({ ...row, label: "  " })).rejects.toThrow();
+  });
+
+  it("เฉพาะ TG · ชื่อผิดรูปไม่ได้ · ชื่อพิมพ์ใหญ่กลายเป็นตัวเล็ก", async () => {
+    expect(await K.createApiKey({ actor: pd, name: "workhr", label: "WorkHR" })).toEqual({ ok: false, error: "เฉพาะ TG" });
+    for (const bad of ["", "w", "1hr", "work hr", "work_hr", "ข้อมูล", "a".repeat(41)]) {
+      expect((await K.createApiKey({ actor: tg, name: bad, label: "WorkHR" })).ok).toBe(false);
+    }
+    expect((await K.createApiKey({ actor: tg, name: "workhr", label: "WorkHR", note: "ก".repeat(K.NOTE_MAX + 1) })).ok).toBe(false);
+    const out = await K.createApiKey({ actor: tg, name: "  WorkHR ", label: "WorkHR" });
     expect(out.ok).toBe(true);
     expect((await K.listApiKeys()).map((k) => k.name)).toEqual(["workhr"]);
   });
@@ -104,7 +117,7 @@ describe("ด่านของ /api/v1", () => {
   });
 
   it("ฐานปฏิเสธชื่อ / hash / scope ผิดรูป", async () => {
-    const base = { keyHint: "abcd", createdByPersonId: 1, createdByName: "ทีจี" };
+    const base = { label: "WorkHR", keyHint: "abcd", createdByPersonId: 1, createdByName: "ทีจี" };
     await expect(testDb().insert(schema.apiConsumers).values({ ...base, name: "Bad Name", keyHash: "a".repeat(64) })).rejects.toThrow();
     await expect(testDb().insert(schema.apiConsumers).values({ ...base, name: "ok", keyHash: "zz" })).rejects.toThrow();
     await expect(testDb().insert(schema.apiConsumers).values({ ...base, name: "ok", keyHash: "b".repeat(64), scopes: ["write"] })).rejects.toThrow();

@@ -1,5 +1,5 @@
 import { Badge, buttonClass, Card, EmptyState, PageHeader, SectionTitle, Table, TBody, TD, TH, THead, TR } from "@/components/ui";
-import { listApiKeys, NOTE_MAX } from "@/lib/api-consumers";
+import { LABEL_MAX, listApiKeys, NOTE_MAX } from "@/lib/api-consumers";
 import { firstParam, pageActor } from "@/lib/page";
 import { formatBangkok } from "@/lib/time";
 import { Flash } from "../../sets/ui";
@@ -29,7 +29,7 @@ export default async function ApiKeysPage({ searchParams }: { searchParams: Prom
 
       <Card>
         <SectionTitle className="mb-4">ออก key ใหม่</SectionTitle>
-        <CreateKeyForm noteMax={NOTE_MAX} />
+        <CreateKeyForm labelMax={LABEL_MAX} noteMax={NOTE_MAX} />
       </Card>
 
       <section className="space-y-3">
@@ -42,7 +42,7 @@ export default async function ApiKeysPage({ searchParams }: { searchParams: Prom
           <Table minWidth="min-w-[760px]">
             <THead>
               <tr>
-                <TH>ระบบ</TH>
+                <TH>ชื่อ key</TH>
                 <TH>Key</TH>
                 <TH>ออกโดย</TH>
                 <TH>ใช้ล่าสุด</TH>
@@ -54,8 +54,11 @@ export default async function ApiKeysPage({ searchParams }: { searchParams: Prom
               {keys.map((k) => (
                 <TR key={k.id}>
                   <TD>
-                    <span className="font-medium text-fg">{k.name}</span>
-                    {k.note && <span className="block text-xs text-muted">{k.note}</span>}
+                    <span className="font-medium text-fg">{k.label}</span>
+                    <span className="block text-xs text-muted">
+                      ระบบ <code className="font-mono">{k.name}</code>
+                      {k.note ? ` · ${k.note}` : ""}
+                    </span>
                   </TD>
                   <TD>
                     <code className="font-mono text-xs text-muted">wtr_…{k.keyHint}</code>
@@ -84,7 +87,7 @@ export default async function ApiKeysPage({ searchParams }: { searchParams: Prom
                         <summary className={`${buttonClass("danger-ghost", "sm")} list-none`}>ถอน</summary>
                         <form action={revokeApiKeyAction} className="mt-2 w-56 space-y-2 rounded-lg border border-line bg-raised p-3 text-xs text-muted">
                           <input type="hidden" name="id" value={k.id} />
-                          <p>{k.name} จะเรียก API ด้วย key นี้ไม่ได้ทันที และเปิดคืนไม่ได้</p>
+                          <p>{k.name} จะเรียก API ด้วย key “{k.label}” ไม่ได้ทันที และเปิดคืนไม่ได้</p>
                           <button type="submit" className={buttonClass("danger", "sm")}>
                             ยืนยันถอน key
                           </button>

@@ -71,6 +71,13 @@
       "when": 1794364154766,
       "tag": "0009_api_consumers",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794409188282,
+      "tag": "0010_api_key_label",
+      "breakpoints": true
     }
   ]
 }
