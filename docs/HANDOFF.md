@@ -3,7 +3,8 @@
 ## สถานะตอนนี้
 - **Production ใช้งานได้:** https://worktrain.workstationoffice.com (Vercel project `worktrain` · ทีม workstationgroup · `prj_mjcs…` — ชื่อเดิม `wso-knowledge` · `.vercel/project.json` บนเครื่องชี้ project นี้ถูกแล้ว)
 - **ฐาน:** Neon `fancy-wave-83217363` · migration 0000–0008 ครบ · build ของ production รัน migration เอง (`scripts/migrate-on-deploy.mjs`)
-- **WorkID:** ลงทะเบียนแอป `worktrain` แล้ว · env ครบ ยกเว้น `WORKTRAIN_API_CONSUMERS`
+- **WorkID:** ลงทะเบียนแอป `worktrain` แล้ว · env ครบ
+- **API Key ให้ระบบอื่น:** TG ออก/ถอนที่ `/admin/api-keys` (ADR-0012 · ตาราง `api_consumers` migration 0009) — ยังไม่ได้ออกให้ใคร
 - **ช่วงทดลอง LINE:** ตั้ง `TEST_LINE_GROUP_ID` (Production) แล้ว 11 พ.ย. — ทุกข้อความ (รวมตัวต่อตัว) ไปกลุ่ม Test · **ลบ env นี้ = เริ่มส่งพนักงานจริง**
 - **ข้อความยินยอม:** HR/ฝ่ายกฎหมายรับรองแล้ว (PR #20)
 - **Vercel deploy เองหลัง merge:** Git ของ project หลุดตั้งแต่เปลี่ยนชื่อ (1 พ.ย.) · เจ้าของต่อใหม่แล้ว 11 พ.ย.
@@ -19,4 +20,4 @@
 1. ลองสแกนหน้าบนมือถือจริงกับ AWS · ลองหน้าทำข้อสอบระหว่างสอบบน production · เปิดดู `/admin/kinds` บน production หลังล็อกอิน
 2. ลองอนุมัติชุดแรก → ดูข้อความเข้ากลุ่ม Test ครบ (มอบงาน · เตือนวันที่ 3/5 · แจ้ง TG)
 3. เปิดใช้จริง: ลบ `TEST_LINE_GROUP_ID` ออกจาก Production แล้ว redeploy
-4. `WORKTRAIN_API_CONSUMERS` เมื่อ WorkHR จะดึงผล (`npm run api:new-key`)
+4. เมื่อ WorkHR จะดึงผล: TG ออก key ชื่อ `workhr` ที่ `/admin/api-keys` แล้วส่งให้ทีม WorkHR

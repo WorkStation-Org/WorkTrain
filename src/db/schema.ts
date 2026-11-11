@@ -612,3 +612,38 @@ export const notifications = pgTable(
     check("notifications_line_group_shape", sql`${t.lineGroupId} is null or ${t.lineGroupId} ~ '^C[0-9a-f]{32}$'`),
   ],
 );
+
+/**
+ * API key ของระบบอื่นในเครือที่อ่าน `/api/v1/*` (ADR-0012) — TG ออก/ถอนที่ `/admin/api-keys`
+ *
+ * ★ เก็บแค่ sha256 ของ key · key เต็มแสดงครั้งเดียวตอนออก · `keyHint` = 4 ตัวท้ายไว้ให้คนจำได้ว่าตัวไหน
+ * ★ ชื่อเดียวกันมีได้หลาย key (หมุน key: ออกใหม่ → ปลายทางเปลี่ยน → ถอนตัวเก่า) · ไม่มีการลบ — ถอน = `revokedAt`
+ * ★ `createdByName` / `revokedByName` = ชื่อ ณ เวลานั้น (ADR-0002)
+ */
+export const API_SCOPES = ["read"] as const;
+export type ApiScope = (typeof API_SCOPES)[number];
+
+export const apiConsumers = pgTable(
+  "api_consumers",
+  {
+    id: serial("id").primaryKey(),
+    /** ระบบปลายทาง เช่น `workhr` — ตัวเล็ก · ขึ้นต้นด้วยตัวอักษร */
+    name: text("name").notNull(),
+    note: text("note"),
+    scopes: text("scopes").array().notNull().default(sql`'{read}'::text[]`),
+    keyHash: text("key_hash").notNull(),
+    keyHint: text("key_hint").notNull(),
+    createdByPersonId: integer("created_by_person_id").notNull(),
+    createdByName: text("created_by_name").notNull(),
+    createdAt: ts("created_at").notNull().defaultNow(),
+    lastUsedAt: ts("last_used_at"),
+    revokedAt: ts("revoked_at"),
+    revokedByName: text("revoked_by_name"),
+  },
+  (t) => [
+    uniqueIndex("api_consumers_key_hash_uniq").on(t.keyHash),
+    check("api_consumers_name_shape", sql`${t.name} ~ '^[a-z][a-z0-9-]{1,39}$'`),
+    check("api_consumers_key_hash_shape", sql`${t.keyHash} ~ '^[0-9a-f]{64}$'`),
+    check("api_consumers_scopes_known", sql`cardinality(${t.scopes}) > 0 and ${t.scopes} <@ array['read']::text[]`),
+  ],
+);

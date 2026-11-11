@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
  * 404 `not_found` = ยังไม่มีตัวตนใน WorkID · 503 `org_unavailable` = ถามผังไม่ได้ ลองใหม่ (ไม่ใช่ "ยังไม่ผ่าน")
  */
 export async function GET(req: Request, ctx: { params: Promise<{ email: string }> }) {
-  const g = requireConsumer(req, "read");
+  const g = await requireConsumer(req, "read");
   if (!g.ok) return g.res;
   const { email } = await ctx.params;
   const out = await trainingStatus(decodeURIComponent(email));

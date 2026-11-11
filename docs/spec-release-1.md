@@ -100,7 +100,7 @@ TG ติดตามให้ครบ และดูสถิติเพื�
 - คนใหม่ยังไม่มีอีเมลตอนที่ใบ checklist ของ WorkHR เปิด — การมอบเกิดเมื่อมีตัวตนใน WorkID แล้วเท่านั้น
 - WorkTrain เปิด API ให้ WorkHR ดึงสถานะ:
   `GET /api/v1/people/{email}/training-status` → แต่ละชุดในเส้นทาง: ได้รับมอบเมื่อไร · ผ่านแล้วหรือยัง · ผ่านเมื่อไร
-  — ต้องมี API key (consumer) แบบเดียวกับ WorkID: `Authorization: Bearer wtr_…` · ทะเบียนใน env `WORKTRAIN_API_CONSUMERS` (แบบ WorkHR)
+  — ต้องมี API key (consumer) แบบเดียวกับ WorkID: `Authorization: Bearer wtr_…` · TG ออก/ถอน key ที่ `/admin/api-keys` (ADR-0012 · เดิมอยู่ใน env)
   · ตอบ `{ email, personId, positionId, sets: [{ setId, title, assignedAt, dueAt, passed, passedAt }], complete }`
   · `complete: null` = ตำแหน่งนี้ไม่มีเส้นทาง · 404 = ยังไม่มีตัวตนใน WorkID · 503 = ถามผังไม่ได้ (ลองใหม่ ไม่ใช่ "ยังไม่ผ่าน")
 - TG ผูกชุดกับตำแหน่งที่ `/admin/onboarding` — ตำแหน่งดึงจากผังวันนี้จนกว่าจะมีแคตตาล็อก (§6.1 ข้อ 3)
