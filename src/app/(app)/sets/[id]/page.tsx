@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { Badge, Button, Card, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle, SELECT_CLASS } from "@/components/ui";
 import { audienceOptions } from "@/domain/audience";
 import { LEVEL_LABELS, topicLabel } from "@/domain/blueprint";
-import { aiReadable } from "@/domain/document";
+import { aiReadable, DOCUMENT_KIND_LABELS } from "@/domain/document";
 import type { Level } from "@/db/schema";
 import { assignmentStatus, audienceRulesOf, previewAudience, type AssignmentState } from "@/lib/assignment-service";
 import { examEditor } from "@/lib/exam-service";
@@ -144,7 +144,7 @@ export default async function SetPage({
             {documents.map((d) => (
               <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-[13px]">
                 <span>
-                  {d.fileName} <span className="text-ink-3">· {d.kind} · {(d.sizeBytes / 1024 / 1024).toFixed(1)} MB</span>
+                  {d.fileName} <span className="text-ink-3">· {DOCUMENT_KIND_LABELS[d.kind]} · {(d.sizeBytes / 1024 / 1024).toFixed(1)} MB</span>
                   {!aiReadable(d.mimeType) && <span className="ml-2 text-warning">AI ยังอ่านไฟล์ชนิดนี้ไม่ได้</span>}
                 </span>
                 {docsEditable && (
@@ -265,7 +265,7 @@ export default async function SetPage({
               <form action={returnAction} className="space-y-2">
                 <input type="hidden" name="setId" value={set.id} />
                 <label className="block">
-                  <span className={FIELD_LABEL_CLASS}>ตีกลับให้ผู้สร้าง (เช่น Pricelist หรือแคตตาล็อกผิด)</span>
+                  <span className={FIELD_LABEL_CLASS}>ตีกลับให้ผู้สร้าง (เช่น เอกสารหรือ Pricelist ผิด)</span>
                   <textarea name="comment" required rows={2} className={INPUT_CLASS} />
                 </label>
                 <Button type="submit" variant="danger">

@@ -27,6 +27,16 @@ export function aiReadable(mime: string): boolean {
   return mime === "application/pdf";
 }
 
+/**
+ * ชื่อชนิดเอกสารบนจอ — ค่าในฐานยังเป็น `catalog` (มาจากชุดสินค้า) แต่ WorkTrain ใช้กับการเรียนรู้ทุกเรื่อง
+ * จึงเรียกกลาง ๆ ว่า "เอกสารหลัก" (คู่มือ · ขั้นตอน · แคตตาล็อก ฯลฯ)
+ */
+export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
+  catalog: "เอกสารหลัก",
+  pricelist: "Pricelist",
+  other: "อื่น ๆ",
+};
+
 /** Pricelist ดาวน์โหลดไม่ได้ (ADR-0010) */
 export function downloadable(kind: DocumentKind): boolean {
   return kind !== "pricelist";
