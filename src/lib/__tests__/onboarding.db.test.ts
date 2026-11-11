@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
 import { GENERAL_BLUEPRINT } from "@/domain/blueprint";
-import { consumerEntry, findConsumer, newConsumerKey, parseConsumers, requireConsumer } from "@/lib/api-consumers";
+import { hashApiKey, newConsumerKey } from "@/lib/api-consumers";
 import type { Actor } from "@/lib/auth";
 import { clearOrgCache } from "@/lib/workid";
 
@@ -57,26 +57,11 @@ beforeEach(async () => {
   await truncateAll();
   clearOrgCache();
   vi.stubEnv("WORKTRAIN_DEV_ORG", JSON.stringify(ORG));
-  vi.stubEnv("WORKTRAIN_API_CONSUMERS", consumerEntry("workhr", ["read"], KEY));
+  await testDb()
+    .insert(schema.apiConsumers)
+    .values({ name: "workhr", keyHash: hashApiKey(KEY), keyHint: KEY.slice(-4), createdByPersonId: 1, createdByName: "ทีจี" });
 });
 afterEach(() => vi.unstubAllEnvs());
-
-describe("API consumer", () => {
-  it("รูป env ผิดถูกข้าม ตัวอื่นยังใช้ได้ · key ผิด = ไม่พบ", () => {
-    const { consumers, invalid } = parseConsumers(`${consumerEntry("workhr", ["read"], KEY)},bad:read:zz,Upper:read:${"a".repeat(64)}`);
-    expect(consumers.map((c) => c.name)).toEqual(["workhr"]);
-    expect(invalid).toEqual(["bad", "#3"]);
-    expect(findConsumer(`Bearer ${KEY}`, consumers)?.name).toBe("workhr");
-    expect(findConsumer(`Bearer ${newConsumerKey()}`, consumers)).toBeNull();
-    expect(findConsumer(`Bearer whr_${"a".repeat(30)}`, consumers)).toBeNull();
-  });
-
-  it("ไม่มี key = 401", async () => {
-    const r = requireConsumer(req("s2@ws.co", null), "read");
-    expect(r.ok).toBe(false);
-    expect(!r.ok && r.res.status).toBe(401);
-  });
-});
 
 describe("ผูกเส้นทาง", () => {
   it("ตำแหน่งจากผัง: ชื่อที่พบบ่อยที่สุด · ไม่มี positionId ไม่ขึ้น", () => {
