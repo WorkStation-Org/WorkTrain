@@ -1,25 +1,23 @@
-# WorkTrain — ส่งต่องาน (8 พ.ย. 2569)
+# WorkTrain — ส่งต่องาน (11 พ.ย. 2569)
 
 ## สถานะตอนนี้
-- **Production ใช้งานได้:** https://worktrain.workstationoffice.com (Vercel project `worktrain` · ทีม workstationgroup) · `main` = `aa4e59c`
-- **ฐาน:** Neon `fancy-wave-83217363` · migration 0000–0006 ครบ · build ของ production รัน migration เอง (`scripts/migrate-on-deploy.mjs`)
+- **Production ใช้งานได้:** https://worktrain.workstationoffice.com (Vercel project `worktrain` · ทีม workstationgroup · `prj_mjcs…` — ชื่อเดิม `wso-knowledge` · `.vercel/project.json` บนเครื่องชี้ project นี้ถูกแล้ว)
+- **ฐาน:** Neon `fancy-wave-83217363` · migration 0000–0008 ครบ · build ของ production รัน migration เอง (`scripts/migrate-on-deploy.mjs`)
 - **WorkID:** ลงทะเบียนแอป `worktrain` แล้ว · env ครบ ยกเว้น `TEST_LINE_GROUP_ID` และ `WORKTRAIN_API_CONSUMERS`
-- **ข้อความยินยอม:** HR/ฝ่ายกฎหมายรับรองแล้ว (เอาป้ายร่างออกใน PR #20)
-- **GitHub ไม่ deploy อัตโนมัติหลัง merge** — ตอนนี้สั่ง deploy เองผ่าน Vercel (Git integration ต้องเช็ก)
+- **ข้อความยินยอม:** HR/ฝ่ายกฎหมายรับรองแล้ว (PR #20)
+- **Vercel ไม่ deploy เองหลัง merge (ตั้งแต่ 1 พ.ย. ที่เปลี่ยนชื่อ project):** project ยังผูก repo อยู่ · แอป Vercel บน GitHub เข้าถึงทุก repo ·
+  repo อื่นในเครือ deploy เองปกติ — แต่ push เข้า WorkTrain ไม่ไปถึง Vercel เลย (ไม่มี preview ของ branch ด้วย) ·
+  ระหว่างนี้สั่ง deploy เอง (README หัวข้อ Deploy) · ทางแก้ที่น่าจะได้: Vercel → `worktrain` → Settings → Git → Disconnect แล้ว Connect `WorkStation-Org/WorkTrain` ใหม่
 - ไม่มี CI บน GitHub — ด่านก่อน merge = `npm run ci` บนเครื่อง แล้วแปะผลเป็นคอมเมนต์ใน PR
 
-## งานที่เสร็จวันนี้ (PR #16–#20)
-- #16 · #17 แก้ข้อพบจากรีวิวเชิงลึก (สแกนหน้าใช้ซ้ำ · อ่านใหม่นับผิด · เตือนผิดวัน · แจ้งเตือนหาย · เฉลยรั่วผ่าน id ตัวเลือก · session ไม่หมดอายุ ฯลฯ)
-- #18 รวมเตือนวันที่ 5 ต่อกลุ่ม LINE · แจ้ง TG ทาง LINE เรื่องคิวใบหน้า · ถอนความยินยอม
-- #19 UX/UI ทั้งแอปตามแบบ WorkPass (สี/โหมดมืด · ฟอนต์ CI · เมนูซ้าย · หน้าเข้าสู่ระบบ · หน้าแรก · หน้าสอบ)
+## งานที่เสร็จ (8–11 พ.ย.)
 - #20 เอาป้ายร่างออกจากหน้ายินยอม
+- #22 ทะเบียนชนิดของชุด `/admin/kinds` (ADR-0011) — TG เพิ่ม/แก้ชื่อ/เปิด-ปิดชนิด · แม่แบบข้อสอบต่อชนิด (หัวข้อตั้งเอง) · สวิตช์ Pricelist ต่อชนิด ·
+  migration 0007 ย้ายสองชนิดเดิมเข้าตาราง · 0008 ลบคอลัมน์ `kind` · ชุดเดิมไม่เปลี่ยน (คัดลอกแม่แบบตอนสร้าง) · vitest จำกัด 4 worker (เทสต์ PGlite หมดเวลาสุ่ม)
+- ชื่อชนิดเอกสาร `catalog` บนจอเป็น "เอกสารหลัก" (ไม่ผูกกับสินค้า) · README ตรงกับสถานะจริง
 
 ## งานถัดไป
-1. **เมนูจัดการ "ชนิด" ของชุดการเรียนรู้** — ตอนนี้ช่อง "ชนิด" ที่ `/sets` มีแค่ค่าตายตัว (`สินค้าใหม่ (PD)` · `ทั่วไป` จาก `learningSets.kind`) ไม่มีหน้าให้ TG เพิ่ม/แก้ชนิด
-   ต้องการ: หน้าจัดการชนิด (TG) — ชื่อชนิด · แม่แบบข้อสอบ (blueprint) ของชนิดนั้น · เปิด/ปิด · แล้วให้ฟอร์มสร้างชุดอ่านจากทะเบียนนี้
-   ★ WorkTrain ใช้กับการเรียนรู้**ทุกเรื่อง**ของบริษัท ไม่ใช่แค่สินค้า (ห้ามเขียนข้อความผูกกับสินค้า)
-   ★ `kind` ผูกกับแม่แบบข้อสอบใน `src/domain/blueprint.ts` (PD/ทั่วไป) — ต้องออกแบบ migration จาก enum เป็นตาราง
-2. ตั้ง `TEST_LINE_GROUP_ID` ช่วงทดลอง (ไม่งั้นข้อความ LINE ไปถึงพนักงานจริงทันทีที่อนุมัติชุดแรก)
-3. ลองสแกนหน้าบนมือถือจริงกับ AWS · ลองหน้าทำข้อสอบระหว่างสอบบน production
-4. แก้ README (ยังเขียนว่ายังไม่ deploy) · เช็ก Git integration ของ Vercel
-5. `WORKTRAIN_API_CONSUMERS` เมื่อ WorkHR จะดึงผล
+1. **ตั้ง `TEST_LINE_GROUP_ID` ช่วงทดลอง** — ไม่งั้นข้อความ LINE ไปถึงพนักงานจริงทันทีที่อนุมัติชุดแรก (ต้องได้ groupId กลุ่มทดสอบจากเจ้าของ)
+2. แก้ Git integration ของ Vercel (ดูสถานะด้านบน — ทำได้ใน dashboard เท่านั้น)
+3. ลองสแกนหน้าบนมือถือจริงกับ AWS · ลองหน้าทำข้อสอบระหว่างสอบบน production · เปิดดู `/admin/kinds` บน production หลังล็อกอิน
+4. `WORKTRAIN_API_CONSUMERS` เมื่อ WorkHR จะดึงผล (`npm run api:new-key`)

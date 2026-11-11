@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button, FIELD_LABEL_CLASS, SELECT_CLASS } from "@/components/ui";
+import { DOCUMENT_KIND_LABELS } from "@/domain/document";
 import { confirmUploadAction, requestUploadAction } from "../actions";
 
 /**
@@ -43,9 +44,9 @@ export function UploadForm({ setId, allowPricelist }: { setId: number; allowPric
       <label>
         <span className={FIELD_LABEL_CLASS}>ชนิด</span>
         <select name="docKind" className={SELECT_CLASS} defaultValue="catalog">
-          <option value="catalog">แคตตาล็อก</option>
-          {allowPricelist && <option value="pricelist">Pricelist</option>}
-          <option value="other">อื่น ๆ</option>
+          <option value="catalog">{DOCUMENT_KIND_LABELS.catalog}</option>
+          {allowPricelist && <option value="pricelist">{DOCUMENT_KIND_LABELS.pricelist}</option>}
+          <option value="other">{DOCUMENT_KIND_LABELS.other}</option>
         </select>
       </label>
       <label className="min-w-60 flex-1">
