@@ -18,6 +18,7 @@ export type ApiConsumerScope = ApiScope;
 
 export const CONSUMER_KEY_PREFIX = "wtr_";
 export const CONSUMER_NAME_RE = /^[a-z][a-z0-9-]{1,39}$/;
+export const LABEL_MAX = 60;
 export const NOTE_MAX = 120;
 
 const KEY_RE = /^Bearer\s+(wtr_[A-Za-z0-9_-]{20,100})\s*$/;
@@ -48,10 +49,13 @@ export async function listApiKeys(): Promise<ApiKeyRow[]> {
 }
 
 /** ออก key ใหม่ — คืน key เต็มครั้งเดียว ให้ TG คัดลอกส่งปลายทาง */
-export async function createApiKey(input: { actor: Actor; name: string; note?: string }): Promise<Outcome<{ id: number; key: string }>> {
+export async function createApiKey(input: { actor: Actor; name: string; label: string; note?: string }): Promise<Outcome<{ id: number; key: string }>> {
   if (input.actor.role !== "admin") return { ok: false, error: "เฉพาะ TG" };
   const name = input.name.trim().toLowerCase();
   if (!CONSUMER_NAME_RE.test(name)) return { ok: false, error: "ชื่อระบบต้องเป็นอังกฤษตัวเล็ก ตัวเลข หรือ - (2–40 ตัว) ขึ้นต้นด้วยตัวอักษร เช่น workhr" };
+  const label = input.label.trim().replace(/\s+/g, " ");
+  if (!label) return { ok: false, error: "ตั้งชื่อ key ก่อน เช่น WorkHR — production" };
+  if (label.length > LABEL_MAX) return { ok: false, error: `ชื่อ key ยาวได้ไม่เกิน ${LABEL_MAX} ตัวอักษร` };
   const note = (input.note ?? "").trim().replace(/\s+/g, " ");
   if (note.length > NOTE_MAX) return { ok: false, error: `หมายเหตุยาวได้ไม่เกิน ${NOTE_MAX} ตัวอักษร` };
   const key = newConsumerKey();
@@ -59,6 +63,7 @@ export async function createApiKey(input: { actor: Actor; name: string; note?: s
     .insert(apiConsumers)
     .values({
       name,
+      label,
       note: note || null,
       scopes: ["read"],
       keyHash: hashApiKey(key),
@@ -67,7 +72,7 @@ export async function createApiKey(input: { actor: Actor; name: string; note?: s
       createdByName: input.actor.name,
     })
     .returning({ id: apiConsumers.id });
-  console.log(JSON.stringify({ msg: "api_key_created", id: row.id, name, by: input.actor.personId }));
+  console.log(JSON.stringify({ msg: "api_key_created", id: row.id, name, label, by: input.actor.personId }));
   return { ok: true, id: row.id, key };
 }
 
@@ -79,9 +84,9 @@ export async function revokeApiKey(input: { actor: Actor; id: number }): Promise
     .update(apiConsumers)
     .set({ revokedAt: new Date(), revokedByName: input.actor.name })
     .where(and(eq(apiConsumers.id, input.id), isNull(apiConsumers.revokedAt)))
-    .returning({ id: apiConsumers.id, name: apiConsumers.name });
+    .returning({ id: apiConsumers.id, name: apiConsumers.name, label: apiConsumers.label });
   if (done.length === 0) return { ok: false, error: "ไม่พบ key นี้ หรือถอนไปแล้ว" };
-  console.log(JSON.stringify({ msg: "api_key_revoked", id: input.id, name: done[0].name, by: input.actor.personId }));
+  console.log(JSON.stringify({ msg: "api_key_revoked", id: input.id, name: done[0].name, label: done[0].label, by: input.actor.personId }));
   return { ok: true };
 }
 

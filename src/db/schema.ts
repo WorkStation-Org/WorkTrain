@@ -629,6 +629,8 @@ export const apiConsumers = pgTable(
     id: serial("id").primaryKey(),
     /** ระบบปลายทาง เช่น `workhr` — ตัวเล็ก · ขึ้นต้นด้วยตัวอักษร */
     name: text("name").notNull(),
+    /** ชื่อ key ที่ TG ตั้งให้จำได้ เช่น "WorkHR — production" — ภาษาไทยได้ · ไม่ซ้ำก็ได้ */
+    label: text("label").notNull(),
     note: text("note"),
     scopes: text("scopes").array().notNull().default(sql`'{read}'::text[]`),
     keyHash: text("key_hash").notNull(),
@@ -643,6 +645,7 @@ export const apiConsumers = pgTable(
   (t) => [
     uniqueIndex("api_consumers_key_hash_uniq").on(t.keyHash),
     check("api_consumers_name_shape", sql`${t.name} ~ '^[a-z][a-z0-9-]{1,39}$'`),
+    check("api_consumers_label_len", sql`char_length(btrim(${t.label})) between 1 and 60`),
     check("api_consumers_key_hash_shape", sql`${t.keyHash} ~ '^[0-9a-f]{64}$'`),
     check("api_consumers_scopes_known", sql`cardinality(${t.scopes}) > 0 and ${t.scopes} <@ array['read']::text[]`),
   ],

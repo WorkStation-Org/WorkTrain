@@ -10,7 +10,7 @@ import { requireAdmin } from "@/lib/auth";
  * ★ key เต็มกลับไปที่ฟอร์มผ่าน state ของ action (อยู่ในหน้าจอครั้งเดียว) — ห้ามใส่ใน URL เพราะค้างในประวัติเบราว์เซอร์และ log
  */
 
-export type CreateKeyState = { ok: true; name: string; key: string } | { ok: false; error: string } | null;
+export type CreateKeyState = { ok: true; label: string; key: string } | { ok: false; error: string } | null;
 
 function str(form: FormData, name: string): string {
   const v = form.get(name);
@@ -19,9 +19,9 @@ function str(form: FormData, name: string): string {
 
 export async function createApiKeyAction(_prev: CreateKeyState, form: FormData): Promise<CreateKeyState> {
   const actor = await requireAdmin();
-  const out = await createApiKey({ actor, name: str(form, "name"), note: str(form, "note") });
+  const out = await createApiKey({ actor, name: str(form, "name"), label: str(form, "label"), note: str(form, "note") });
   revalidatePath("/admin/api-keys");
-  return out.ok ? { ok: true, name: str(form, "name").trim().toLowerCase(), key: out.key } : { ok: false, error: out.error };
+  return out.ok ? { ok: true, label: str(form, "label").trim().replace(/\s+/g, " "), key: out.key } : { ok: false, error: out.error };
 }
 
 export async function revokeApiKeyAction(form: FormData) {

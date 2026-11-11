@@ -59,7 +59,7 @@ beforeEach(async () => {
   vi.stubEnv("WORKTRAIN_DEV_ORG", JSON.stringify(ORG));
   await testDb()
     .insert(schema.apiConsumers)
-    .values({ name: "workhr", keyHash: hashApiKey(KEY), keyHint: KEY.slice(-4), createdByPersonId: 1, createdByName: "ทีจี" });
+    .values({ name: "workhr", label: "WorkHR", keyHash: hashApiKey(KEY), keyHint: KEY.slice(-4), createdByPersonId: 1, createdByName: "ทีจี" });
 });
 afterEach(() => vi.unstubAllEnvs());
 
