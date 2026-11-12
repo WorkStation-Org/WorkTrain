@@ -1,21 +1,33 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, FIELD_LABEL_CLASS, SELECT_CLASS } from "@/components/ui";
 import { DOCUMENT_KIND_LABELS, DOCUMENT_MIMES, formatBytesLimit, isDocumentMime, isVideoMime, kindAllowsMime, maxBytesFor } from "@/domain/document";
 import { confirmUploadAction, requestUploadAction } from "../actions";
+import { CoverPicker, type CoverPickerHandle, saveCover } from "./cover-picker";
 
 /**
  * อัปเอกสารต้นทาง — ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยัน (set-service) · ไฟล์ไม่ผ่านเซิร์ฟเวอร์ของเรา
  * Content-Type ต้องตรงกับที่ขอลิงก์ไว้ เพราะลิงก์เซ็น Content-Type ด้วย
  * ★ ใช้ XMLHttpRequest แทน fetch เพื่อบอกความคืบหน้า — วิดีโอ 2 GB อัปนานหลายนาที (ADR-0013)
+ * ★ เลือกไฟล์วิดีโอ = เลือกเฟรมปกจากไฟล์ในเครื่องได้ทันที (ไม่ต้องรอ R2/CORS) แล้วบันทึกปกหลังอัปเสร็จ
  */
 export function UploadForm({ setId, allowPricelist }: { setId: number; allowPricelist: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const picker = useRef<CoverPickerHandle>(null);
+
+  // ปล่อย object URL ของไฟล์ที่เลือกไว้ก่อนหน้า
+  useEffect(() => () => void (preview && URL.revokeObjectURL(preview)), [preview]);
+
+  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.currentTarget.files?.[0];
+    setPreview(file && isVideoMime(file.type) ? URL.createObjectURL(file) : null);
+  }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -39,7 +51,17 @@ export function UploadForm({ setId, allowPricelist }: { setId: number; allowPric
       if (status < 200 || status >= 300) return setError(`อัปไฟล์ไม่สำเร็จ (${status || "เครือข่ายขาด"})`);
       const done = await confirmUploadAction({ setId, token: req.token });
       if (!done.ok) return setError(done.error);
+      if (isVideoMime(file.type) && picker.current) {
+        try {
+          const { blob, ms } = await picker.current.capture();
+          const cover = await saveCover(setId, done.documentId, blob, ms);
+          if (!cover.ok) setError(`อัปวิดีโอแล้ว แต่ตั้งปกไม่สำเร็จ (${cover.error}) — เลือกปกใหม่จากรายการได้`);
+        } catch {
+          setError("อัปวิดีโอแล้ว แต่ตั้งปกไม่สำเร็จ — เลือกปกใหม่จากรายการได้");
+        }
+      }
       form.reset();
+      setPreview(null);
       router.refresh();
     } catch {
       setError("อัปไฟล์ไม่สำเร็จ ลองอีกครั้ง");
@@ -61,7 +83,7 @@ export function UploadForm({ setId, allowPricelist }: { setId: number; allowPric
       </label>
       <label className="min-w-60 flex-1">
         <span className={FIELD_LABEL_CLASS}>ไฟล์ (PDF หรือ Excel ไม่เกิน 30 MB · วิดีโอ MP4 ไม่เกิน 2 GB)</span>
-        <input name="file" type="file" accept={Object.keys(DOCUMENT_MIMES).join(",")} className="block w-full text-[13px]" />
+        <input name="file" type="file" accept={Object.keys(DOCUMENT_MIMES).join(",")} onChange={onFileChange} className="block w-full text-[13px]" />
       </label>
       <Button type="submit" disabled={busy}>
         {busy ? (progress !== null && progress < 100 ? `กำลังอัป ${progress}%` : "กำลังตรวจไฟล์…") : "อัปโหลด"}
@@ -69,6 +91,12 @@ export function UploadForm({ setId, allowPricelist }: { setId: number; allowPric
       {busy && progress !== null && (
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-subtle" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
           <div className="h-full bg-primary transition-[width]" style={{ width: `${progress}%` }} />
+        </div>
+      )}
+      {preview && (
+        <div className="w-full max-w-xl space-y-1">
+          <span className={FIELD_LABEL_CLASS}>ปกวิดีโอ — เลื่อนเลือกเฟรมจากคลิป (บันทึกพร้อมการอัป)</span>
+          <CoverPicker ref={picker} src={preview} />
         </div>
       )}
       <p className="w-full text-[12px] text-ink-3">วิดีโอใช้เป็นสื่อการเรียน — AI ออกข้อสอบจาก PDF ในชุดเดียวกัน จึงต้องมี PDF อย่างน้อย 1 ไฟล์</p>

@@ -7,7 +7,7 @@ import { approve, returnToAuthor, submitForApproval } from "@/lib/approval-servi
 import { notifyApprovalEvent, setAudience, syncAssignments } from "@/lib/assignment-service";
 import { claudeExamModel } from "@/lib/exam-generator";
 import { editQuestion, generateExams, regenerateQuestion } from "@/lib/exam-service";
-import { confirmUpload, createSet, removeDocument, requestUpload, updateSettings } from "@/lib/set-service";
+import { authorVideoLink, confirmUpload, createSet, removeDocument, requestUpload, setVideoCover, updateSettings } from "@/lib/set-service";
 import { fetchOrg } from "@/lib/workid";
 import {
   approveVersion,
@@ -85,6 +85,22 @@ export async function confirmUploadAction(input: { setId: number; token: string 
   const out = await confirmUpload({ actor, token: input.token });
   revalidatePath(`/sets/${input.setId}`);
   return out;
+}
+
+/** ปกวิดีโอ (ADR-0013) — ฟอร์มส่ง `setId` · `documentId` · `ms` · `cover` (JPEG ที่จับจากเฟรมในเบราว์เซอร์) */
+export async function setCoverAction(form: FormData) {
+  const actor = await requireUser();
+  const file = form.get("cover");
+  if (!(file instanceof Blob)) return { ok: false as const, error: "ไม่มีภาพปก" };
+  const out = await setVideoCover({ actor, documentId: int(form, "documentId"), ms: Number(str(form, "ms")), bytes: new Uint8Array(await file.arrayBuffer()) });
+  revalidatePath(`/sets/${int(form, "setId")}`);
+  return out;
+}
+
+/** ลิงก์วิดีโอให้ผู้สร้างเลือกเฟรมปกของคลิปที่อัปไว้แล้ว */
+export async function authorVideoLinkAction(input: { documentId: number }) {
+  const actor = await requireUser();
+  return authorVideoLink({ actor, documentId: input.documentId });
 }
 
 export async function removeDocumentAction(form: FormData) {

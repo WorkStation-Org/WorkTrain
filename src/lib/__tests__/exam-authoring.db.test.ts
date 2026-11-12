@@ -20,7 +20,8 @@ vi.mock("@/db", async () => {
   return { db: () => get(), schema: s };
 });
 
-const { createSet, updateSettings, requestUpload, confirmUpload, getSetDetail, listManagedSets } = await import("@/lib/set-service");
+const { createSet, updateSettings, requestUpload, confirmUpload, getSetDetail, listManagedSets, setVideoCover, coverImage, coverPath, authorVideoLink, removeDocument } =
+  await import("@/lib/set-service");
 const { generateExams, editQuestion, regenerateQuestion } = await import("@/lib/exam-service");
 const { submitForApproval, returnToAuthor, approve } = await import("@/lib/approval-service");
 
@@ -229,6 +230,63 @@ describe("อัปโหลดวิดีโอ (ADR-0013)", () => {
     await uploadVideo(setId, fakeMp4({ seconds: 30 }));
     const out = await generateExams({ actor: pd, setId, model: fakeModel() });
     expect(out).toEqual({ ok: false, error: "ต้องมีเอกสาร PDF อย่างน้อย 1 ไฟล์ก่อนออกข้อสอบ" });
+  });
+
+  describe("ปกวิดีโอ", () => {
+    const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(200).fill(1)]);
+    const admin: Actor = { personId: 99, email: "tg@ws.co", name: "TG", role: "admin" };
+    async function videoDoc() {
+      const setId = await newSet();
+      await uploadVideo(setId, fakeMp4({ seconds: 60 }));
+      const [doc] = (await getSetDetail(pd, setId))!.documents;
+      return { setId, doc };
+    }
+    const coverKeys = () => [...devStoreObjects().keys()].filter((k) => k.includes("-cover-"));
+
+    it("ผู้สร้างตั้งปกจากเฟรมได้ · เปลี่ยนปก = ปกเก่าถูกลบ · ที่อยู่ภาพเปลี่ยนตาม", async () => {
+      const { setId, doc } = await videoDoc();
+      expect(coverPath(doc)).toBeNull();
+      expect(await setVideoCover({ actor: pd, documentId: doc.id, bytes: JPEG, ms: 12_500 })).toEqual({ ok: true });
+      const first = (await getSetDetail(pd, setId))!.documents[0];
+      expect(first).toMatchObject({ coverMs: 12_500 });
+      expect(first.coverKey).toMatch(new RegExp(`^${doc.objectKey.replace(/\.mp4$/, "")}-cover-[0-9a-f]{24}\\.jpg$`));
+      expect(coverKeys()).toEqual([first.coverKey]);
+
+      expect((await setVideoCover({ actor: admin, documentId: doc.id, bytes: JPEG, ms: 30_000 })).ok).toBe(true);
+      const second = (await getSetDetail(pd, setId))!.documents[0];
+      expect(coverKeys()).toEqual([second.coverKey]);
+      expect(coverPath(second)).not.toEqual(coverPath(first));
+    });
+
+    it("คนอื่นตั้งปกไม่ได้ · ต้องเป็น JPEG จริง · ไม่ใหญ่เกิน · เฟรมต้องอยู่ในคลิป · ตั้งปกให้ PDF ไม่ได้", async () => {
+      const { doc } = await videoDoc();
+      expect((await setVideoCover({ actor: sales, documentId: doc.id, bytes: JPEG, ms: 0 })).ok).toBe(false);
+      expect((await setVideoCover({ actor: pd, documentId: doc.id, bytes: new TextEncoder().encode("<svg/>"), ms: 0 })).ok).toBe(false);
+      expect((await setVideoCover({ actor: pd, documentId: doc.id, bytes: new Uint8Array(600 * 1024).fill(0xff), ms: 0 })).ok).toBe(false);
+      expect(await setVideoCover({ actor: pd, documentId: doc.id, bytes: JPEG, ms: 5 * 60_000 })).toEqual({ ok: false, error: "ตำแหน่งเฟรมอยู่นอกความยาวคลิป" });
+      const pdfSet = await newSet();
+      await uploadPdf(pd, pdfSet);
+      const [pdf] = (await getSetDetail(pd, pdfSet))!.documents;
+      expect(await setVideoCover({ actor: pd, documentId: pdf.id, bytes: JPEG, ms: 0 })).toEqual({ ok: false, error: "ตั้งปกได้เฉพาะวิดีโอ" });
+      expect(coverKeys()).toEqual([]);
+    });
+
+    it("ภาพปก: คนทำงานกับชุดและผู้เรียนที่ได้รับมอบเห็น · คนอื่นไม่เห็น · ลบวิดีโอ = ลบปก", async () => {
+      const { setId, doc } = await videoDoc();
+      await setVideoCover({ actor: pd, documentId: doc.id, bytes: JPEG, ms: 1000 });
+      expect(await coverImage({ actor: pd, documentId: doc.id })).toEqual(JPEG);
+      expect(await coverImage({ actor: sales, documentId: doc.id })).toBeNull();
+      await testDb()
+        .insert(schema.assignments)
+        .values({ setId, personId: sales.personId, personName: sales.name, source: "audience", assignedAt: new Date(), dueAt: new Date(Date.now() + 86400_000) });
+      expect(await coverImage({ actor: sales, documentId: doc.id })).toEqual(JPEG);
+
+      expect((await authorVideoLink({ actor: pd, documentId: doc.id })).ok).toBe(true);
+      expect((await authorVideoLink({ actor: sales, documentId: doc.id })).ok).toBe(false);
+
+      expect((await removeDocument({ actor: pd, documentId: doc.id })).ok).toBe(true);
+      expect(coverKeys()).toEqual([]);
+    });
   });
 });
 

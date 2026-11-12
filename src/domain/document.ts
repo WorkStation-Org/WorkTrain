@@ -75,6 +75,24 @@ export function maxNewSegments(activeSeconds: number): number {
   return Math.ceil((Math.max(0, activeSeconds) * MAX_VIDEO_PLAYBACK_RATE) / VIDEO_SEGMENT_SECONDS) + 1;
 }
 
+/**
+ * ปกวิดีโอ (ADR-0013) — เบราว์เซอร์ของผู้สร้างจับเฟรมจากคลิปเป็น JPEG กว้างไม่เกิน 640 px แล้วส่งผ่าน server action
+ * ไฟล์จริงราว 30–80 KB · จำกัด 512 KB ให้ต่ำกว่าเพดาน body ของ server action (1 MB)
+ */
+export const MAX_COVER_BYTES = 512 * 1024;
+export const COVER_WIDTH = 640;
+
+/** JPEG ขึ้นต้นด้วย FF D8 FF เสมอ — ไม่เชื่อ Content-Type ที่เบราว์เซอร์บอก */
+export function isJpeg(bytes: Uint8Array): boolean {
+  return bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+}
+
+/** key ของปก — อยู่ข้างไฟล์วิดีโอ · สุ่มใหม่ทุกครั้งที่เปลี่ยนปก (ปกเก่าถูกลบ · cache ของปกเก่าไม่ค้าง) */
+export function coverKey(videoKey: string, random: string): string {
+  if (!/^[a-z0-9]{16,}$/.test(random)) throw new Error("random ต้องเป็นตัวพิมพ์เล็ก/ตัวเลขอย่างน้อย 16 ตัว");
+  return `${videoKey.replace(/\.mp4$/, "")}-cover-${random}.jpg`;
+}
+
 /** `12:05` · `1:02:05` */
 export function formatDuration(totalSeconds: number): string {
   const s = Math.max(0, Math.round(totalSeconds));

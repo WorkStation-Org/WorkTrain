@@ -32,7 +32,7 @@ import {
 import { usableScan } from "@/lib/identity-service";
 import { isVideoMime, maxNewSegments } from "@/domain/document";
 import { objectStore, VIDEO_LINK_TTL_SECONDS } from "@/lib/object-store";
-import type { Outcome } from "@/lib/set-service";
+import { coverPath, type Outcome } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { watermarkPdf } from "@/lib/watermark";
 
@@ -388,6 +388,7 @@ export async function learnView(personId: number, assignmentId: number, now: Dat
         fileName: d.fileName,
         mimeType: d.mimeType,
         durationSeconds: d.durationSeconds,
+        coverUrl: coverPath(d),
         pageCount: d.pageCount!,
         pagesSeen: p?.pagesSeen ?? [],
         completed: Boolean(p?.completedAt),

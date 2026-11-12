@@ -7,7 +7,7 @@ import { firstParam, learnerActor } from "@/lib/page";
 import { formatBangkok } from "@/lib/time";
 import { acknowledgeVersionAction, endStudyAction } from "../actions";
 import { ScanFlow } from "../scan-flow";
-import { Reader } from "./reader";
+import { LessonWorkspace } from "./reader";
 
 export const dynamic = "force-dynamic";
 
@@ -26,19 +26,34 @@ export default async function LearnSetPage({
   const view = Number.isInteger(id) ? await learnView(actor.personId, id) : null;
   if (!view) notFound();
   const err = firstParam((await searchParams).err);
-  const readCount = view.documents.filter((d) => d.completed).length;
   const mode = scanMode();
   const enrolled = (await enrollmentState(actor.personId)).state === "active";
   const confirmedStudy = await confirmedScanFor(actor.personId, "study");
   const confirmedExam = await confirmedScanFor(actor.personId, "exam");
 
   return (
-    <main className="mx-auto w-full max-w-4xl space-y-5">
+    <main className="mx-auto w-full max-w-6xl space-y-5">
       <PageHeader
         kicker="Learning set"
         title={view.set.title}
         subtitle={`${view.versionLabel ? `${view.versionLabel} · ` : ""}กำหนดส่ง ${formatBangkok(view.assignment.dueAt)} · ผ่าน ${view.set.passPercent}% · สอบ ${view.set.examMinutes} นาที`}
-        actions={<Button href="/learn" variant="ghost" icon="chevronLeft">ชุดทั้งหมด</Button>}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {view.session && (
+              <form action={endStudyAction} className="flex items-center gap-2 rounded-[10px] border border-line bg-raised py-1 pl-3 pr-1">
+                <span className="size-2 rounded-full bg-success" aria-hidden />
+                <span className="text-[12px] text-ink-2">รอบเรียนเปิดอยู่ · นิ่งเกิน 2 นาทีจบรอบ</span>
+                <input type="hidden" name="assignmentId" value={view.assignment.id} />
+                <Button type="submit" size="sm" variant="ghost">
+                  จบรอบเรียน
+                </Button>
+              </form>
+            )}
+            <Button href="/learn" variant="ghost" icon="chevronLeft">
+              ชุดทั้งหมด
+            </Button>
+          </div>
+        }
       />
       {err && <Alert>{err}</Alert>}
 
@@ -87,49 +102,33 @@ export default async function LearnSetPage({
       )}
 
       {view.state !== "passed" && view.state !== "in_exam" && (
-        <Card>
-          <SectionTitle
-            className="mb-3"
-            right={
-              view.session ? (
-                <form action={endStudyAction}>
-                  <input type="hidden" name="assignmentId" value={view.assignment.id} />
-                  <Button type="submit" size="sm" variant="ghost">
-                    จบรอบเรียน
-                  </Button>
-                </form>
-              ) : null
-            }
-          >
-            เอกสาร ({readCount}/{view.documents.length} ครบ)
-          </SectionTitle>
-          {view.session ? (
-            <Reader assignmentId={view.assignment.id} documents={view.documents} viewer={`${actor.name} · ${actor.email}`} />
-          ) : enrolled ? (
-            <div>
-              <p className="mb-3 text-[13px] text-ink-3">
-                สแกนใบหน้าเพื่อเริ่มรอบเรียน · นิ่งเกิน 2 นาทีรอบจะจบ ต้องสแกนใหม่ (หน้าและช่วงวิดีโอที่ดูแล้วยังนับอยู่)
-              </p>
-              <ScanFlow mode={mode} purpose="study" label="สแกนใบหน้า · เริ่มเรียน" confirmedScanId={confirmedStudy} />
-            </div>
-          ) : null}
-        </Card>
-      )}
-
-      {view.state === "ready" && (
-        <Card>
-          <SectionTitle className="mb-3">สอบ</SectionTitle>
-          <p className="mb-3 text-[13px] text-ink-3">
-            10 ข้อ · {view.set.examMinutes} นาที · ทีละข้อ ย้อนกลับไม่ได้ · เปิดเอกสารไม่ได้ระหว่างสอบ · ออกจากหน้าสอบครบ 5 ครั้ง = ส่งเอง
-          </p>
-          <ScanFlow
-            mode={mode}
-            purpose="exam"
-            assignmentId={view.assignment.id}
-            label="สแกนใบหน้า · เริ่มสอบ"
-            confirmedScanId={confirmedExam}
-          />
-        </Card>
+        <LessonWorkspace
+          assignmentId={view.assignment.id}
+          documents={view.documents}
+          viewer={`${actor.name} · ${actor.email}`}
+          active={Boolean(view.session)}
+          examNote={`10 ข้อ · ${view.set.examMinutes} นาที · ทีละข้อ ย้อนกลับไม่ได้ · เปิดเนื้อหาไม่ได้ระหว่างสอบ · ออกจากหน้าสอบครบ 5 ครั้ง = ส่งเอง`}
+          start={
+            <Card>
+              <SectionTitle className="mb-2">เริ่มรอบเรียน</SectionTitle>
+              {enrolled ? (
+                <>
+                  <p className="mb-3 text-[13px] text-ink-3">
+                    สแกนใบหน้าเพื่อเริ่มรอบเรียน · นิ่งเกิน 2 นาทีรอบจะจบ ต้องสแกนใหม่ (หน้าและช่วงวิดีโอที่ดูแล้วยังนับอยู่)
+                  </p>
+                  <ScanFlow mode={mode} purpose="study" label="สแกนใบหน้า · เริ่มเรียน" confirmedScanId={confirmedStudy} />
+                </>
+              ) : (
+                <p className="text-[13px] text-ink-3">ลงทะเบียนใบหน้าก่อน แล้วจึงสแกนเริ่มรอบเรียนได้</p>
+              )}
+            </Card>
+          }
+          exam={
+            view.state === "ready" ? (
+              <ScanFlow mode={mode} purpose="exam" assignmentId={view.assignment.id} label="สแกนใบหน้า · เริ่มสอบ" confirmedScanId={confirmedExam} />
+            ) : undefined
+          }
+        />
       )}
 
       {view.attempts.length > 0 && (

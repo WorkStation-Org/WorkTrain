@@ -107,7 +107,10 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
  *
  * `/api/auth/*` ก็ข้าม เพราะมันคือ flow ล็อกอินเอง — ให้ middleware ไปตัด session
  * ระหว่างที่คนกำลังล็อกอินจะกลายเป็นวงวน
+ *
+ * `/api/dev-store/*` (ที่เก็บจำลองบนเครื่อง dev · ตายบน Vercel) ก็ข้าม — proxy อ่าน body ได้แค่ 10 MB
+ * แล้วตัดทิ้งเงียบ ๆ วิดีโอที่อัปเข้าที่เก็บจำลองจึงขาด (ADR-0013) · route ตรวจเองว่ารันบนเครื่อง dev
  */
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|api/auth|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|ico|webp)$).*)"],
+  matcher: ["/((?!_next/static|_next/image|api/auth|api/dev-store|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|ico|webp)$).*)"],
 };

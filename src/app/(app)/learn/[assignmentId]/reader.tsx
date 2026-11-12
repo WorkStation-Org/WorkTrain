@@ -1,16 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { formatDuration, isVideoMime, MAX_VIDEO_PLAYBACK_RATE, segmentWatchTarget, VIDEO_SEGMENT_SECONDS } from "@/domain/document";
 import { documentLinkAction, readingBeatAction } from "../actions";
 
 /**
- * ตัวอ่านเอกสาร (spec §9) — แสดง PDF ทีละหน้า · นับหน้าที่เลื่อนผ่าน · นับเวลาเฉพาะตอนแท็บอยู่หน้าและมีการขยับ
+ * หน้าเรียน (spec §9 · ADR-0013) — ตัวแสดงเนื้อหาทางซ้าย · รายการเนื้อหาในชุดทางขวา (คลิปและ PDF ตามลำดับ) · การ์ดสอบใต้รายการ
  *
  * ★ เบราว์เซอร์แค่รายงาน — เซิร์ฟเวอร์เป็นคนตัดสินว่าอ่านครบไหม (จำนวนหน้าจากไฟล์จริง · จำกัดเวลาต่อครั้ง)
  * ★ เซิร์ฟเวอร์ตอบ `session_ended` (นิ่งเกิน 2 นาที) = รีเฟรชหน้า → ปุ่มสแกนเพื่อเรียนต่อ
- * ★ วิดีโอ (ADR-0013): นับช่วงละ 10 วินาทีที่เล่นผ่านจริง (`video.played` — กรอข้ามไม่นับ) · เร็วสุด 2 เท่า ·
+ * ★ วิดีโอ: นับช่วงละ 10 วินาทีที่เล่นผ่านจริง (`video.played` — กรอข้ามไม่นับ) · เร็วสุด 2 เท่า ·
  *   ลิงก์หมดอายุกลางเรื่อง = ขอใหม่แล้วเล่นต่อจากจุดเดิม
  * ★ pdfjs ≥ 6.2.108 เท่านั้น (GHSA-hq66-cqwq-w95j: รัน JavaScript จาก PDF ที่ประสงค์ร้ายได้) — ไฟล์มาจากผู้สร้างในบริษัท แต่ไม่ไว้ใจเนื้อไฟล์
  */
@@ -21,43 +21,183 @@ const ACTIVE_WINDOW_MS = 30_000;
 /** ลิงก์ที่ขอใหม่ภายในเวลานี้แล้วยังเล่นไม่ได้ = ไฟล์มีปัญหา ไม่ใช่ลิงก์หมดอายุ */
 const RELINK_GUARD_MS = 10_000;
 
-interface Doc {
+export interface LessonDoc {
   id: number;
   kind: string;
   fileName: string;
   mimeType: string;
   durationSeconds: number | null;
+  /** ปกที่ผู้สร้างเลือกจากเฟรมในคลิป (ADR-0013) · null = ยังไม่มี */
+  coverUrl: string | null;
   pageCount: number;
   pagesSeen: number[];
   completed: boolean;
 }
 
-export function Reader({ assignmentId, documents, viewer }: { assignmentId: number; documents: Doc[]; viewer: string }) {
+/**
+ * พื้นที่เรียนทั้งหมด — `active` = มีรอบเรียนเปิดอยู่ (เปิดเนื้อหาได้) · ไม่มี = ซ้ายแสดง `start` (ปุ่มสแกน) แทนตัวแสดง
+ * `exam` = การ์ดสอบเมื่อพร้อมสอบ · ไม่ส่ง = การ์ดบอกว่าเหลืออีกกี่รายการ (นับสดตามที่ดู/อ่านในหน้านี้)
+ */
+export function LessonWorkspace({
+  assignmentId,
+  documents,
+  viewer,
+  active,
+  start,
+  exam,
+  examNote,
+}: {
+  assignmentId: number;
+  documents: LessonDoc[];
+  viewer: string;
+  active: boolean;
+  start?: ReactNode;
+  exam?: ReactNode;
+  examNote: string;
+}) {
   const [openId, setOpenId] = useState<number | null>(documents.find((d) => !d.completed)?.id ?? documents[0]?.id ?? null);
+  const [seenCount, setSeenCount] = useState<Record<number, number>>(() => Object.fromEntries(documents.map((d) => [d.id, d.pagesSeen.length])));
   const open = documents.find((d) => d.id === openId);
+  const isDone = (d: LessonDoc) => d.completed || (seenCount[d.id] ?? 0) >= d.pageCount;
+  const doneCount = documents.filter(isDone).length;
+  const remaining = documents.length - doneCount;
+  const onSeen = (id: number) => (n: number) => setSeenCount((s) => (s[id] === n ? s : { ...s, [id]: n }));
+
+  const videos = documents.filter((d) => isVideoMime(d.mimeType));
+  const pdfs = documents.filter((d) => !isVideoMime(d.mimeType));
+  const summary = [
+    videos.length ? `${videos.length} วิดีโอ · รวม ${formatDuration(videos.reduce((s, d) => s + (d.durationSeconds ?? d.pageCount * VIDEO_SEGMENT_SECONDS), 0))}` : null,
+    pdfs.length ? `${pdfs.length} PDF ${pdfs.reduce((s, d) => s + d.pageCount, 0)} หน้า` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  let clip = 0;
+  const clipNo = new Map(videos.map((d) => [d.id, ++clip]));
+
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-2">
-        {documents.map((d) => (
-          <button
-            key={d.id}
-            type="button"
-            onClick={() => setOpenId(d.id)}
-            className={`rounded-lg border px-3 py-1.5 text-[13px] ${openId === d.id ? "border-ink bg-surface-2 font-semibold" : "border-line"}`}
-          >
-            {d.completed ? "✓ " : ""}
-            {isVideoMime(d.mimeType) ? "▶ " : ""}
-            {d.fileName} · {d.pagesSeen.length}/{d.pageCount} {isVideoMime(d.mimeType) ? "ช่วง" : "หน้า"}
-          </button>
-        ))}
-      </div>
-      {open &&
-        (isVideoMime(open.mimeType) ? (
-          <VideoDoc key={open.id} assignmentId={assignmentId} doc={open} />
+    <div className="flex flex-wrap items-start gap-5">
+      <section aria-label="ตัวแสดงเนื้อหา" className="min-w-0 flex-[999_1_560px]">
+        {active && open ? (
+          isVideoMime(open.mimeType) ? (
+            <VideoDoc
+              key={open.id}
+              assignmentId={assignmentId}
+              doc={open}
+              label={`คลิป ${clipNo.get(open.id)} / ${videos.length}`}
+              onSeen={onSeen(open.id)}
+            />
+          ) : (
+            <PdfDoc key={open.id} assignmentId={assignmentId} doc={open} viewer={viewer} onSeen={onSeen(open.id)} />
+          )
         ) : (
-          <PdfDoc key={open.id} assignmentId={assignmentId} doc={open} viewer={viewer} />
-        ))}
+          start
+        )}
+      </section>
+
+      <aside aria-label="เนื้อหาในชุด" className="flex min-w-0 flex-[1_1_320px] flex-col gap-4">
+        <div className="overflow-hidden rounded-[13px] border border-line bg-raised">
+          <div className="space-y-2 border-b border-line px-4 pb-3 pt-4">
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-[15px] font-semibold text-fg">เนื้อหาในชุด</h2>
+              <span className="text-[13px] text-muted">
+                ครบ {doneCount}/{documents.length}
+              </span>
+            </div>
+            <ProgressLine percent={documents.length ? (doneCount / documents.length) * 100 : 0} done={remaining === 0} />
+            <p className="text-[12px] text-muted">{summary}</p>
+          </div>
+          <ol className="p-1.5">
+            {documents.map((d) => {
+              const video = isVideoMime(d.mimeType);
+              const seen = Math.min(seenCount[d.id] ?? 0, d.pageCount);
+              const done = isDone(d);
+              const current = active && d.id === openId;
+              return (
+                <li key={d.id}>
+                  <button
+                    type="button"
+                    onClick={() => setOpenId(d.id)}
+                    disabled={!active}
+                    aria-current={current ? "true" : undefined}
+                    className={`flex min-h-16 w-full items-center gap-3 rounded-[10px] p-2.5 text-left disabled:cursor-default ${current ? "bg-subtle" : "enabled:hover:bg-subtle"}`}
+                  >
+                    <Thumb video={video} cover={d.coverUrl} length={video ? formatDuration(d.durationSeconds ?? d.pageCount * VIDEO_SEGMENT_SECONDS) : null} />
+                    <span className="flex min-w-0 flex-1 flex-col gap-1">
+                      <span className="break-words text-[14px] font-semibold leading-snug text-fg">{d.fileName}</span>
+                      <span className="text-[12px] text-muted">
+                        {video
+                          ? done
+                            ? "ดูครบแล้ว"
+                            : `ดูแล้ว ${seen}/${d.pageCount} ช่วง`
+                          : done
+                            ? `อ่านครบ ${d.pageCount} หน้า`
+                            : `อ่านแล้ว ${seen}/${d.pageCount} หน้า`}
+                        {d.kind === "pricelist" ? " · Pricelist" : ""}
+                      </span>
+                      <ProgressLine percent={(seen / d.pageCount) * 100} done={done} thin />
+                    </span>
+                    {done ? (
+                      <span className="shrink-0 text-[13px] font-bold text-success" aria-label="ครบแล้ว">
+                        ✓
+                      </span>
+                    ) : current ? (
+                      <span className="shrink-0 text-[12px] font-semibold text-ink-2">{video ? "กำลังดู" : "กำลังอ่าน"}</span>
+                    ) : null}
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+
+        <div className="space-y-2.5 rounded-[13px] border border-line bg-raised p-4">
+          <h2 className="text-[15px] font-semibold text-fg">สอบ</h2>
+          <p className="text-[13px] leading-relaxed text-ink-2">{examNote}</p>
+          {exam ?? (
+            <p className="rounded-[10px] border border-dashed border-ink-4 bg-canvas px-3 py-3 text-center text-[13px] text-muted">
+              {remaining > 0 ? `ดู/อ่านให้ครบอีก ${remaining} รายการ แล้วจึงสแกนเริ่มสอบ` : "ครบแล้ว — กำลังบันทึก…"}
+            </p>
+          )}
+        </div>
+      </aside>
     </div>
+  );
+}
+
+function ProgressLine({ percent, done, thin = false }: { percent: number; done: boolean; thin?: boolean }) {
+  return (
+    <span className={`block overflow-hidden rounded-full bg-subtle ${thin ? "h-1" : "h-1.5"}`}>
+      <span className={`block h-full rounded-full ${done ? "bg-success" : "bg-fg"}`} style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
+    </span>
+  );
+}
+
+function PlayGlyph({ size = 14, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden className={className}>
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+/** ภาพย่อในรายการ — วิดีโอใช้ปกที่ผู้สร้างเลือก (ไม่มีปก = กล่องเข้ม) พร้อมความยาว · PDF เป็นไอคอนเอกสาร */
+function Thumb({ video, cover, length }: { video: boolean; cover: string | null; length: string | null }) {
+  return video ? (
+    <span className="relative flex aspect-video w-[88px] shrink-0 items-center justify-center overflow-hidden rounded-md bg-[#2c2e32] text-white">
+      {/* eslint-disable-next-line @next/next/no-img-element -- ภาพผ่าน route ที่ตรวจสิทธิ์ ไม่ผ่าน next/image */}
+      {cover && <img src={cover} alt="" className="absolute inset-0 size-full object-cover" />}
+      <span className={`relative flex items-center justify-center ${cover ? "size-6 rounded-full bg-black/55" : ""}`}>
+        <PlayGlyph size={cover ? 11 : 14} />
+      </span>
+      <span className="absolute bottom-[3px] right-1 rounded-[3px] bg-black/60 px-1 text-[10px] leading-4">{length}</span>
+    </span>
+  ) : (
+    <span className="flex aspect-video w-[88px] shrink-0 items-center justify-center rounded-md border border-line bg-subtle text-muted">
+      <svg width="16" height="20" viewBox="0 0 40 48" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden>
+        <path d="M6 2h20l10 10v34H6z" />
+        <path d="M26 2v10h10" />
+      </svg>
+    </span>
   );
 }
 
@@ -109,12 +249,13 @@ function useProgressBeat(assignmentId: number, documentId: number, busy: () => b
   return pending;
 }
 
-function VideoDoc({ assignmentId, doc }: { assignmentId: number; doc: Doc }) {
+function VideoDoc({ assignmentId, doc, label, onSeen }: { assignmentId: number; doc: LessonDoc; label: string; onSeen: (n: number) => void }) {
   const router = useRouter();
   const video = useRef<HTMLVideoElement>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [seen, setSeen] = useState<Set<number>>(() => new Set(doc.pagesSeen));
+  const [playingSegment, setPlayingSegment] = useState<number | null>(null);
   const seenRef = useRef(seen);
   const linkedAt = useRef(0);
   /** จุดที่ต้องเล่นต่อหลังเปลี่ยนลิงก์ */
@@ -155,6 +296,8 @@ function VideoDoc({ assignmentId, doc }: { assignmentId: number; doc: Doc }) {
   function collect() {
     const v = video.current;
     if (!v) return;
+    const now = v.paused || v.ended ? null : Math.min(doc.pageCount, Math.floor(v.currentTime / VIDEO_SEGMENT_SECONDS) + 1);
+    setPlayingSegment((p) => (p === now ? p : now));
     const ranges = v.played;
     const added: number[] = [];
     for (let n = 1; n <= doc.pageCount; n++) {
@@ -173,6 +316,7 @@ function VideoDoc({ assignmentId, doc }: { assignmentId: number; doc: Doc }) {
     }
     seenRef.current = next;
     setSeen(next);
+    onSeen(next.size);
   }
 
   function onLoadedMetadata() {
@@ -206,53 +350,92 @@ function VideoDoc({ assignmentId, doc }: { assignmentId: number; doc: Doc }) {
     void link().catch(() => setError("เปิดวิดีโอไม่ได้ ลองรีเฟรชหน้า"));
   }
 
+  // ช่วงที่ยังไม่นับแต่อยู่ก่อนจุดที่ดูไปไกลสุด = กรอข้ามไป
+  const furthest = Math.max(0, ...seen, playingSegment ?? 0);
+
   return (
-    <div>
-      <p className="mb-2 text-[12px] text-ink-3">
-        ดูแล้ว {seen.size}/{doc.pageCount} ช่วง (ช่วงละ {VIDEO_SEGMENT_SECONDS} วินาที · ยาว {formatDuration(duration)}) — ต้องเล่นผ่านครบทุกช่วงก่อนสอบ ·
-        กรอข้ามได้แต่ช่วงที่ข้ามไม่นับ · เร็วสุด {MAX_VIDEO_PLAYBACK_RATE} เท่า
-      </p>
-      {error && <p className="mb-2 text-[13px] text-danger">{error}</p>}
-      <video
-        ref={video}
-        src={src ?? undefined}
-        controls
-        playsInline
-        preload="metadata"
-        controlsList="nodownload"
-        disablePictureInPicture
-        onContextMenu={(e) => e.preventDefault()}
-        onLoadedMetadata={onLoadedMetadata}
-        onTimeUpdate={collect}
-        onPause={collect}
-        onEnded={collect}
-        onRateChange={onRateChange}
-        onError={onError}
-        className="aspect-video w-full rounded border border-line bg-black"
-      />
-      <SegmentBar total={doc.pageCount} seen={seen} />
+    <div className="space-y-3">
+      <div className="overflow-hidden rounded-[13px] bg-[#161719]">
+        <div className="flex items-baseline gap-3 px-4 pb-2 pt-3 text-white">
+          <span className="shrink-0 text-[12px] tracking-wide text-[#a4a7ad]">{label}</span>
+          <span className="min-w-0 truncate text-[14px] font-semibold">{doc.fileName}</span>
+          <span className="ml-auto shrink-0 text-[12px] text-[#c9cbcf]">ยาว {formatDuration(duration)}</span>
+        </div>
+        <video
+          ref={video}
+          src={src ?? undefined}
+          controls
+          playsInline
+          preload="metadata"
+          poster={doc.coverUrl ?? undefined}
+          controlsList="nodownload"
+          disablePictureInPicture
+          onContextMenu={(e) => e.preventDefault()}
+          onLoadedMetadata={onLoadedMetadata}
+          onTimeUpdate={collect}
+          onPlay={collect}
+          onPause={collect}
+          onEnded={collect}
+          onRateChange={onRateChange}
+          onError={onError}
+          className="block aspect-video w-full bg-black"
+        />
+      </div>
+      {error && <p className="text-[13px] text-danger">{error}</p>}
+      <div className="space-y-2.5 rounded-[13px] border border-line bg-raised px-4 py-3.5">
+        <div className="flex flex-wrap justify-between gap-2 text-[13px]">
+          <span className="font-semibold text-fg">
+            ดูแล้ว {seen.size}/{doc.pageCount} ช่วง <span className="font-normal text-muted">(ช่วงละ {VIDEO_SEGMENT_SECONDS} วินาที)</span>
+          </span>
+          <span className="text-muted">กรอข้ามได้ แต่ช่วงที่ข้ามไม่นับ · เร็วสุด {MAX_VIDEO_PLAYBACK_RATE} เท่า</span>
+        </div>
+        <div className="flex h-3.5 gap-px" role="img" aria-label={`ดูแล้ว ${seen.size} จาก ${doc.pageCount} ช่วง`}>
+          {Array.from({ length: doc.pageCount }, (_, i) => {
+            const n = i + 1;
+            const cls = seen.has(n)
+              ? "bg-success"
+              : n === playingSegment
+                ? "bg-fg"
+                : n < furthest
+                  ? "border border-dashed border-ink-4 bg-line"
+                  : "bg-subtle";
+            return <span key={n} className={`min-w-0 flex-1 rounded-[2px] ${cls}`} />;
+          })}
+        </div>
+        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-2">
+          <li className="flex items-center gap-1.5">
+            <span className="size-3 rounded-[3px] bg-success" aria-hidden />
+            ดูแล้ว
+          </li>
+          <li className="flex items-center gap-1.5">
+            <span className="size-3 rounded-[3px] bg-fg" aria-hidden />
+            กำลังเล่น
+          </li>
+          <li className="flex items-center gap-1.5">
+            <span className="size-3 rounded-[3px] border border-dashed border-ink-4 bg-line" aria-hidden />
+            กรอข้าม — ยังไม่นับ
+          </li>
+          <li className="flex items-center gap-1.5">
+            <span className="size-3 rounded-[3px] bg-subtle" aria-hidden />
+            ยังไม่ดู
+          </li>
+        </ul>
+      </div>
     </div>
   );
 }
 
-/** แถบช่วงที่ดูแล้ว — แต่ละขีดคือช่วง 10 วินาที */
-function SegmentBar({ total, seen }: { total: number; seen: Set<number> }) {
-  return (
-    <div className="mt-2 flex h-2 w-full gap-px overflow-hidden rounded-full bg-subtle" role="img" aria-label={`ดูแล้ว ${seen.size} จาก ${total} ช่วง`}>
-      {Array.from({ length: total }, (_, i) => (
-        <div key={i} className={`h-full flex-1 ${seen.has(i + 1) ? "bg-success" : ""}`} />
-      ))}
-    </div>
-  );
-}
-
-function PdfDoc({ assignmentId, doc, viewer }: { assignmentId: number; doc: Doc; viewer: string }) {
+function PdfDoc({ assignmentId, doc, viewer, onSeen }: { assignmentId: number; doc: LessonDoc; viewer: string; onSeen: (n: number) => void }) {
   const confidential = doc.kind === "pricelist";
   const router = useRouter();
   const container = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [seen, setSeen] = useState<Set<number>>(new Set(doc.pagesSeen));
   const pending = useProgressBeat(assignmentId, doc.id, () => false);
+
+  useEffect(() => {
+    onSeen(seen.size);
+  }, [seen, onSeen]);
 
   // โหลดและวาดทุกหน้า
   useEffect(() => {
@@ -315,10 +498,13 @@ function PdfDoc({ assignmentId, doc, viewer }: { assignmentId: number; doc: Doc;
   }, [pending]);
 
   return (
-    <div>
-      <p className="mb-2 text-[12px] text-ink-3">
-        เลื่อนผ่านแล้ว {seen.size}/{doc.pageCount} หน้า — ต้องครบทุกหน้าก่อนสอบ
-      </p>
+    <div className="rounded-[13px] border border-line bg-raised p-4">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <span className="min-w-0 truncate text-[14px] font-semibold text-fg">{doc.fileName}</span>
+        <span className="text-[12px] text-muted">
+          เลื่อนผ่านแล้ว {seen.size}/{doc.pageCount} หน้า — ต้องครบทุกหน้าก่อนสอบ
+        </span>
+      </div>
       {confidential && <p className="mb-2 text-[12px] text-danger">Pricelist — ดูในระบบเท่านั้น · ทุกหน้ามีชื่อของคุณและเวลาที่เปิด · ระบบบันทึกการเปิดทุกครั้ง</p>}
       {error && <p className="mb-2 text-[13px] text-danger">{error}</p>}
       {/* Pricelist: ซ้อนชื่อภาษาไทยบนหน้าจออีกชั้น (ในไฟล์ประทับอีเมล/รหัสไว้แล้วฝั่งเซิร์ฟเวอร์) · ปิดเมนูคลิกขวา */}

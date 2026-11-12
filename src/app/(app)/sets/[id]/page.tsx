@@ -7,7 +7,7 @@ import type { Level } from "@/db/schema";
 import { assignmentStatus, audienceRulesOf, previewAudience, type AssignmentState } from "@/lib/assignment-service";
 import { examEditor } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
-import { canEditDraft, canEditVersion, getSetDetail, type QuestionView } from "@/lib/set-service";
+import { canEditDraft, canEditVersion, coverPath, getSetDetail, type QuestionView } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { fetchOrg } from "@/lib/workid";
 import {
@@ -30,6 +30,7 @@ import {
   updateSettingsAction,
 } from "../actions";
 import { Flash, STATUS } from "../ui";
+import { CoverEditor } from "./cover-picker";
 import { UploadForm } from "./upload-form";
 
 export const dynamic = "force-dynamic";
@@ -155,6 +156,11 @@ export default async function SetPage({
                     !aiReadable(d.mimeType) && <span className="ml-2 text-warning">AI ยังอ่านไฟล์ชนิดนี้ไม่ได้</span>
                   )}
                 </span>
+                {isVideoMime(d.mimeType) && (
+                  <div className="order-last w-full">
+                    <CoverEditor setId={set.id} documentId={d.id} coverUrl={coverPath(d)} coverMs={d.coverMs} canEdit={isOwner} />
+                  </div>
+                )}
                 {docsEditable && (
                   <form action={removeDocumentAction}>
                     <input type="hidden" name="setId" value={set.id} />

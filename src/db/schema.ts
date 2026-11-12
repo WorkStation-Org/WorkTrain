@@ -158,6 +158,10 @@ export const documents = pgTable(
     pageCount: smallint("page_count"),
     /** ความยาววิดีโอจากหัวไฟล์ (วินาที) — วิดีโอใช้ `page_count` เป็นจำนวนช่วงละ 10 วินาที (ADR-0013) · null = ไม่ใช่วิดีโอ */
     durationSeconds: integer("duration_seconds"),
+    /** ปกวิดีโอ — key ของ JPEG ใน R2 ที่ผู้สร้างจับจากเฟรมในคลิป (ADR-0013) · null = ยังไม่มีปก */
+    coverKey: text("cover_key"),
+    /** เฟรมที่ใช้เป็นปก (มิลลิวินาทีจากต้นคลิป) */
+    coverMs: integer("cover_ms"),
     sortOrder: smallint("sort_order").notNull().default(0),
     createdAt: ts("created_at").notNull().defaultNow(),
   },
