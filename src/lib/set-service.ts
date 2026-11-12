@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { asc, desc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
 import { PDFDocument } from "pdf-lib";
 import { db } from "@/db";
 import {
   approvalEvents,
+  assignments,
   choices,
   documents,
   examForms,
@@ -15,10 +16,13 @@ import {
 } from "@/db/schema";
 import { checkBlueprint, type Blueprint } from "@/domain/blueprint";
 import {
+  MAX_COVER_BYTES,
   MAX_VIDEO_SECONDS,
+  coverKey,
   documentKey,
   formatBytesLimit,
   isDocumentMime,
+  isJpeg,
   isVideoMime,
   kindAllowsMime,
   maxBytesFor,
@@ -26,7 +30,7 @@ import {
 } from "@/domain/document";
 import { mp4DurationSeconds } from "@/domain/mp4";
 import type { Actor } from "@/lib/auth";
-import { objectStore } from "@/lib/object-store";
+import { objectStore, VIDEO_LINK_TTL_SECONDS } from "@/lib/object-store";
 import { openBlob, signBlob } from "@/lib/session";
 import { fetchOrg } from "@/lib/workid";
 
@@ -341,7 +345,73 @@ export async function removeDocument(input: { actor: Actor; documentId: number }
   if (used.length) return { ok: false, error: "เอกสารนี้ถูกใช้ออกข้อสอบแล้ว — ลบข้อสอบก่อน" };
   await db().delete(documents).where(eq(documents.id, row.doc.id));
   await objectStore()?.delete(row.doc.objectKey);
+  if (row.doc.coverKey) await objectStore()?.delete(row.doc.coverKey);
   return { ok: true };
+}
+
+// ── ปกวิดีโอ (ADR-0013) ─────────────────────────────────────────────────────
+
+async function documentWithSet(documentId: number) {
+  const [row] = await db()
+    .select({ doc: documents, setId: setVersions.setId })
+    .from(documents)
+    .innerJoin(setVersions, eq(setVersions.id, documents.versionId))
+    .where(eq(documents.id, documentId));
+  if (!row) return null;
+  const set = await loadSet(row.setId);
+  return set ? { doc: row.doc, set } : null;
+}
+
+/**
+ * ตั้งปกวิดีโอจากเฟรมที่ผู้สร้างจับในเบราว์เซอร์ — ผู้สร้างหรือ TG เปลี่ยนได้ทุกเมื่อ (ปกไม่ใช่เนื้อหาที่ต้องเรียน จึงไม่ผูกกับร่าง/อนุมัติ)
+ * ตรวจไฟล์เองว่าเป็น JPEG จริงและไม่ใหญ่เกิน · ปกเก่าถูกลบจากที่เก็บ
+ */
+export async function setVideoCover(input: { actor: Actor; documentId: number; bytes: Uint8Array; ms: number }): Promise<Outcome> {
+  const found = await documentWithSet(input.documentId);
+  if (!found || !isOwnerOrAdmin(input.actor, found.set)) return { ok: false, error: "ไม่พบวิดีโอนี้ หรือไม่มีสิทธิ์เปลี่ยนปก" };
+  const { doc } = found;
+  if (!isVideoMime(doc.mimeType)) return { ok: false, error: "ตั้งปกได้เฉพาะวิดีโอ" };
+  if (input.bytes.byteLength > MAX_COVER_BYTES || !isJpeg(input.bytes)) return { ok: false, error: "ภาพปกไม่ถูกต้อง ลองเลือกเฟรมใหม่" };
+  const maxMs = (doc.durationSeconds ?? 0) * 1000 + 1000;
+  const ms = Math.round(input.ms);
+  if (!Number.isFinite(ms) || ms < 0 || ms > maxMs) return { ok: false, error: "ตำแหน่งเฟรมอยู่นอกความยาวคลิป" };
+  const store = objectStore();
+  if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
+  const key = coverKey(doc.objectKey, randomBytes(12).toString("hex"));
+  await store.put(key, input.bytes, "image/jpeg");
+  await db().update(documents).set({ coverKey: key, coverMs: ms }).where(eq(documents.id, doc.id));
+  if (doc.coverKey) await store.delete(doc.coverKey);
+  return { ok: true };
+}
+
+/** ลิงก์วิดีโอให้ผู้สร้างเลือกเฟรมปก — คนที่ทำงานกับชุดนี้ (`canManage`) เท่านั้น · ไม่ต้องมีรอบเรียน ไม่บันทึกเป็นการเปิดของผู้เรียน */
+export async function authorVideoLink(input: { actor: Actor; documentId: number }): Promise<Outcome<{ url: string }>> {
+  const found = await documentWithSet(input.documentId);
+  if (!found || !canManage(input.actor, found.set) || !isVideoMime(found.doc.mimeType)) return { ok: false, error: "ไม่พบวิดีโอนี้" };
+  const store = objectStore();
+  if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
+  const url = await store.presignGet({ key: found.doc.objectKey, contentType: found.doc.mimeType, disposition: "inline", expiresIn: VIDEO_LINK_TTL_SECONDS });
+  return { ok: true, url };
+}
+
+/** ภาพปก — คนที่ทำงานกับชุด หรือผู้เรียนที่ได้รับมอบชุดนี้ · `null` = ไม่มีปกหรือไม่มีสิทธิ์ */
+export async function coverImage(input: { actor: Pick<Actor, "personId" | "role">; documentId: number }): Promise<Uint8Array | null> {
+  const found = await documentWithSet(input.documentId);
+  if (!found?.doc.coverKey) return null;
+  if (!canManage(input.actor, found.set)) {
+    const mine = await db()
+      .select({ id: assignments.id })
+      .from(assignments)
+      .where(and(eq(assignments.setId, found.set.id), eq(assignments.personId, input.actor.personId)))
+      .limit(1);
+    if (!mine.length) return null;
+  }
+  return (await objectStore()?.get(found.doc.coverKey)) ?? null;
+}
+
+/** ที่อยู่ภาพปกสำหรับหน้าจอ — `v` เปลี่ยนเมื่อเปลี่ยนเฟรม ให้เบราว์เซอร์ไม่ใช้ภาพเก่าใน cache */
+export function coverPath(doc: { id: number; coverKey: string | null; coverMs: number | null }): string | null {
+  return doc.coverKey ? `/api/covers/${doc.id}?v=${doc.coverKey.slice(-12, -4)}` : null;
 }
 
 // ── อ่าน ───────────────────────────────────────────────────────────────────

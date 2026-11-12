@@ -85,6 +85,13 @@
       "when": 1794467951402,
       "tag": "0011_video_duration",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794471128948,
+      "tag": "0012_video_cover",
+      "breakpoints": true
     }
   ]
 }
