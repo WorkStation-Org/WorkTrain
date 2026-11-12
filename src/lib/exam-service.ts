@@ -7,16 +7,18 @@ import {
   examForms,
   FORMS_PER_VERSION,
   learningSets,
+  questionReviews,
   questions,
   setVersions,
   type FormKind,
 } from "@/db/schema";
-import type { Blueprint } from "@/domain/blueprint";
+import { slots, type Blueprint } from "@/domain/blueprint";
 import { aiReadable } from "@/domain/document";
+import { spreadPlan } from "@/domain/spread";
 import type { Actor } from "@/lib/auth";
 import { checkForms, checkQuestion, type ExamModel, type GeneratedQuestion, type SourceDocument } from "@/lib/exam-generator";
 import { objectStore } from "@/lib/object-store";
-import { canEditVersion, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
+import { canEditVersion, canManage, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
 
 /**
  * ข้อสอบของชุดการเรียนรู้ — ให้ AI ออก 5 ชุด · แก้ทีละข้อ · ออกใหม่ทีละข้อ (spec §3 · §4)
@@ -52,7 +54,7 @@ export function examEditor(
   return null;
 }
 
-export async function sourceDocuments(versionId: number): Promise<Outcome<{ docs: SourceDocument[] }>> {
+export async function sourceDocuments(versionId: number): Promise<Outcome<{ docs: SourceDocument[]; weights: number[] }>> {
   const store = objectStore();
   if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
   const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder));
@@ -64,7 +66,7 @@ export async function sourceDocuments(versionId: number): Promise<Outcome<{ docs
     if (!bytes) return { ok: false, error: `อ่านไฟล์ ${d.fileName} จากที่เก็บไม่ได้` };
     docs.push({ fileName: d.fileName, kind: d.kind, pdf: bytes });
   }
-  return { ok: true, docs };
+  return { ok: true, docs, weights: readable.map((d) => d.examWeight) };
 }
 
 /** ลงคำถามหนึ่งข้อพร้อม 4 ตัวเลือก — แยกคำสั่งเพราะต้องใช้ id ของคำถามก่อน (ไม่ใช่ atomic) */
@@ -102,7 +104,12 @@ export async function generateExams(input: { actor: Actor; setId: number; model:
   if (!src.ok) return src;
 
   const blueprint = set.blueprint as Blueprint;
-  const out = await input.model.generateForms({ setTitle: set.title, documents: src.docs, blueprint, formCount: FORMS_PER_VERSION });
+  // เฉลี่ยตามไฟล์ (ค่าตั้งต้น) หรือตามน้ำหนักที่ตั้งเอง · ตามหัวข้อ = ให้ AI กระจายเองตาม blueprint
+  const plan =
+    set.spreadMode === "topic" || src.docs.length < 2
+      ? undefined
+      : spreadPlan(set.spreadMode === "custom" ? src.weights : src.docs.map(() => 1), slots(blueprint).length, FORMS_PER_VERSION);
+  const out = await input.model.generateForms({ setTitle: set.title, documents: src.docs, blueprint, formCount: FORMS_PER_VERSION, plan });
   if (!out.ok) return out;
   const bad = checkForms(out.value, blueprint, FORMS_PER_VERSION);
   if (bad) return { ok: false, error: `AI ออกข้อสอบไม่ครบตามที่ตั้งไว้ (${bad}) — ลองกดออกใหม่` };
@@ -157,6 +164,8 @@ export async function editQuestion(input: { actor: Actor; questionId: number; ed
 
   const before = snapshot(found.q, found.choices);
   await replaceQuestionContent(found.q.id, found.choices.map((c) => c.id), next);
+  // แก้เอง = ตรวจข้อนี้แล้ว
+  await db().insert(questionReviews).values({ questionId: found.q.id, personId: input.actor.personId }).onConflictDoNothing();
   await db().insert(approvalEvents).values({
     setId: set.id,
     versionId: found.versionId,
@@ -206,6 +215,8 @@ export async function regenerateQuestion(input: { actor: Actor; questionId: numb
 
   const before = snapshot(found.q, found.choices);
   await replaceQuestionContent(found.q.id, found.choices.map((c) => c.id), q);
+  // เนื้อเปลี่ยนทั้งข้อ — "ตรวจแล้ว" ของทุกคนไม่นับแล้ว
+  await db().delete(questionReviews).where(eq(questionReviews.questionId, found.q.id));
   await db().insert(approvalEvents).values({
     setId: set.id,
     versionId: found.versionId,
@@ -215,6 +226,34 @@ export async function regenerateQuestion(input: { actor: Actor; questionId: numb
     detail: { questionId: found.q.id, before },
   });
   return { ok: true };
+}
+
+/** ทำเครื่องหมาย "ตรวจแล้ว" ของคนนี้ต่อข้อสอบหนึ่งข้อ — คนที่ทำงานกับชุด (ผู้สร้าง · ผู้อนุมัติ · TG) */
+export async function setQuestionReviewed(input: { actor: Actor; questionId: number; reviewed: boolean; now?: Date }): Promise<Outcome> {
+  const found = await loadQuestion(input.questionId);
+  if (!found) return { ok: false, error: "ไม่พบข้อสอบ" };
+  const set = await loadSet(found.setId);
+  if (!set || !canManage(input.actor, set)) return { ok: false, error: "ไม่พบข้อสอบ" };
+  if (input.reviewed) {
+    await db()
+      .insert(questionReviews)
+      .values({ questionId: found.q.id, personId: input.actor.personId, reviewedAt: input.now ?? new Date() })
+      .onConflictDoNothing();
+  } else {
+    await db().delete(questionReviews).where(and(eq(questionReviews.questionId, found.q.id), eq(questionReviews.personId, input.actor.personId)));
+  }
+  return { ok: true };
+}
+
+/** ข้อที่คนนี้ตรวจแล้วในเวอร์ชันนี้ */
+export async function reviewedQuestionIds(versionId: number, personId: number): Promise<Set<number>> {
+  const rows = await db()
+    .select({ id: questionReviews.questionId })
+    .from(questionReviews)
+    .innerJoin(questions, eq(questions.id, questionReviews.questionId))
+    .innerJoin(examForms, eq(examForms.id, questions.formId))
+    .where(and(eq(examForms.versionId, versionId), eq(questionReviews.personId, personId)));
+  return new Set(rows.map((r) => r.id));
 }
 
 /**

@@ -18,7 +18,7 @@ import {
 import { resolveAudience, type AudienceRule } from "@/domain/audience";
 import type { Actor } from "@/lib/auth";
 import { markCoveredBy, MAX_SEND_ATTEMPTS, sendToGroup, sendToPerson, type SendResult } from "@/lib/deliver";
-import { canEditDraft, type Outcome } from "@/lib/set-service";
+import { canEditAudience, type Outcome } from "@/lib/set-service";
 import { ageInDays, bangkokDate, bangkokParts, formatBangkok } from "@/lib/time";
 import { fetchOrg, type OrgPerson } from "@/lib/workid";
 
@@ -50,11 +50,15 @@ export interface AudienceInput {
   label: string;
 }
 
-/** แทนเงื่อนไขผู้รับทั้งชุด — ตอนร่างเท่านั้น (อนุมัติแล้วเปลี่ยนผู้รับ = slice ถัดไป) */
-export async function setAudience(input: { actor: Actor; setId: number; rules: AudienceInput[] }): Promise<Outcome> {
+/**
+ * แทนเงื่อนไขผู้รับทั้งชุด — ร่าง หรือชุดที่ใช้อยู่ (ผู้สร้าง/TG)
+ * ชุดที่ใช้อยู่: มอบให้คนที่ตรงเงื่อนไขใหม่ทันที (แจ้ง LINE เหมือนตอนอนุมัติ) · คนที่หลุดเงื่อนไขเก็บการมอบเดิมไว้ (spec §5) ·
+ * ลงประวัติว่าใครเปลี่ยนเมื่อไร
+ */
+export async function setAudience(input: { actor: Actor; setId: number; rules: AudienceInput[]; now?: Date }): Promise<Outcome<{ assigned: number }>> {
   const [set] = await db().select().from(learningSets).where(eq(learningSets.id, input.setId));
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
-  if (!canEditDraft(input.actor, set)) return { ok: false, error: "แก้ผู้รับได้เฉพาะชุดร่างของตัวเอง" };
+  if (!canEditAudience(input.actor, set)) return { ok: false, error: "แก้ผู้รับได้เฉพาะชุดร่างหรือชุดที่ใช้อยู่ของตัวเอง" };
   const seen = new Set<string>();
   const rows: (typeof audienceRules.$inferInsert)[] = [];
   for (const r of input.rules) {
@@ -69,7 +73,18 @@ export async function setAudience(input: { actor: Actor; setId: number; rules: A
     db().delete(audienceRules).where(eq(audienceRules.setId, set.id)),
     ...(rows.length ? [db().insert(audienceRules).values(rows)] : []),
   ]);
-  return { ok: true };
+  if (set.status !== "active") return { ok: true, assigned: 0 };
+
+  await db().insert(approvalEvents).values({
+    setId: set.id,
+    action: "audience_changed",
+    actorPersonId: input.actor.personId,
+    actorName: input.actor.name,
+    comment: rows.map((r) => r.label).join(" · ") || "ไม่มีเงื่อนไข",
+    createdAt: input.now ?? new Date(),
+  });
+  const sync = await syncAssignments({ setId: set.id, now: input.now });
+  return { ok: true, assigned: sync.assigned };
 }
 
 async function adhocMembersOf(rules: readonly AudienceRule[]): Promise<Map<number, Set<number>>> {

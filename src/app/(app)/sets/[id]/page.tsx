@@ -1,27 +1,24 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Badge, Button, Card, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle, SELECT_CLASS } from "@/components/ui";
-import { audienceOptions } from "@/domain/audience";
-import { LEVEL_LABELS, topicLabel } from "@/domain/blueprint";
-import { aiReadable, DOCUMENT_KIND_LABELS, formatDuration, isVideoMime } from "@/domain/document";
-import type { Level } from "@/db/schema";
-import { assignmentStatus, audienceRulesOf, previewAudience, type AssignmentState } from "@/lib/assignment-service";
-import { examEditor } from "@/lib/exam-service";
+import { Badge, Button, Card, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle } from "@/components/ui";
+import { LEVEL_LABELS, slots, topicLabel, topicsOf, type Blueprint } from "@/domain/blueprint";
+import { aiReadable, isVideoMime } from "@/domain/document";
+import { coverage } from "@/domain/spread";
+import { FORMS_PER_VERSION, type Level } from "@/db/schema";
+import { assignmentStatus, audienceRulesOf, type AssignmentState } from "@/lib/assignment-service";
+import { examEditor, reviewedQuestionIds } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
-import { canEditDraft, canEditVersion, coverPath, getSetDetail, type QuestionView } from "@/lib/set-service";
+import { canEditAudience, canEditDraft, canEditVersion, canManage, coverPath, getSetDetail } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { fetchOrg } from "@/lib/workid";
 import {
   approveAction,
   approveVersionAction,
-  editQuestionAction,
   editSummaryAction,
   generateDeltaAction,
   generateExamsAction,
-  regenerateQuestionAction,
-  removeDocumentAction,
   returnAction,
   returnVersionAction,
-  setAudienceAction,
   setChangeKindAction,
   startVersionAction,
   submitAction,
@@ -30,8 +27,11 @@ import {
   updateSettingsAction,
 } from "../actions";
 import { Flash, STATUS } from "../ui";
-import { CoverEditor } from "./cover-picker";
-import { UploadForm } from "./upload-form";
+import { ApproverPicker } from "./approver-picker";
+import { AudiencePicker } from "./audience-picker";
+import { DocsManager } from "./docs-manager";
+import { ExamWorkspace } from "./exam-workspace";
+import { SpreadPanel } from "./spread-panel";
 
 export const dynamic = "force-dynamic";
 /** AI อ่านแคตตาล็อก ~20 หน้าแล้วออก 50 ข้อในคำขอเดียว — ใช้เวลาหลายนาที (server action ใช้ค่านี้ของหน้า) */
@@ -44,8 +44,16 @@ const EVENT_LABELS: Record<string, string> = {
   question_edited: "แก้ข้อสอบ",
   question_regenerated: "ให้ AI ออกข้อใหม่",
   approver_changed: "เปลี่ยนผู้อนุมัติ",
+  audience_changed: "เปลี่ยนผู้รับ",
 };
 
+type Tab = "settings" | "docs" | "exam" | "audience" | "learners" | "history";
+const TABS: Tab[] = ["settings", "docs", "exam", "audience", "learners", "history"];
+
+/**
+ * หน้าชุดการเรียนรู้ — แถบขั้นตอน ตั้งค่า → เอกสาร → ข้อสอบ → ผู้รับ (→ ผู้เรียน) → ประวัติ · แต่ละขั้นบอกสถานะในตัว
+ * แสดงทีละขั้นตาม `?tab=` — บันทึกแล้วกลับมาขั้นเดิม (action ส่ง `tab` กลับมา) ไม่ต้องเลื่อนหาใหม่
+ */
 export default async function SetPage({
   params,
   searchParams,
@@ -67,174 +75,318 @@ export default async function SetPage({
   const isOwner = actor.role === "admin" || actor.personId === set.authorPersonId;
   const isVersionApprover = Boolean(newVersion?.submittedAt) && set.approverPersonId === actor.personId;
   const isApprover = set.status === "pending_approval" && set.approverPersonId === actor.personId;
-  const org = editable ? await fetchOrg() : null;
+  const audienceEditable = canEditAudience(actor, set);
   const rules = await audienceRulesOf(set.id);
-  const preview = editable ? await previewAudience(set.id) : null;
   const status = set.status === "active" || set.status === "closed" ? await assignmentStatus(set.id) : [];
+  const fullForms = forms.filter((f) => f.kind === "full");
+  const allQuestions = forms.flatMap((f) => f.questions);
+  const reviewed = version ? await reviewedQuestionIds(version.id, actor.personId) : new Set<number>();
+  const reviewedCount = allQuestions.filter((q) => reviewed.has(q.id)).length;
+  const canReview = canManage(actor, set);
+  const videos = documents.filter((d) => isVideoMime(d.mimeType));
+  const aiDocs = documents.filter((d) => aiReadable(d.mimeType));
+
+  const requested = firstParam(sp.tab) as Tab | undefined;
+  const fallback: Tab =
+    isApprover || isVersionApprover
+      ? "exam"
+      : status.length
+        ? "learners"
+        : documents.length === 0
+          ? "docs"
+          : fullForms.length === 0
+            ? "exam"
+            : rules.length === 0
+              ? "audience"
+              : "exam";
+  const tab: Tab = requested && TABS.includes(requested) && (requested !== "learners" || status.length > 0) ? requested : fallback;
+  const needOrg = (tab === "settings" && editable) || tab === "audience";
+  const org = needOrg ? await fetchOrg() : null;
+
+  const steps: { key: Tab; label: string; sub: string; state: "done" | "todo" | "warn" | "info" }[] = [
+    { key: "settings", label: "ตั้งค่า", sub: set.approverName ? `ผู้อนุมัติ ${set.approverName}` : "ยังไม่เลือกผู้อนุมัติ", state: set.approverName ? "done" : "warn" },
+    {
+      key: "docs",
+      label: "เอกสาร",
+      sub: documents.length ? [videos.length && `${videos.length} วิดีโอ`, documents.length - videos.length && `${documents.length - videos.length} เอกสาร`].filter(Boolean).join(" · ") : "ยังไม่มี",
+      state: aiDocs.length ? "done" : "warn",
+    },
+    {
+      key: "exam",
+      label: "ข้อสอบ",
+      sub: allQuestions.length ? (canReview ? `ตรวจแล้ว ${reviewedCount}/${allQuestions.length}` : `${forms.length} ชุด`) : "ยังไม่ออก",
+      state: !allQuestions.length ? "warn" : canReview && reviewedCount < allQuestions.length ? "warn" : "done",
+    },
+    { key: "audience", label: "ผู้รับ", sub: rules.length ? `${rules.length} เงื่อนไข` : "ยังไม่ตั้ง", state: rules.length ? "done" : "warn" },
+    ...(status.length
+      ? [{ key: "learners" as const, label: "ผู้เรียน", sub: `ผ่าน ${status.filter((s) => s.state === "passed").length}/${status.length}`, state: "info" as const }]
+      : []),
+    { key: "history", label: "ประวัติ", sub: `${events.length} รายการ`, state: "info" },
+  ];
+
+  const people = org?.ok ? org.people : [];
+  const author = people.find((p) => p.personId === set.authorPersonId);
 
   return (
-    <main className="mx-auto w-full max-w-4xl space-y-5">
+    <main className="mx-auto w-full max-w-6xl space-y-5">
       <PageHeader
         kicker="Learning set"
         title={set.title}
-        subtitle={`${detail.kind.name} · ผู้สร้าง ${set.authorName} · ผู้อนุมัติ ${set.approverName ?? "ยังไม่ได้เลือก"}`}
+        subtitle={`${detail.kind.name}${version?.label ? ` · ${version.label}` : ""} · ผู้สร้าง ${set.authorName} · ผู้อนุมัติ ${set.approverName ?? "ยังไม่ได้เลือก"}`}
         actions={
           <>
             <Badge tone={STATUS[set.status].tone} label={STATUS[set.status].label} />
+            {editable && (
+              <form action={submitAction}>
+                <input type="hidden" name="setId" value={set.id} />
+                <input type="hidden" name="tab" value={tab} />
+                <Button type="submit" variant="primary">
+                  ส่งขออนุมัติ
+                </Button>
+              </form>
+            )}
             <Button href="/sets" variant="ghost" icon="chevronLeft">
               ชุดทั้งหมด
             </Button>
           </>
         }
       />
+
+      <nav aria-label="ขั้นตอนของชุด" className="-mx-1 flex gap-0.5 overflow-x-auto border-b border-line px-1">
+        {steps.map((s, i) => (
+          <Link
+            key={s.key}
+            href={`/sets/${set.id}?tab=${s.key}`}
+            aria-current={tab === s.key ? "step" : undefined}
+            scroll={false}
+            className={`flex min-h-14 shrink-0 items-center gap-2.5 border-b-[3px] px-3.5 pb-2.5 pt-2 ${tab === s.key ? "border-fg" : "border-transparent hover:border-line-strong"}`}
+          >
+            <span
+              className={`flex size-6 shrink-0 items-center justify-center rounded-full text-[12px] font-bold ${
+                s.state === "done" ? "bg-success-soft text-success" : s.state === "warn" ? "bg-warn-soft text-warn" : "bg-subtle text-ink-2"
+              }`}
+            >
+              {s.state === "done" ? "✓" : s.state === "info" ? "·" : i + 1}
+            </span>
+            <span className="flex flex-col text-left">
+              <span className="text-[14px] font-semibold text-fg">{s.label}</span>
+              <span className={`text-[12px] ${s.state === "warn" ? "text-warn" : "text-muted"}`}>{s.sub}</span>
+            </span>
+          </Link>
+        ))}
+      </nav>
+
       <Flash msg={firstParam(sp.msg)} err={firstParam(sp.err)} />
 
-      {editable && (
-        <Card>
-          <SectionTitle className="mb-3">ตั้งค่า</SectionTitle>
-          <form action={updateSettingsAction} className="grid gap-3 sm:grid-cols-2">
-            <input type="hidden" name="setId" value={set.id} />
-            <label className="sm:col-span-2">
-              <span className={FIELD_LABEL_CLASS}>ชื่อชุด</span>
-              <input name="title" defaultValue={set.title} required maxLength={200} className={INPUT_CLASS} />
-            </label>
-            <label>
-              <span className={FIELD_LABEL_CLASS}>เวอร์ชันตามเอกสาร</span>
-              <input name="label" defaultValue={version?.label ?? ""} placeholder="เช่น V.1 · 10/2026" className={INPUT_CLASS} />
-            </label>
-            <label>
-              <span className={FIELD_LABEL_CLASS}>ผู้อนุมัติ</span>
-              <select name="approverPersonId" defaultValue={set.approverPersonId ?? ""} className={SELECT_CLASS}>
-                <option value="">— เลือก —</option>
-                {org?.ok &&
-                  org.people
-                    .filter((p) => p.personId !== set.authorPersonId)
-                    .map((p) => (
-                      <option key={p.personId} value={p.personId}>
-                        {p.fullName}
-                        {p.title ? ` · ${p.title}` : ""}
-                      </option>
-                    ))}
-              </select>
-              {org && !org.ok && <span className="text-[11px] text-danger">ดึงผังจาก WorkID ไม่ได้ — ผู้อนุมัติเดิมยังอยู่</span>}
-            </label>
-            <label>
-              <span className={FIELD_LABEL_CLASS}>กำหนดส่ง (วันหลังได้รับมอบ)</span>
-              <input name="dueDays" type="number" min={1} max={90} defaultValue={set.dueDays} className={INPUT_CLASS} />
-            </label>
-            <label>
-              <span className={FIELD_LABEL_CLASS}>เวลาสอบ (นาที)</span>
-              <input name="examMinutes" type="number" min={1} max={120} defaultValue={set.examMinutes} className={INPUT_CLASS} />
-            </label>
-            <div className="sm:col-span-2">
-              <Button type="submit">บันทึก</Button>
-            </div>
-          </form>
-        </Card>
+      {tab === "settings" &&
+        (editable ? (
+          <Card>
+            <form action={updateSettingsAction} className="grid gap-4 sm:grid-cols-2">
+              <input type="hidden" name="setId" value={set.id} />
+              <input type="hidden" name="tab" value="settings" />
+              <label className="sm:col-span-2">
+                <span className={FIELD_LABEL_CLASS}>ชื่อชุด</span>
+                <input name="title" defaultValue={set.title} required maxLength={200} className={INPUT_CLASS} />
+              </label>
+              <label>
+                <span className={FIELD_LABEL_CLASS}>เวอร์ชันตามเอกสาร</span>
+                <input name="label" defaultValue={version?.label ?? ""} placeholder="เช่น V.1 · 10/2026" className={INPUT_CLASS} />
+              </label>
+              <label>
+                <span className={FIELD_LABEL_CLASS}>กำหนดส่ง (วันหลังได้รับมอบ)</span>
+                <input name="dueDays" type="number" min={1} max={90} defaultValue={set.dueDays} className={INPUT_CLASS} />
+              </label>
+              <label>
+                <span className={FIELD_LABEL_CLASS}>เวลาสอบ (นาที)</span>
+                <input name="examMinutes" type="number" min={1} max={120} defaultValue={set.examMinutes} className={INPUT_CLASS} />
+              </label>
+              <div className="sm:col-span-2">
+                <span className={FIELD_LABEL_CLASS}>ผู้อนุมัติ</span>
+                {org && !org.ok ? (
+                  <p className="text-[13px] text-danger">ดึงผังจาก WorkID ไม่ได้ — ผู้อนุมัติเดิมยังอยู่ ({set.approverName ?? "ยังไม่ได้เลือก"})</p>
+                ) : (
+                  <ApproverPicker
+                    people={people
+                      .filter((p) => p.personId !== set.authorPersonId)
+                      .map((p) => ({ personId: p.personId, fullName: p.fullName, nickname: p.nickname, title: p.title, teamName: p.teamName }))}
+                    initialId={set.approverPersonId}
+                    managerId={author?.managerPersonId ?? null}
+                  />
+                )}
+                {org && !org.ok && <input type="hidden" name="approverPersonId" value={set.approverPersonId ?? ""} />}
+              </div>
+              <div className="sm:col-span-2">
+                <Button type="submit" variant="primary">
+                  บันทึก
+                </Button>
+              </div>
+            </form>
+          </Card>
+        ) : (
+          <Card>
+            <dl className="grid gap-4 text-[13px] sm:grid-cols-2">
+              <Item label="ชื่อชุด" value={set.title} />
+              <Item label="เวอร์ชันตามเอกสาร" value={version?.label ?? "—"} />
+              <Item label="กำหนดส่ง" value={`${set.dueDays} วันหลังได้รับมอบ`} />
+              <Item label="เวลาสอบ" value={`${set.examMinutes} นาที · ผ่าน ${set.passPercent}%`} />
+              <Item label="ผู้สร้าง" value={set.authorName} />
+              <Item label="ผู้อนุมัติ" value={set.approverName ?? "ยังไม่ได้เลือก"} />
+            </dl>
+            <p className="mt-4 text-[12px] text-muted">ตั้งค่าแก้ได้ตอนชุดยังเป็นร่าง</p>
+          </Card>
+        ))}
+
+      {tab === "docs" && (
+        <div className="space-y-4">
+          {set.status === "active" && (isOwner || isVersionApprover || set.approverPersonId === actor.personId) && (
+            <VersionCard
+              setId={set.id}
+              version={version}
+              newVersion={newVersion}
+              isOwner={isOwner}
+              isVersionApprover={isVersionApprover}
+              docsEditable={docsEditable}
+              approverName={set.approverName}
+              hasDelta={forms.some((f) => f.kind === "delta")}
+            />
+          )}
+          {newVersion && <p className="text-[13px] text-warn">เวอร์ชันที่ {newVersion.versionNo} (ยังไม่อนุมัติ — ผู้เรียนยังใช้เวอร์ชันเดิม)</p>}
+          <DocsManager
+            setId={set.id}
+            docs={documents.map((d) => ({
+              id: d.id,
+              fileName: d.fileName,
+              kind: d.kind,
+              mimeType: d.mimeType,
+              sizeBytes: d.sizeBytes,
+              pageCount: d.pageCount,
+              durationSeconds: d.durationSeconds,
+              coverUrl: coverPath(d),
+              coverMs: d.coverMs,
+              examWeight: d.examWeight,
+            }))}
+            editable={docsEditable}
+            canSetCover={isOwner}
+            allowPricelist={detail.kind.allowPricelist}
+            customWeights={set.spreadMode === "custom"}
+          />
+        </div>
       )}
 
-      <Card>
-        <SectionTitle className="mb-3">
-          เอกสารต้นทาง{version?.label ? ` · ${version.label}` : ""}
-          {newVersion && <span className="ml-2 text-[12px] font-normal text-warning">เวอร์ชันที่ {newVersion.versionNo} (ยังไม่อนุมัติ — ผู้เรียนยังใช้เวอร์ชันเดิม)</span>}
-        </SectionTitle>
-        {documents.length === 0 ? (
-          <p className="text-[13px] text-ink-3">ยังไม่มีเอกสาร</p>
-        ) : (
-          <ul className="mb-4 divide-y divide-line">
-            {documents.map((d) => (
-              <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-[13px]">
-                <span>
-                  {d.fileName}{" "}
-                  <span className="text-ink-3">
-                    · {DOCUMENT_KIND_LABELS[d.kind]}
-                    {isVideoMime(d.mimeType) && d.durationSeconds !== null ? ` · วิดีโอ ${formatDuration(d.durationSeconds)}` : ""} · {(d.sizeBytes / 1024 / 1024).toFixed(1)} MB
-                  </span>
-                  {isVideoMime(d.mimeType) ? (
-                    <span className="ml-2 text-ink-3">ผู้เรียนต้องดูครบ · AI ไม่ดูวิดีโอ (ออกข้อสอบจาก PDF)</span>
-                  ) : (
-                    !aiReadable(d.mimeType) && <span className="ml-2 text-warning">AI ยังอ่านไฟล์ชนิดนี้ไม่ได้</span>
-                  )}
-                </span>
-                {isVideoMime(d.mimeType) && (
-                  <div className="order-last w-full">
-                    <CoverEditor setId={set.id} documentId={d.id} coverUrl={coverPath(d)} coverMs={d.coverMs} canEdit={isOwner} />
-                  </div>
-                )}
-                {docsEditable && (
-                  <form action={removeDocumentAction}>
-                    <input type="hidden" name="setId" value={set.id} />
-                    <input type="hidden" name="documentId" value={d.id} />
-                    <button type="submit" className="text-[12px] text-danger underline">
-                      ลบ
-                    </button>
-                  </form>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        {docsEditable && <UploadForm setId={set.id} allowPricelist={detail.kind.allowPricelist} />}
-      </Card>
-
-      <Card>
-        <SectionTitle
-          className="mb-3"
-          right={
-            docsEditable && (
+      {tab === "exam" && (
+        <div className="space-y-4">
+          <SpreadPanel
+            setId={set.id}
+            mode={set.spreadMode}
+            files={aiDocs.map((d) => ({ name: d.fileName, weight: d.examWeight }))}
+            topics={topicsOf(set.blueprint as Blueprint).map(topicLabel)}
+            perForm={slots(set.blueprint as Blueprint).length}
+            formCount={FORMS_PER_VERSION}
+            editable={docsEditable}
+            coverage={
+              fullForms.length
+                ? coverage(
+                    fullForms.map((f) => f.questions),
+                    aiDocs.map((d) => d.fileName),
+                  )
+                : null
+            }
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-[17px] font-semibold text-fg">ข้อสอบ ({forms.length} ชุด)</h2>
+            {docsEditable && (
               <form action={generateExamsAction}>
                 <input type="hidden" name="setId" value={set.id} />
-                <Button type="submit" variant={forms.some((f) => f.kind === "full") ? "secondary" : "primary"}>
-                  {forms.some((f) => f.kind === "full") ? "ให้ AI ออกใหม่ทั้ง 5 ชุด" : "ให้ AI ออกข้อสอบ"}
+                <input type="hidden" name="tab" value="exam" />
+                <Button type="submit" variant={fullForms.length ? "secondary" : "primary"}>
+                  {fullForms.length ? "ให้ AI ออกใหม่ทั้ง 5 ชุด" : "ให้ AI ออกข้อสอบ"}
                 </Button>
               </form>
-            )
-          }
-        >
-          ข้อสอบ ({forms.length} ชุด)
-        </SectionTitle>
-        {docsEditable && forms.length === 0 && (
-          <p className="text-[13px] text-ink-3">อัปเอกสาร PDF แล้วกดให้ AI ออกข้อสอบ — ใช้เวลาหลายนาที อย่าปิดหน้านี้</p>
-        )}
-        <div className="space-y-3">
-          {forms.map((f) => (
-            <details key={f.id} className="rounded-lg border border-line" open={forms.length === 1}>
-              <summary className="cursor-pointer px-4 py-2 text-[13px] font-semibold">
-                {f.kind === "delta" ? "ส่วนที่เปลี่ยน · " : ""}ชุดที่ {f.formNo} · {f.questions.length} ข้อ
-                {f.questions.some((q) => q.priceCheck === "mismatch") && <span className="ml-2 text-danger">ราคาไม่ตรง Pricelist</span>}
-              </summary>
-              <ol className="divide-y divide-line">
-                {f.questions.map((q, i) => (
-                  <QuestionItem key={q.id} setId={set.id} q={q} no={i + 1} canEdit={editor !== null} />
-                ))}
-              </ol>
-            </details>
-          ))}
+            )}
+          </div>
+          {forms.length === 0 ? (
+            <p className="rounded-[13px] border border-dashed border-line-strong px-4 py-8 text-center text-[13px] text-muted">
+              {docsEditable ? "อัปเอกสาร PDF แล้วกดให้ AI ออกข้อสอบ — ใช้เวลาหลายนาที อย่าปิดหน้านี้" : "ยังไม่มีข้อสอบ"}
+            </p>
+          ) : (
+            <ExamWorkspace
+              setId={set.id}
+              forms={forms.map((f) => ({
+                id: f.id,
+                formNo: f.formNo,
+                delta: f.kind === "delta",
+                questions: f.questions.map((q) => ({
+                  id: q.id,
+                  meta: `${topicLabel(q.topic)} · ${LEVEL_LABELS[q.level as Level]}`,
+                  text: q.text,
+                  sourceRef: q.sourceRef,
+                  choices: q.choices.map((c) => ({ text: c.text, isCorrect: c.isCorrect })),
+                  priceMismatch: q.priceCheck === "mismatch",
+                })),
+              }))}
+              reviewedIds={[...reviewed]}
+              canEdit={editor !== null}
+              canReview={canReview}
+              initialForm={Number(firstParam(sp.form)) || undefined}
+            />
+          )}
+          {isApprover && (
+            <Card>
+              <SectionTitle className="mb-3">การอนุมัติ</SectionTitle>
+              <div className="space-y-4">
+                <form action={approveAction}>
+                  <input type="hidden" name="setId" value={set.id} />
+                  <input type="hidden" name="tab" value="exam" />
+                  <p className="mb-3 text-[13px] text-ink-3">
+                    คุณตรวจแล้ว {reviewedCount}/{allQuestions.length} ข้อ · แก้ข้อที่ไม่ถูกต้องได้ในการ์ดด้านบน แล้วกดอนุมัติ
+                  </p>
+                  <Button type="submit" variant="primary">
+                    อนุมัติ
+                  </Button>
+                </form>
+                <form action={returnAction} className="space-y-2">
+                  <input type="hidden" name="setId" value={set.id} />
+                  <input type="hidden" name="tab" value="exam" />
+                  <label className="block">
+                    <span className={FIELD_LABEL_CLASS}>ตีกลับให้ผู้สร้าง (เช่น เอกสารหรือ Pricelist ผิด)</span>
+                    <textarea name="comment" required rows={2} className={INPUT_CLASS} />
+                  </label>
+                  <Button type="submit" variant="danger">
+                    ตีกลับ
+                  </Button>
+                </form>
+              </div>
+            </Card>
+          )}
         </div>
-      </Card>
-
-      {set.status === "active" && (isOwner || isVersionApprover || set.approverPersonId === actor.personId) && (
-        <VersionCard
-          setId={set.id}
-          version={version}
-          newVersion={newVersion}
-          isOwner={isOwner}
-          isVersionApprover={isVersionApprover}
-          docsEditable={docsEditable}
-          approverName={set.approverName}
-          hasDelta={forms.some((f) => f.kind === "delta")}
-        />
       )}
 
-      <AudienceCard
-        setId={set.id}
-        editable={editable}
-        rules={rules}
-        options={org?.ok ? audienceOptions(org.people) : null}
-        preview={preview}
-      />
+      {tab === "audience" &&
+        (org && !org.ok ? (
+          <Card>
+            <p className="text-[13px] text-danger">ดึงผังจาก WorkID ไม่ได้ — {rules.length ? `เงื่อนไขเดิม: ${rules.map((r) => r.label).join(" · ")}` : "ตั้งผู้รับไม่ได้ตอนนี้"}</p>
+          </Card>
+        ) : (
+          <AudiencePicker
+            setId={set.id}
+            people={people.map((p) => ({
+              personId: p.personId,
+              fullName: p.fullName,
+              nickname: p.nickname,
+              title: p.title,
+              teamName: p.teamName,
+              positionId: p.positionId,
+              teamId: p.teamId,
+              managedTeamIds: p.managedTeamIds,
+            }))}
+            initialRules={rules.map((r) => ({ kind: r.kind, refId: r.refId, label: r.label }))}
+            editable={audienceEditable}
+            active={set.status === "active"}
+            assignedIds={status.map((s) => s.personId)}
+          />
+        ))}
 
-      {status.length > 0 && (
+      {tab === "learners" && (
         <Card>
           <SectionTitle className="mb-3">
             ผู้เรียน ({status.filter((s) => s.state === "passed").length}/{status.length} ผ่านแล้ว)
@@ -255,104 +407,35 @@ export default async function SetPage({
         </Card>
       )}
 
-      {(editable || isApprover) && (
-        <Card>
-          <SectionTitle className="mb-3">{isApprover ? "การอนุมัติ" : "ส่งขออนุมัติ"}</SectionTitle>
-          {editable && (
-            <form action={submitAction}>
-              <input type="hidden" name="setId" value={set.id} />
-              <p className="mb-3 text-[13px] text-ink-3">ส่งให้ {set.approverName ?? "(ยังไม่ได้เลือกผู้อนุมัติ)"} ตรวจข้อสอบทั้ง 5 ชุด</p>
-              <Button type="submit" variant="primary">
-                ส่งขออนุมัติ
-              </Button>
-            </form>
+      {tab === "history" && (
+        <Card padded={false}>
+          {events.length === 0 ? (
+            <p className="px-5 py-8 text-center text-[13px] text-muted">ยังไม่มีประวัติ</p>
+          ) : (
+            <ol className="divide-y divide-line text-[13px]">
+              {events.map((e) => (
+                <li key={e.id} className="flex flex-wrap gap-x-4 gap-y-1 px-5 py-3">
+                  <span className="w-36 shrink-0 text-muted">{formatBangkok(e.createdAt)}</span>
+                  <span className="min-w-0 flex-1">
+                    <strong className="font-semibold">{e.actorName}</strong> {EVENT_LABELS[e.action] ?? e.action}
+                    {e.comment && <span className="text-ink-2"> — {e.comment}</span>}
+                  </span>
+                </li>
+              ))}
+            </ol>
           )}
-          {isApprover && (
-            <div className="space-y-4">
-              <form action={approveAction}>
-                <input type="hidden" name="setId" value={set.id} />
-                <p className="mb-3 text-[13px] text-ink-3">แก้ข้อที่ไม่ถูกต้องได้ในส่วนข้อสอบด้านบน แล้วกดอนุมัติ</p>
-                <Button type="submit" variant="primary">
-                  อนุมัติ
-                </Button>
-              </form>
-              <form action={returnAction} className="space-y-2">
-                <input type="hidden" name="setId" value={set.id} />
-                <label className="block">
-                  <span className={FIELD_LABEL_CLASS}>ตีกลับให้ผู้สร้าง (เช่น เอกสารหรือ Pricelist ผิด)</span>
-                  <textarea name="comment" required rows={2} className={INPUT_CLASS} />
-                </label>
-                <Button type="submit" variant="danger">
-                  ตีกลับ
-                </Button>
-              </form>
-            </div>
-          )}
-        </Card>
-      )}
-
-      {events.length > 0 && (
-        <Card>
-          <SectionTitle className="mb-3">ประวัติ</SectionTitle>
-          <ul className="space-y-1 text-[13px]">
-            {events.map((e) => (
-              <li key={e.id}>
-                <span className="text-ink-3">{formatBangkok(e.createdAt)}</span> · {e.actorName} · {EVENT_LABELS[e.action] ?? e.action}
-                {e.comment && <span className="text-ink-2"> — {e.comment}</span>}
-              </li>
-            ))}
-          </ul>
         </Card>
       )}
     </main>
   );
 }
 
-function QuestionItem({ setId, q, no, canEdit }: { setId: number; q: QuestionView; no: number; canEdit: boolean }) {
+function Item({ label, value }: { label: string; value: string }) {
   return (
-    <li className="px-4 py-3 text-[13px]">
-      <p className="mb-1 text-[11px] text-ink-3">
-        {topicLabel(q.topic)} · {LEVEL_LABELS[q.level as Level]} · ที่มา {q.sourceRef}
-      </p>
-      <p className="font-medium text-ink">
-        {no}. {q.text}
-      </p>
-      <ul className="mt-1 space-y-0.5">
-        {q.choices.map((c) => (
-          <li key={c.id} className={c.isCorrect ? "font-semibold text-success" : "text-ink-2"}>
-            {c.isCorrect ? "✓ " : "· "}
-            {c.text}
-          </li>
-        ))}
-      </ul>
-      {canEdit && (
-        <details className="mt-2">
-          <summary className="cursor-pointer text-[12px] text-ink-3 underline">แก้ข้อนี้</summary>
-          <form action={editQuestionAction} className="mt-2 space-y-2">
-            <input type="hidden" name="setId" value={setId} />
-            <input type="hidden" name="questionId" value={q.id} />
-            <textarea name="text" defaultValue={q.text} required rows={2} className={INPUT_CLASS} />
-            {[0, 1, 2, 3].map((i) => (
-              <label key={i} className="flex items-center gap-2">
-                <input type="radio" name="correctIndex" value={i} defaultChecked={q.choices[i]?.isCorrect} required />
-                <input name={`choice${i}`} defaultValue={q.choices[i]?.text ?? ""} required className={INPUT_CLASS} />
-              </label>
-            ))}
-            <input name="sourceRef" defaultValue={q.sourceRef} required placeholder="ที่มาในเอกสาร" className={INPUT_CLASS} />
-            <Button type="submit" size="sm">
-              บันทึกข้อนี้
-            </Button>
-          </form>
-          <form action={regenerateQuestionAction} className="mt-2">
-            <input type="hidden" name="setId" value={setId} />
-            <input type="hidden" name="questionId" value={q.id} />
-            <Button type="submit" size="sm" variant="ghost">
-              ให้ AI ออกข้อนี้ใหม่
-            </Button>
-          </form>
-        </details>
-      )}
-    </li>
+    <div>
+      <dt className="text-[12px] text-muted">{label}</dt>
+      <dd className="mt-0.5 font-semibold text-fg">{value}</dd>
+    </div>
   );
 }
 
@@ -378,6 +461,7 @@ function VersionCard({
   approverName: string | null;
   hasDelta: boolean;
 }) {
+  const tab = <input type="hidden" name="tab" value="docs" />;
   return (
     <Card>
       <SectionTitle className="mb-3">เวอร์ชันของเอกสาร</SectionTitle>
@@ -390,6 +474,7 @@ function VersionCard({
           {isOwner && (
             <form action={startVersionAction} className="flex flex-wrap items-end gap-2">
               <input type="hidden" name="setId" value={setId} />
+              {tab}
               <label>
                 <span className={FIELD_LABEL_CLASS}>ป้ายเวอร์ชันตามเอกสาร</span>
                 <input name="label" placeholder="เช่น V.4 · 12/2026" className={INPUT_CLASS} />
@@ -411,6 +496,7 @@ function VersionCard({
             {docsEditable ? (
               <form action={editSummaryAction} className="space-y-2">
                 <input type="hidden" name="setId" value={setId} />
+                {tab}
                 <textarea name="summary" rows={5} defaultValue={newVersion.changeSummary ?? ""} placeholder="- ราคา F331 เปลี่ยนจาก … เป็น …" className={INPUT_CLASS} />
                 <Button type="submit" size="sm" variant="secondary">
                   บันทึกสรุป
@@ -424,12 +510,14 @@ function VersionCard({
             <div className="flex flex-wrap gap-2">
               <form action={summarizeVersionAction}>
                 <input type="hidden" name="setId" value={setId} />
+                {tab}
                 <Button type="submit" variant="secondary">
                   ให้ AI สรุปสิ่งที่เปลี่ยน
                 </Button>
               </form>
               <form action={submitVersionAction}>
                 <input type="hidden" name="setId" value={setId} />
+                {tab}
                 <Button type="submit" variant="primary">
                   ส่งเวอร์ชันใหม่ขออนุมัติ
                 </Button>
@@ -440,6 +528,7 @@ function VersionCard({
             <div className="space-y-4">
               <form action={setChangeKindAction} className="space-y-1">
                 <input type="hidden" name="setId" value={setId} />
+                {tab}
                 <p className="font-semibold">เปลี่ยนแค่ไหน</p>
                 <label className="flex items-center gap-2">
                   <input type="radio" name="kind" value="small" defaultChecked={newVersion.changeKind === "small"} required />
@@ -456,6 +545,7 @@ function VersionCard({
               {newVersion.changeKind === "large" && (
                 <form action={generateDeltaAction}>
                   <input type="hidden" name="setId" value={setId} />
+                  {tab}
                   <Button type="submit" variant="secondary">
                     {hasDelta ? "ให้ AI ออกข้อสอบส่วนที่เปลี่ยนใหม่" : "ให้ AI ออกข้อสอบส่วนที่เปลี่ยน (5 ชุด × 5 ข้อ)"}
                   </Button>
@@ -463,12 +553,14 @@ function VersionCard({
               )}
               <form action={approveVersionAction}>
                 <input type="hidden" name="setId" value={setId} />
+                {tab}
                 <Button type="submit" variant="primary">
                   อนุมัติเวอร์ชันใหม่
                 </Button>
               </form>
               <form action={returnVersionAction} className="space-y-2">
                 <input type="hidden" name="setId" value={setId} />
+                {tab}
                 <label className="block">
                   <span className={FIELD_LABEL_CLASS}>ตีกลับให้ผู้สร้าง</span>
                   <textarea name="comment" required rows={2} className={INPUT_CLASS} />
@@ -491,71 +583,3 @@ const STATE: Record<AssignmentState, { label: string; tone: "success" | "info" |
   not_started: { label: "ยังไม่เริ่ม", tone: "neutral" },
   overdue: { label: "เลยกำหนด", tone: "danger" },
 };
-
-type Rule = { kind: string; refId: number; label: string };
-type Options = ReturnType<typeof audienceOptions>;
-
-/** ผู้รับ (spec §5) — เลือกจากผังของ WorkID · เก็บเงื่อนไข ไม่ใช่รายชื่อ */
-function AudienceCard({
-  setId,
-  editable,
-  rules,
-  options,
-  preview,
-}: {
-  setId: number;
-  editable: boolean;
-  rules: Rule[];
-  options: Options | null;
-  preview: Awaited<ReturnType<typeof previewAudience>> | null;
-}) {
-  const has = (kind: string, id: number) => rules.some((r) => r.kind === kind && r.refId === id);
-  const box = (kind: string, id: number, label: string, count: number) => (
-    <label key={`${kind}:${id}`} className="flex items-center gap-2">
-      <input type="checkbox" name="rule" value={`${kind}:${id}:${label}`} defaultChecked={has(kind, id)} />
-      {label} <span className="text-ink-3">({count})</span>
-    </label>
-  );
-  return (
-    <Card>
-      <SectionTitle className="mb-3">ผู้รับ</SectionTitle>
-      {!editable && (
-        <p className="text-[13px] text-ink-2">{rules.length ? rules.map((r) => r.label).join(" · ") : "ยังไม่ได้ตั้งผู้รับ"}</p>
-      )}
-      {editable && !options && <p className="text-[13px] text-danger">ดึงผังจาก WorkID ไม่ได้ — ตั้งผู้รับไม่ได้ตอนนี้</p>}
-      {editable && options && (
-        <form action={setAudienceAction} className="space-y-4 text-[13px]">
-          <input type="hidden" name="setId" value={setId} />
-          <fieldset>
-            <legend className="mb-1 font-semibold">ตามตำแหน่ง</legend>
-            {options.positions.length === 0 && <p className="text-ink-3">ยังไม่มีใครในผังที่มีรหัสตำแหน่งจาก WorkHR</p>}
-            <div className="grid gap-1 sm:grid-cols-2">{options.positions.map((p) => box("position", p.id, p.label, p.count))}</div>
-            {options.peopleWithoutPosition > 0 && (
-              <p className="mt-1 text-[11px] text-warning">
-                {options.peopleWithoutPosition} คนยังไม่มีรหัสตำแหน่งใน WorkID — จะไม่ติดเงื่อนไขตำแหน่งจนกว่า WorkHR จะเติมให้
-              </p>
-            )}
-          </fieldset>
-          <fieldset>
-            <legend className="mb-1 font-semibold">ตามทีม</legend>
-            <div className="grid gap-1 sm:grid-cols-2">{options.teams.map((t) => box("team", t.id, t.label, t.count))}</div>
-          </fieldset>
-          <fieldset>
-            <legend className="mb-1 font-semibold">หัวหน้าที่ดูแลทีม</legend>
-            <div className="grid gap-1 sm:grid-cols-2">{options.teams
-                .filter((t) => options.managersByTeam.has(t.id))
-                .map((t) => box("manages_team", t.id, `หัวหน้า ${t.label}`, options.managersByTeam.get(t.id) ?? 0))}</div>
-          </fieldset>
-          <Button type="submit">บันทึกผู้รับ</Button>
-        </form>
-      )}
-      {preview && (
-        <p className="mt-3 text-[12px] text-ink-3">
-          {preview.ok
-            ? `ตอนนี้ตรงเงื่อนไข ${preview.people.length} คน${preview.people.length ? `: ${preview.people.map((p) => p.name).join(", ")}` : ""}`
-            : preview.error}
-        </p>
-      )}
-    </Card>
-  );
-}

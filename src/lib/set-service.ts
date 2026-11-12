@@ -12,7 +12,10 @@ import {
   questions,
   setKinds,
   setVersions,
+  DOCUMENT_KINDS,
+  SPREAD_MODES,
   type DocumentKind,
+  type SpreadMode,
 } from "@/db/schema";
 import { checkBlueprint, type Blueprint } from "@/domain/blueprint";
 import {
@@ -49,6 +52,14 @@ const TITLE_MAX = 200;
 
 function isOwnerOrAdmin(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "authorPersonId">): boolean {
   return actor.role === "admin" || set.authorPersonId === actor.personId;
+}
+
+/**
+ * แก้ผู้รับได้ไหม — ร่าง: ผู้สร้าง/TG · ใช้อยู่: ผู้สร้าง/TG เพิ่มหรือเปลี่ยนเงื่อนไขได้ (คนที่เพิ่มได้รับมอบทันที ·
+ * คนที่หลุดเงื่อนไขเก็บการมอบเดิมไว้ตาม spec §5)
+ */
+export function canEditAudience(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "authorPersonId" | "status">): boolean {
+  return (set.status === "draft" || set.status === "active") && isOwnerOrAdmin(actor, set);
 }
 
 /** เห็นชุดนี้ในฐานะคนทำงานกับมัน (ไม่ใช่ผู้เรียน) — ผู้สร้าง · ผู้อนุมัติ · TG */
@@ -346,6 +357,86 @@ export async function removeDocument(input: { actor: Actor; documentId: number }
   await db().delete(documents).where(eq(documents.id, row.doc.id));
   await objectStore()?.delete(row.doc.objectKey);
   if (row.doc.coverKey) await objectStore()?.delete(row.doc.coverKey);
+  return { ok: true };
+}
+
+// ── จัดเอกสาร (ชื่อ · ใช้ทำอะไร · น้ำหนัก · ลำดับ) ─────────────────────────────
+
+/** เอกสารของเวอร์ชันที่แก้ได้อยู่ตอนนี้ — ร่าง หรือเวอร์ชันใหม่ที่ยังไม่ส่ง */
+async function editableDocument(actor: Actor, documentId: number) {
+  const [row] = await db()
+    .select({ doc: documents, setId: setVersions.setId })
+    .from(documents)
+    .innerJoin(setVersions, eq(setVersions.id, documents.versionId))
+    .where(eq(documents.id, documentId));
+  if (!row) return null;
+  const set = await loadSet(row.setId);
+  const current = set ? await currentVersion(set.id) : null;
+  if (!set || current?.id !== row.doc.versionId || !canEditVersion(actor, set, current)) return null;
+  return { doc: row.doc, set };
+}
+
+const NOT_EDITABLE = "แก้ได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง";
+
+/** ชื่อที่ผู้เรียนเห็น · ใช้ทำอะไร (เอกสารหลัก/Pricelist/อื่น ๆ) · น้ำหนักตอนเฉลี่ยข้อสอบ */
+export async function updateDocument(input: {
+  actor: Actor;
+  documentId: number;
+  fileName?: string;
+  kind?: string;
+  examWeight?: number;
+}): Promise<Outcome> {
+  const found = await editableDocument(input.actor, input.documentId);
+  if (!found) return { ok: false, error: NOT_EDITABLE };
+  const { doc, set } = found;
+  const patch: Partial<typeof documents.$inferInsert> = {};
+  if (input.fileName !== undefined) {
+    const name = input.fileName.trim();
+    if (!name || name.length > 200) return { ok: false, error: "ชื่อต้องมี 1–200 ตัวอักษร" };
+    patch.fileName = name;
+  }
+  if (input.kind !== undefined) {
+    if (!DOCUMENT_KINDS.includes(input.kind as DocumentKind)) return { ok: false, error: "เลือกว่าใช้ทำอะไร" };
+    const kind = input.kind as DocumentKind;
+    if (isDocumentMime(doc.mimeType) && !kindAllowsMime(kind, doc.mimeType)) return { ok: false, error: "Pricelist ต้องเป็น PDF หรือ Excel — วิดีโอแนบเป็นเอกสารหลักหรืออื่น ๆ" };
+    if (kind === "pricelist") {
+      const [k] = await db().select({ allowPricelist: setKinds.allowPricelist }).from(setKinds).where(eq(setKinds.id, set.kindId));
+      if (!k?.allowPricelist) return { ok: false, error: "ชนิดของชุดนี้ไม่ได้เปิดให้แนบ Pricelist" };
+    }
+    patch.kind = kind;
+  }
+  if (input.examWeight !== undefined) {
+    if (!Number.isInteger(input.examWeight) || input.examWeight < 0 || input.examWeight > 5) return { ok: false, error: "น้ำหนักต้องเป็น 0–5" };
+    patch.examWeight = input.examWeight;
+  }
+  if (Object.keys(patch).length) await db().update(documents).set(patch).where(eq(documents.id, doc.id));
+  return { ok: true };
+}
+
+/** เลื่อนเอกสารขึ้น/ลงหนึ่งตำแหน่ง — ลำดับที่ผู้เรียนเห็น (ลำดับใหม่ 0..n-1 ทุกครั้ง กันค่าซ้ำจากข้อมูลเก่า) */
+export async function moveDocument(input: { actor: Actor; documentId: number; direction: -1 | 1 }): Promise<Outcome> {
+  const found = await editableDocument(input.actor, input.documentId);
+  if (!found) return { ok: false, error: NOT_EDITABLE };
+  const rows = await db()
+    .select({ id: documents.id })
+    .from(documents)
+    .where(eq(documents.versionId, found.doc.versionId))
+    .orderBy(asc(documents.sortOrder), asc(documents.id));
+  const ids = rows.map((r) => r.id);
+  const i = ids.indexOf(found.doc.id);
+  const j = i + input.direction;
+  if (i < 0 || j < 0 || j >= ids.length) return { ok: true };
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  for (const [order, id] of ids.entries()) await db().update(documents).set({ sortOrder: order }).where(eq(documents.id, id));
+  return { ok: true };
+}
+
+/** วิธีเฉลี่ยข้อสอบตอนให้ AI ออก (`src/domain/spread.ts`) */
+export async function setSpreadMode(input: { actor: Actor; setId: number; mode: string }): Promise<Outcome> {
+  if (!SPREAD_MODES.includes(input.mode as SpreadMode)) return { ok: false, error: "เลือกวิธีเฉลี่ย" };
+  const set = await loadSet(input.setId);
+  if (!set || !canEditVersion(input.actor, set, await currentVersion(set.id))) return { ok: false, error: NOT_EDITABLE };
+  await db().update(learningSets).set({ spreadMode: input.mode as SpreadMode, updatedAt: new Date() }).where(eq(learningSets.id, set.id));
   return { ok: true };
 }
 
