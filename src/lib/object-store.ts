@@ -29,16 +29,23 @@ export interface ObjectStore {
   delete(key: string): Promise<void>;
   /** อ่านไฟล์ทั้งก้อนฝั่งเซิร์ฟเวอร์ (ส่งเอกสารให้ AI ออกข้อสอบ) · `null` = ไม่มี object */
   get(key: string): Promise<Uint8Array | null>;
+  /** อ่านบางช่วง (หัวไฟล์วิดีโอ · ไม่โหลดทั้ง 2 GB) — ได้น้อยกว่าที่ขอเมื่อชนท้ายไฟล์ · `null` = ไม่มี object */
+  getRange(key: string, start: number, length: number): Promise<Uint8Array | null>;
   /** เขียนจากฝั่งเซิร์ฟเวอร์ (ภาพสแกนที่ได้จาก Rekognition) */
   put(key: string, bytes: Uint8Array, contentType: string): Promise<void>;
   /** ลิงก์เปิดไฟล์อายุสั้น — ส่งให้คนที่ผ่านการตรวจสิทธิ์แล้วเท่านั้น */
-  presignGet(input: { key: string; contentType: string; disposition: string }): Promise<string>;
+  presignGet(input: { key: string; contentType: string; disposition: string; expiresIn?: number }): Promise<string>;
 }
 
 /** อายุลิงก์อัป — ไฟล์ใหญ่บนมือถือใช้เวลานาน 15 นาทีแบบ WorkIT ไม่พอ */
 export const UPLOAD_TTL_SECONDS = 60 * 60;
 /** อายุลิงก์เปิดไฟล์ — สั้นพอที่ลิงก์หลุดไปก็ใช้ต่อไม่ได้ (แบบเดียวกับ WorkChat) */
 export const DOWNLOAD_TTL_SECONDS = 60;
+/**
+ * อายุลิงก์วิดีโอ (ADR-0013) — ตัวเล่นขอไฟล์เป็นช่วง ๆ ตลอดการดู ลิงก์ 60 วินาทีจะตายกลางเรื่อง
+ * 10 นาทีพอให้บัฟเฟอร์ต่อเนื่อง · หมดอายุแล้วตัวเล่นขอลิงก์ใหม่เอง (ต้องยังมีรอบเรียนอยู่)
+ */
+export const VIDEO_LINK_TTL_SECONDS = 10 * 60;
 
 const env = (name: string) => process.env[name]?.trim() ?? "";
 
@@ -128,11 +135,23 @@ function r2Store(): ObjectStore {
         throw err;
       }
     },
-    presignGet({ key, contentType, disposition }) {
+    async getRange(key, start, length) {
+      if (length <= 0) return new Uint8Array();
+      try {
+        const r = await s3().send(new GetObjectCommand({ Bucket, Key: key, Range: `bytes=${start}-${start + length - 1}` }));
+        return r.Body ? await r.Body.transformToByteArray() : null;
+      } catch (err) {
+        if (isNotFound(err)) return null;
+        // ขอเลยท้ายไฟล์ = ไม่มีข้อมูลตรงนั้น ไม่ใช่ไม่มีไฟล์
+        if ((err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode === 416) return new Uint8Array();
+        throw err;
+      }
+    },
+    presignGet({ key, contentType, disposition, expiresIn }) {
       return getSignedUrl(
         s3(),
         new GetObjectCommand({ Bucket, Key: key, ResponseContentType: contentType, ResponseContentDisposition: disposition }),
-        { expiresIn: DOWNLOAD_TTL_SECONDS },
+        { expiresIn: expiresIn ?? DOWNLOAD_TTL_SECONDS },
       );
     },
   };
@@ -175,6 +194,10 @@ function localDevStore(): ObjectStore {
     },
     async get(key) {
       return objects.get(key) ?? null;
+    },
+    async getRange(key, start, length) {
+      const body = objects.get(key);
+      return body ? body.slice(start, start + Math.max(0, length)) : null;
     },
     async put(key, bytes) {
       objects.set(key, bytes);

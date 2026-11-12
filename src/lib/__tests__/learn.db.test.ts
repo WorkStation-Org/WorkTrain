@@ -201,6 +201,38 @@ describe("การอ่าน (spec §9)", () => {
     expect(views).toHaveLength(1);
   });
 
+  it("วิดีโอ: ช่วงต่อครั้งไม่เกินที่เล่นทันที่ 2 เท่า · ส่งทั้งเรื่องทีเดียวไม่ครบ · ลิงก์อายุ 10 นาที (ADR-0013)", async () => {
+    const { a, docs } = await seed();
+    // วิดีโอ 95 วินาที = 10 ช่วง
+    const [video] = await testDb()
+      .insert(schema.documents)
+      .values({ versionId: docs[0].versionId, kind: "other", objectKey: "v", fileName: "intro.mp4", mimeType: "video/mp4", sizeBytes: 1, pageCount: 10, durationSeconds: 95, sortOrder: 3 })
+      .returning();
+    const all = Array.from({ length: 10 }, (_, i) => i + 1);
+    await startSession(T0);
+
+    // 15 วินาทีที่ 2 เท่าเล่นได้ 30 วินาที = 3 ช่วง (+1 ช่วงที่ค้าง) — ที่เหลือไม่นับ
+    expect(await L.recordReading({ personId: ME, assignmentId: a.id, documentId: video.id, pages: all, activeSeconds: 15, now: sec(15) })).toEqual({ ok: true, completed: false });
+    const progress = async () => (await testDb().select().from(schema.readingProgress).where(eq(schema.readingProgress.documentId, video.id)))[0];
+    expect((await progress()).pagesSeen).toEqual([1, 2, 3, 4]);
+    // ไม่มีเวลาดู = ได้แค่ 1 ช่วง
+    await L.recordReading({ personId: ME, assignmentId: a.id, documentId: video.id, pages: all, activeSeconds: 0, now: sec(16) });
+    expect((await progress()).pagesSeen).toEqual([1, 2, 3, 4, 5]);
+    // ดูต่อจนครบ
+    await L.recordReading({ personId: ME, assignmentId: a.id, documentId: video.id, pages: all, activeSeconds: 30, now: sec(46) });
+    expect(await progress()).toMatchObject({ pagesSeen: all });
+    expect((await progress()).completedAt).not.toBeNull();
+
+    const view = await L.learnView(ME, a.id, sec(47));
+    expect(view?.documents.find((d) => d.id === video.id)).toMatchObject({ mimeType: "video/mp4", durationSeconds: 95, pageCount: 10, completed: true });
+
+    const link = await L.documentLink({ personId: ME, assignmentId: a.id, documentId: video.id, now: sec(47) });
+    expect(link.ok).toBe(true);
+    // ที่เก็บจำลองไม่มีอายุลิงก์ — ตรวจว่าเป็นลิงก์ไฟล์จริง (ไม่ใช่ route ลายน้ำ) และบันทึกการเปิด
+    expect((link as { url: string }).url).toContain("/api/dev-store/v");
+    expect(await testDb().select().from(schema.documentViews).where(eq(schema.documentViews.documentId, video.id))).toHaveLength(1);
+  });
+
   it("การมอบของคนอื่นอ่านไม่ได้", async () => {
     const { a, docs } = await seed();
     await testDb().update(schema.assignments).set({ personId: 77 }).where(eq(schema.assignments.id, a.id));
@@ -212,7 +244,7 @@ describe("การอ่าน (spec §9)", () => {
 describe("การสอบ (spec §10)", () => {
   it("ยังอ่านไม่ครบ → สอบไม่ได้", async () => {
     const { a } = await seed();
-    expect(await startExam(a.id, T0)).toEqual({ ok: false, error: "ต้องอ่านเอกสารให้ครบทุกหน้าก่อนสอบ" });
+    expect(await startExam(a.id, T0)).toEqual({ ok: false, error: "ต้องอ่านเอกสารให้ครบทุกหน้าและดูวิดีโอครบทุกช่วงก่อนสอบ" });
   });
 
   it("อ่านครบ → สแกน → สอบทีละข้อ ย้อนไม่ได้ · ถูก 8/10 = 80% ผ่าน → การมอบผ่าน · ไม่เฉลย", async () => {

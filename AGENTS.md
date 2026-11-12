@@ -33,10 +33,11 @@ This version has breaking changes — APIs, conventions, and file structure may 
   ไม่ผ่าน 3 ครั้งติด → คิว TG (`/admin/faces`) · ภาพสแกนลบเมื่อครบ 90 วัน (cron เช้า) · ไม่ตั้ง AWS = `scanMode()` เป็น `off` บน production
 - `src/app/(app)/learn/scan-flow.tsx` — FaceLivenessDetector (Amplify) · บนเครื่อง dev เป็นปุ่มข้ามกล้อง
 - `src/lib/learn-service.ts` — รอบเรียน (นิ่ง 2 นาที = จบ) · ความคืบหน้าการอ่าน · ครั้งที่สอบ (ทีละข้อ · หมดเวลา/ออกหน้าสอบตัดสินที่เซิร์ฟเวอร์) · ทุกฟังก์ชันตรวจว่าเป็นของคนที่ล็อกอิน
-- `/learn` · `/learn/[id]` (ตัวอ่าน PDF ด้วย pdfjs ≥ 6.2.108) · `/learn/[id]/exam/[attemptId]` · `/consent` — หน้าผู้เรียนผ่าน `learnerActor()` (ต้องยินยอมก่อน)
+- `/learn` · `/learn/[id]` (ตัวอ่าน PDF ด้วย pdfjs ≥ 6.2.108 · ตัวเล่นวิดีโอนับช่วงที่เล่นผ่าน) · `/learn/[id]/exam/[attemptId]` · `/consent` — หน้าผู้เรียนผ่าน `learnerActor()` (ต้องยินยอมก่อน)
 - `scripts/dev-seed-learner.mjs` — ใส่ชุดพร้อมสอบลง PGlite ไว้ลองฝั่งผู้เรียนบนเครื่องโดยไม่ต้องมี AI
 - `src/domain/blueprint.ts` — สัดส่วนหัวข้อ×ระดับของ 10 ข้อ · หัวข้อเป็นข้อความ (`topicLabel()` แปลรหัสเดิม) · แม่แบบตั้งต้นของสองชนิดเดิม ·
-  `src/lib/kind-service.ts` — ทะเบียนชนิดของชุด (`/admin/kinds` · TG เท่านั้น · ADR-0011) · `src/domain/document.ts` — ชนิด/ขนาดไฟล์ · key ใน R2
+  `src/lib/kind-service.ts` — ทะเบียนชนิดของชุด (`/admin/kinds` · TG เท่านั้น · ADR-0011) · `src/domain/document.ts` — ชนิด/ขนาดไฟล์ · key ใน R2 ·
+  ช่วงวิดีโอ 10 วินาที · `src/domain/mp4.ts` — ความยาววิดีโอจากหัวไฟล์ MP4 (ADR-0013)
 - `src/lib/set-service.ts` — สร้างชุด · ตั้งค่า · อัปโหลด (ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยันด้วย HEAD) · `getSetDetail()` (มีเฉลย — เฉพาะ `canManage`)
 - `src/lib/exam-generator.ts` — **ที่เดียวที่คุยกับ Anthropic API** (`ExamModel`) · ออก 5 ชุดในคำขอเดียว · `checkForms()` ตรวจผลของ AI ก่อนลงฐานทุกครั้ง
 - `src/lib/exam-service.ts` — ออกข้อสอบ · แก้/ออกใหม่ทีละข้อ (ลงประวัติก่อน/หลัง) · `src/lib/approval-service.ts` — ส่ง · ตีกลับ · อนุมัติ

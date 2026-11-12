@@ -6,6 +6,7 @@ import { PRODUCT_BLUEPRINT, slots, type Blueprint } from "@/domain/blueprint";
 import type { Actor } from "@/lib/auth";
 import type { ExamModel, GeneratedQuestion } from "@/lib/exam-generator";
 import { devStoreObjects } from "@/lib/object-store";
+import { fakeMp4 } from "@/domain/__tests__/mp4-fixture";
 import { clearOrgCache } from "@/lib/workid";
 
 /**
@@ -176,6 +177,58 @@ describe("อัปโหลดเอกสาร", () => {
     const req = await requestUpload({ actor: pd, setId, docKind: "catalog", fileName: "a.pdf", mime: "application/pdf", size: PDF.byteLength });
     if (!req.ok) throw new Error(req.error);
     expect(await confirmUpload({ actor: sales, token: req.token })).toEqual({ ok: false, error: "ใบอัปโหลดไม่ถูกต้อง" });
+  });
+});
+
+describe("อัปโหลดวิดีโอ (ADR-0013)", () => {
+  async function uploadVideo(setId: number, bytes: Uint8Array, docKind: "catalog" | "other" | "pricelist" = "other") {
+    const req = await requestUpload({ actor: pd, setId, docKind, fileName: "แนะนำสินค้า.mp4", mime: "video/mp4", size: bytes.byteLength });
+    if (!req.ok) return req;
+    const key = decodeURIComponent(new URL(req.uploadUrl, "http://x").pathname.replace("/api/dev-store/", ""));
+    devStoreObjects().set(key, bytes);
+    return confirmUpload({ actor: pd, token: req.token });
+  }
+  const newSet = async () => ((await createSet({ actor: pd, title: "x", kindId: schema.SEEDED_KIND_IDS.product })) as { setId: number }).setId;
+
+  it("MP4 → ความยาวจากหัวไฟล์ · จำนวนช่วงละ 10 วินาที · key นามสกุล .mp4", async () => {
+    const setId = await newSet();
+    const out = await uploadVideo(setId, fakeMp4({ seconds: 125.4, moovAtEnd: true }));
+    expect(out.ok).toBe(true);
+    const [doc] = (await getSetDetail(pd, setId))!.documents;
+    expect(doc).toMatchObject({ mimeType: "video/mp4", durationSeconds: 125, pageCount: 13 });
+    expect(doc.objectKey).toMatch(/\.mp4$/);
+  });
+
+  it("วิดีโอรับได้ถึง 2 GB แต่ PDF ยังจำกัด 30 MB", async () => {
+    const setId = await newSet();
+    const ask = (mime: string, size: number) => requestUpload({ actor: pd, setId, docKind: "other", fileName: "f", mime, size });
+    expect((await ask("video/mp4", 2_000_000_000)).ok).toBe(true);
+    expect(await ask("video/mp4", 2_000_000_001)).toEqual({ ok: false, error: "วิดีโอต้องไม่เกิน 2 GB" });
+    expect(await ask("application/pdf", 31 * 1024 * 1024)).toEqual({ ok: false, error: "ไฟล์ต้องไม่เกิน 30 MB" });
+    expect((await ask("video/quicktime", 1000)).ok).toBe(false);
+  });
+
+  it("Pricelist ไม่รับวิดีโอ", async () => {
+    const setId = await newSet();
+    expect(await uploadVideo(setId, fakeMp4({ seconds: 10 }), "pricelist")).toEqual({
+      ok: false,
+      error: "Pricelist ต้องเป็น PDF หรือ Excel — วิดีโอแนบเป็นเอกสารหลักหรืออื่น ๆ",
+    });
+  });
+
+  it("ไฟล์ที่บอกว่าเป็น MP4 แต่อ่านความยาวไม่ได้ → ปฏิเสธและลบทิ้ง", async () => {
+    const setId = await newSet();
+    const out = await uploadVideo(setId, new Uint8Array(500).fill(7));
+    expect(out).toMatchObject({ ok: false });
+    expect((out as { error: string }).error).toContain("อ่านไฟล์วิดีโอไม่ได้");
+    expect(devStoreObjects().size).toBe(0);
+  });
+
+  it("ชุดที่มีแต่วิดีโอ → AI ออกข้อสอบไม่ได้ ต้องมี PDF", async () => {
+    const setId = await newSet();
+    await uploadVideo(setId, fakeMp4({ seconds: 30 }));
+    const out = await generateExams({ actor: pd, setId, model: fakeModel() });
+    expect(out).toEqual({ ok: false, error: "ต้องมีเอกสาร PDF อย่างน้อย 1 ไฟล์ก่อนออกข้อสอบ" });
   });
 });
 
