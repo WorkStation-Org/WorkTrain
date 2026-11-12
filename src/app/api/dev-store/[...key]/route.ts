@@ -26,7 +26,22 @@ export async function GET(req: Request, { params }: { params: Promise<{ key: str
   const body = key ? devStoreObjects().get(key) : undefined;
   if (!body) return new Response(null, { status: 404 });
   const ct = new URL(req.url).searchParams.get("ct");
-  return new Response(Buffer.from(body), {
-    headers: { "content-type": isDocumentMime(ct) ? ct : "application/octet-stream", "x-content-type-options": "nosniff" },
-  });
+  const headers = {
+    "content-type": isDocumentMime(ct) ? ct : "application/octet-stream",
+    "x-content-type-options": "nosniff",
+    "accept-ranges": "bytes",
+  };
+  // ตัวเล่นวิดีโอขอไฟล์เป็นช่วง (กรอ · บัฟเฟอร์) แบบเดียวกับ R2 — ADR-0013
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get("range") ?? "");
+  if (range && (range[1] || range[2])) {
+    const size = body.byteLength;
+    const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+    const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start >= size || start > end) return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+    return new Response(Buffer.from(body.subarray(start, end + 1)), {
+      status: 206,
+      headers: { ...headers, "content-range": `bytes ${start}-${end}/${size}`, "content-length": String(end - start + 1) },
+    });
+  }
+  return new Response(Buffer.from(body), { headers });
 }

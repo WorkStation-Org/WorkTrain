@@ -30,7 +30,8 @@ import {
   type Rng,
 } from "@/domain/exam";
 import { usableScan } from "@/lib/identity-service";
-import { objectStore } from "@/lib/object-store";
+import { isVideoMime, maxNewSegments } from "@/domain/document";
+import { objectStore, VIDEO_LINK_TTL_SECONDS } from "@/lib/object-store";
 import type { Outcome } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { watermarkPdf } from "@/lib/watermark";
@@ -73,7 +74,7 @@ async function approvedVersion(setId: number) {
   return rows.find((v) => v.approvedAt !== null) ?? null;
 }
 
-/** เอกสารที่ผู้เรียนต้องอ่าน — PDF ทุกชนิด (Pricelist แสดงแบบมีลายน้ำ) · Excel ยังแสดงทีละหน้าไม่ได้ */
+/** เอกสารที่ผู้เรียนต้องอ่าน/ดู — PDF ทุกชนิด (Pricelist แสดงแบบมีลายน้ำ) · วิดีโอ (นับเป็นช่วง) · Excel ยังแสดงทีละหน้าไม่ได้ */
 async function requiredDocuments(versionId: number) {
   const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder));
   return rows.filter((d) => d.pageCount !== null);
@@ -222,14 +223,18 @@ export async function recordReading(input: {
   const doc = version ? (await requiredDocuments(version.id)).find((d) => d.id === input.documentId) : undefined;
   if (!doc || doc.pageCount === null) return { ok: false, error: "ไม่พบเอกสารนี้" };
 
-  const pages = [...new Set(input.pages)].filter((p) => Number.isInteger(p) && p >= 1 && p <= doc.pageCount!);
+  const valid = [...new Set(input.pages)].filter((p) => Number.isInteger(p) && p >= 1 && p <= doc.pageCount!);
   const seconds = Math.max(0, Math.min(MAX_SECONDS_PER_BEAT, Math.floor(input.activeSeconds)));
   const round = mine.a.readRound;
   const [prev] = await db()
     .select()
     .from(readingProgress)
     .where(and(eq(readingProgress.assignmentId, mine.a.id), eq(readingProgress.documentId, doc.id), eq(readingProgress.readRound, round)));
-  const seen = [...new Set([...(prev?.pagesSeen ?? []), ...pages])].sort((x, y) => x - y);
+  // วิดีโอ: ช่วงใหม่ต่อครั้งต้องไม่เกินที่เล่นทันในเวลาที่ดูจริง (เร็วสุด 2 เท่า · ADR-0013) — เกินมาไม่นับ ต้องดูอีก
+  const already = new Set(prev?.pagesSeen ?? []);
+  const fresh = valid.filter((p) => !already.has(p)).sort((x, y) => x - y);
+  const pages = isVideoMime(doc.mimeType) ? fresh.slice(0, maxNewSegments(seconds)) : fresh;
+  const seen = [...new Set([...already, ...pages])].sort((x, y) => x - y);
   const completed = seen.length >= doc.pageCount;
   const values = {
     pagesSeen: seen,
@@ -245,7 +250,7 @@ export async function recordReading(input: {
           .where(and(eq(readingProgress.assignmentId, mine.a.id), eq(readingProgress.documentId, doc.id), eq(readingProgress.readRound, round)))
       : db().insert(readingProgress).values({ assignmentId: mine.a.id, documentId: doc.id, readRound: round, ...values }),
     // มีการขยับจริงเท่านั้นที่ต่ออายุรอบเรียน — heartbeat ที่ไม่มีเวลาอ่าน (แท็บซ่อน/นิ่ง) ไม่นับ
-    ...(seconds > 0 || pages.length > 0
+    ...(seconds > 0 || valid.length > 0
       ? [db().update(studySessions).set({ lastActiveAt: now }).where(eq(studySessions.id, session.id))]
       : []),
   ]);
@@ -293,7 +298,12 @@ export async function documentLink(input: { personId: number; assignmentId: numb
   if (doc.kind === "pricelist") return { ok: true, url: `/learn/${input.assignmentId}/doc/${doc.id}` };
   const store = objectStore();
   if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
-  const url = await store.presignGet({ key: doc.objectKey, contentType: doc.mimeType, disposition: "inline" });
+  const url = await store.presignGet({
+    key: doc.objectKey,
+    contentType: doc.mimeType,
+    disposition: "inline",
+    ...(isVideoMime(doc.mimeType) ? { expiresIn: VIDEO_LINK_TTL_SECONDS } : {}),
+  });
   await db().insert(documentViews).values({ documentId: doc.id, personId: input.personId, viewedAt: now });
   return { ok: true, url };
 }
@@ -372,7 +382,16 @@ export async function learnView(personId: number, assignmentId: number, now: Dat
     versionLabel: version.label,
     documents: docs.map((d) => {
       const p = progress.find((x) => x.documentId === d.id);
-      return { id: d.id, kind: d.kind, fileName: d.fileName, pageCount: d.pageCount!, pagesSeen: p?.pagesSeen ?? [], completed: Boolean(p?.completedAt) };
+      return {
+        id: d.id,
+        kind: d.kind,
+        fileName: d.fileName,
+        mimeType: d.mimeType,
+        durationSeconds: d.durationSeconds,
+        pageCount: d.pageCount!,
+        pagesSeen: p?.pagesSeen ?? [],
+        completed: Boolean(p?.completedAt),
+      };
     }),
     attempts: past.filter((x) => x.endedAt),
     openAttemptId: open?.id ?? null,
@@ -422,7 +441,7 @@ export async function startAttempt(input: {
     if (mine.a.relearnRequiredAt) return { ok: false, error: "ไม่ผ่าน 2 ครั้งติด — กลับไปอ่านเอกสารให้ครบอีกรอบก่อนสอบ" };
     version = await approvedVersion(mine.set.id);
     if (!version) return { ok: false, error: "ชุดนี้ยังไม่มีข้อสอบ" };
-    if (!(await readingComplete(mine.a, version.id))) return { ok: false, error: "ต้องอ่านเอกสารให้ครบทุกหน้าก่อนสอบ" };
+    if (!(await readingComplete(mine.a, version.id))) return { ok: false, error: "ต้องอ่านเอกสารให้ครบทุกหน้าและดูวิดีโอครบทุกช่วงก่อนสอบ" };
   }
   const bad = await usableScan({ personId: input.personId, scanId: input.scanId, purpose: "exam", now });
   if (bad) return { ok: false, error: bad };

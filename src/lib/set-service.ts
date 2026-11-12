@@ -14,7 +14,17 @@ import {
   type DocumentKind,
 } from "@/db/schema";
 import { checkBlueprint, type Blueprint } from "@/domain/blueprint";
-import { MAX_DOCUMENT_BYTES, documentKey, isDocumentMime } from "@/domain/document";
+import {
+  MAX_VIDEO_SECONDS,
+  documentKey,
+  formatBytesLimit,
+  isDocumentMime,
+  isVideoMime,
+  kindAllowsMime,
+  maxBytesFor,
+  videoSegmentCount,
+} from "@/domain/document";
+import { mp4DurationSeconds } from "@/domain/mp4";
 import type { Actor } from "@/lib/auth";
 import { objectStore } from "@/lib/object-store";
 import { openBlob, signBlob } from "@/lib/session";
@@ -206,10 +216,12 @@ export async function requestUpload(input: {
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
   let version = await currentVersion(set.id);
   if (!canEditVersion(input.actor, set, version)) return { ok: false, error: "แก้ได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
-  if (!isDocumentMime(input.mime)) return { ok: false, error: "รับเฉพาะ PDF หรือ Excel (.xlsx)" };
-  if (!Number.isInteger(input.size) || input.size <= 0 || input.size > MAX_DOCUMENT_BYTES) {
-    return { ok: false, error: `ไฟล์ต้องไม่เกิน ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB` };
+  if (!isDocumentMime(input.mime)) return { ok: false, error: "รับเฉพาะ PDF · Excel (.xlsx) · วิดีโอ MP4" };
+  const maxBytes = maxBytesFor(input.mime);
+  if (!Number.isInteger(input.size) || input.size <= 0 || input.size > maxBytes) {
+    return { ok: false, error: `${isVideoMime(input.mime) ? "วิดีโอ" : "ไฟล์"}ต้องไม่เกิน ${formatBytesLimit(maxBytes)}` };
   }
+  if (!kindAllowsMime(input.docKind, input.mime)) return { ok: false, error: "Pricelist ต้องเป็น PDF หรือ Excel — วิดีโอแนบเป็นเอกสารหลักหรืออื่น ๆ" };
   if (input.docKind === "pricelist") {
     const [kind] = await db().select({ allowPricelist: setKinds.allowPricelist }).from(setKinds).where(eq(setKinds.id, set.kindId));
     if (!kind?.allowPricelist) return { ok: false, error: "ชนิดของชุดนี้ไม่ได้เปิดให้แนบ Pricelist" };
@@ -265,7 +277,17 @@ export async function confirmUpload(input: { actor: Actor; token: string; now?: 
 
   // นับหน้าตอนรับไฟล์ — ผู้เรียนต้องเลื่อนผ่านครบทุกหน้า (spec §9) จึงต้องรู้จำนวนหน้าจากไฟล์จริง ไม่ใช่จากเบราว์เซอร์
   let pageCount: number | null = null;
-  if (t.mime === "application/pdf") {
+  let durationSeconds: number | null = null;
+  if (isVideoMime(t.mime)) {
+    // วิดีโอ: ความยาวจากหัวไฟล์จริง → จำนวนช่วงละ 10 วินาที (ADR-0013) · อ่านทีละช่วงสั้น ไม่โหลดทั้งไฟล์
+    const seconds = await mp4DurationSeconds((start, length) => store.getRange(t.key, start, length), head.size);
+    if (seconds === null || seconds > MAX_VIDEO_SECONDS) {
+      await store.delete(t.key);
+      return { ok: false, error: "อ่านไฟล์วิดีโอไม่ได้ — ต้องเป็น MP4 ที่ไม่เสีย (export จากโปรแกรมตัดต่อเป็น MP4 H.264)" };
+    }
+    durationSeconds = Math.round(seconds);
+    pageCount = videoSegmentCount(seconds);
+  } else if (t.mime === "application/pdf") {
     const bytes = await store.get(t.key);
     pageCount = bytes ? await countPdfPages(bytes) : null;
     if (pageCount === null) {
@@ -285,6 +307,7 @@ export async function confirmUpload(input: { actor: Actor; token: string; now?: 
       mimeType: t.mime,
       sizeBytes: t.size,
       pageCount,
+      durationSeconds,
       sortOrder: order.length,
     })
     .returning({ id: documents.id });

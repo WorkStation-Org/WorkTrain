@@ -156,6 +156,8 @@ export const documents = pgTable(
     sizeBytes: integer("size_bytes").notNull(),
     /** จำนวนหน้า — ผู้เรียนต้องเลื่อนผ่านครบทุกหน้า (spec §9) · null = ไม่ใช่เอกสารแบบหน้า */
     pageCount: smallint("page_count"),
+    /** ความยาววิดีโอจากหัวไฟล์ (วินาที) — วิดีโอใช้ `page_count` เป็นจำนวนช่วงละ 10 วินาที (ADR-0013) · null = ไม่ใช่วิดีโอ */
+    durationSeconds: integer("duration_seconds"),
     sortOrder: smallint("sort_order").notNull().default(0),
     createdAt: ts("created_at").notNull().defaultNow(),
   },

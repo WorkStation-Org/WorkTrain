@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 const REASON: Record<string, string> = { submitted: "ส่งเอง", timeout: "หมดเวลา", left_page: "ออกจากหน้าสอบครบ 5 ครั้ง" };
 
-/** หน้าเรียนของการมอบหนึ่ง — สแกนเริ่มรอบ → อ่านครบทุกหน้า → สแกนเริ่มสอบ (spec §9 · §10) */
+/** หน้าเรียนของการมอบหนึ่ง — สแกนเริ่มรอบ → อ่านครบทุกหน้า + ดูวิดีโอครบทุกช่วง → สแกนเริ่มสอบ (spec §9 · §10) */
 export default async function LearnSetPage({
   params,
   searchParams,
@@ -75,7 +75,7 @@ export default async function LearnSetPage({
         </Card>
       )}
       {view.state === "relearn" && (
-        <Alert kind="warn" title="สอบไม่ผ่าน 2 ครั้งติด">อ่านเอกสารให้ครบทุกหน้าอีกรอบก่อนสอบใหม่</Alert>
+        <Alert kind="warn" title="สอบไม่ผ่าน 2 ครั้งติด">อ่านเอกสารให้ครบทุกหน้าและดูวิดีโอให้ครบทุกช่วงอีกรอบก่อนสอบใหม่</Alert>
       )}
       {view.state === "in_exam" && view.openAttemptId && (
         <Card>
@@ -101,14 +101,14 @@ export default async function LearnSetPage({
               ) : null
             }
           >
-            เอกสาร ({readCount}/{view.documents.length} อ่านครบ)
+            เอกสาร ({readCount}/{view.documents.length} ครบ)
           </SectionTitle>
           {view.session ? (
             <Reader assignmentId={view.assignment.id} documents={view.documents} viewer={`${actor.name} · ${actor.email}`} />
           ) : enrolled ? (
             <div>
               <p className="mb-3 text-[13px] text-ink-3">
-                สแกนใบหน้าเพื่อเริ่มรอบเรียน · นิ่งเกิน 2 นาทีรอบจะจบ ต้องสแกนใหม่ (หน้าที่อ่านแล้วยังนับอยู่)
+                สแกนใบหน้าเพื่อเริ่มรอบเรียน · นิ่งเกิน 2 นาทีรอบจะจบ ต้องสแกนใหม่ (หน้าและช่วงวิดีโอที่ดูแล้วยังนับอยู่)
               </p>
               <ScanFlow mode={mode} purpose="study" label="สแกนใบหน้า · เริ่มเรียน" confirmedScanId={confirmedStudy} />
             </div>
