@@ -14,6 +14,7 @@ import {
   MAX_LEAVES_BEFORE_SUBMIT,
   questions,
   readingProgress,
+  setKinds,
   setVersions,
   studySessions,
   versionAcknowledgements,
@@ -30,7 +31,7 @@ import {
   type Rng,
 } from "@/domain/exam";
 import { usableScan } from "@/lib/identity-service";
-import { isVideoMime, maxNewSegments } from "@/domain/document";
+import { isVideoMime, maxNewSegments, VIDEO_SEGMENT_SECONDS } from "@/domain/document";
 import { objectStore, VIDEO_LINK_TTL_SECONDS } from "@/lib/object-store";
 import { coverPath, type Outcome } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
@@ -342,6 +343,115 @@ export async function myAssignments(personId: number) {
     .where(and(eq(assignments.personId, personId), eq(learningSets.status, "active")))
     .orderBy(asc(assignments.dueAt));
   return rows;
+}
+
+/** สถานะของชุดในหน้ารายการ — `late` เป็นธงแยก (ชุดที่เลยกำหนดยังมีสถานะจริงของมัน) */
+export type ListStatus = "todo" | "reading" | "relearn" | "ready" | "passed" | "update";
+
+export interface LearningListItem {
+  assignmentId: number;
+  title: string;
+  kindName: string;
+  dueAt: Date;
+  passedAt: Date | null;
+  status: ListStatus;
+  late: boolean;
+  videos: number;
+  videoSeconds: number;
+  pdfs: number;
+  pdfPages: number;
+  /** หน้า + ช่วงวิดีโอที่ครบแล้วในรอบอ่านนี้ / ทั้งหมด */
+  unitsSeen: number;
+  unitsTotal: number;
+  docsDone: number;
+  docsTotal: number;
+  /** ปกของคลิปแรกที่มีปก */
+  coverUrl: string | null;
+  /** เนื้อหาที่ขยับล่าสุดแต่ยังไม่ครบ — ใช้ทำ "ทำต่อจากที่ค้างไว้" */
+  resume: { fileName: string; isVideo: boolean; seen: number; total: number; durationSeconds: number | null; coverUrl: string | null; at: Date } | null;
+}
+
+/**
+ * หน้ารายการชุดที่ต้องเรียน — ทุกการมอบของชุดที่ใช้อยู่ พร้อมเนื้อหา (คลิป/PDF) และความคืบหน้าของรอบอ่านปัจจุบัน
+ * เรียง: ยังไม่ผ่านตามกำหนดส่งใกล้สุด แล้วชุดที่ผ่านแล้ว (ผ่านล่าสุดก่อน)
+ */
+export async function myLearningList(personId: number, now: Date = new Date()): Promise<LearningListItem[]> {
+  const rows = await db()
+    .select({ a: assignments, title: learningSets.title, kindName: setKinds.name })
+    .from(assignments)
+    .innerJoin(learningSets, eq(learningSets.id, assignments.setId))
+    .innerJoin(setKinds, eq(setKinds.id, learningSets.kindId))
+    .where(and(eq(assignments.personId, personId), eq(learningSets.status, "active")));
+  const items: LearningListItem[] = [];
+  for (const { a, title, kindName } of rows) {
+    const version = await approvedVersion(a.setId);
+    if (!version) continue;
+    const docs = await requiredDocuments(version.id);
+    const progress = await db()
+      .select()
+      .from(readingProgress)
+      .where(and(eq(readingProgress.assignmentId, a.id), eq(readingProgress.readRound, a.readRound)));
+    const byDoc = new Map(progress.map((p) => [p.documentId, p]));
+    const videoDocs = docs.filter((d) => isVideoMime(d.mimeType));
+    const pdfDocs = docs.filter((d) => !isVideoMime(d.mimeType));
+    const seenOf = (d: (typeof docs)[number]) => Math.min(byDoc.get(d.id)?.pagesSeen.length ?? 0, d.pageCount ?? 0);
+    const doneOf = (d: (typeof docs)[number]) => Boolean(byDoc.get(d.id)?.completedAt);
+    const docsDone = docs.filter(doneOf).length;
+    const unitsSeen = docs.reduce((n, d) => n + (doneOf(d) ? (d.pageCount ?? 0) : seenOf(d)), 0);
+    const unitsTotal = docs.reduce((n, d) => n + (d.pageCount ?? 0), 0);
+
+    const update = a.passedAt ? await pendingUpdate(a) : null;
+    const complete = docs.length > 0 && docsDone === docs.length;
+    const status: ListStatus = a.passedAt
+      ? update
+        ? "update"
+        : "passed"
+      : a.relearnRequiredAt
+        ? "relearn"
+        : complete
+          ? "ready"
+          : unitsSeen > 0
+            ? "reading"
+            : "todo";
+
+    const touched = docs
+      .filter((d) => !doneOf(d) && byDoc.get(d.id))
+      .sort((x, y) => byDoc.get(y.id)!.updatedAt.getTime() - byDoc.get(x.id)!.updatedAt.getTime())[0];
+    const firstCover = videoDocs.find((d) => d.coverKey);
+    items.push({
+      assignmentId: a.id,
+      title,
+      kindName,
+      dueAt: a.dueAt,
+      passedAt: a.passedAt,
+      status,
+      late: !a.passedAt && a.dueAt <= now,
+      videos: videoDocs.length,
+      videoSeconds: videoDocs.reduce((n, d) => n + (d.durationSeconds ?? (d.pageCount ?? 0) * VIDEO_SEGMENT_SECONDS), 0),
+      pdfs: pdfDocs.length,
+      pdfPages: pdfDocs.reduce((n, d) => n + (d.pageCount ?? 0), 0),
+      unitsSeen,
+      unitsTotal,
+      docsDone,
+      docsTotal: docs.length,
+      coverUrl: firstCover ? coverPath(firstCover) : null,
+      resume:
+        touched && !a.passedAt
+          ? {
+              fileName: touched.fileName,
+              isVideo: isVideoMime(touched.mimeType),
+              seen: seenOf(touched),
+              total: touched.pageCount ?? 0,
+              durationSeconds: touched.durationSeconds,
+              coverUrl: coverPath(touched),
+              at: byDoc.get(touched.id)!.updatedAt,
+            }
+          : null,
+    });
+  }
+  const open = items.filter((i) => !i.passedAt).sort((x, y) => x.dueAt.getTime() - y.dueAt.getTime());
+  const passed = items.filter((i) => i.passedAt).sort((x, y) => y.passedAt!.getTime() - x.passedAt!.getTime());
+  return [...open, ...passed];
 }
 
 /** ทุกอย่างที่หน้าเรียนของการมอบหนึ่งต้องใช้ */
