@@ -148,6 +148,40 @@ describe("ความยินยอมและการสแกน", () => {
   });
 });
 
+describe("หน้ารายการชุดที่ต้องเรียน", () => {
+  it("เนื้อหา (คลิป/PDF) · ความคืบหน้า · ทำต่อจากที่ค้างไว้ · สถานะ · เลยกำหนด", async () => {
+    const { a, docs } = await seed();
+    // PDF 3 + 1 + 2 หน้า และวิดีโอ 95 วินาที (10 ช่วง) ที่มีปก
+    const [video] = await testDb()
+      .insert(schema.documents)
+      .values({ versionId: docs[0].versionId, kind: "other", objectKey: "v", fileName: "intro.mp4", mimeType: "video/mp4", sizeBytes: 1, pageCount: 10, durationSeconds: 95, coverKey: "v-cover-abcdef1234567890.jpg", coverMs: 0, sortOrder: 3 })
+      .returning();
+
+    const [fresh] = await L.myLearningList(ME, T0);
+    expect(fresh).toMatchObject({ status: "todo", late: false, videos: 1, videoSeconds: 95, pdfs: 3, pdfPages: 6, unitsSeen: 0, unitsTotal: 16, docsDone: 0, docsTotal: 4, resume: null });
+    expect(fresh.coverUrl).toBe(`/api/covers/${video.id}?v=34567890`);
+
+    await startSession(T0);
+    await L.recordReading({ personId: ME, assignmentId: a.id, documentId: docs[0].id, pages: [1, 2, 3], activeSeconds: 10, now: sec(5) });
+    await L.recordReading({ personId: ME, assignmentId: a.id, documentId: video.id, pages: [1, 2], activeSeconds: 10, now: sec(20) });
+    const [reading] = await L.myLearningList(ME, sec(30));
+    expect(reading).toMatchObject({ status: "reading", unitsSeen: 5, docsDone: 1 });
+    // เนื้อหาที่ขยับล่าสุดแต่ยังไม่ครบ = วิดีโอ (PDF ไฟล์แรกครบแล้ว)
+    expect(reading.resume).toMatchObject({ fileName: "intro.mp4", isVideo: true, seen: 2, total: 10 });
+
+    await readAll(a.id, docs, sec(40));
+    // วิดีโอส่งได้ทีละไม่เกินที่เล่นทัน (ADR-0013) — ดูต่อสองรอบ heartbeat
+    for (const at of [41, 42]) {
+      await L.recordReading({ personId: ME, assignmentId: a.id, documentId: video.id, pages: Array.from({ length: 10 }, (_, i) => i + 1), activeSeconds: 30, now: sec(at) });
+    }
+    expect((await L.myLearningList(ME, sec(50)))[0]).toMatchObject({ status: "ready", docsDone: 4, unitsSeen: 16, resume: null });
+
+    const late = await L.myLearningList(ME, new Date(a.dueAt.getTime() + 1000));
+    expect(late[0]).toMatchObject({ status: "ready", late: true });
+    expect(await L.myLearningList(77, T0)).toEqual([]);
+  });
+});
+
 describe("การอ่าน (spec §9)", () => {
   it("ต้องมีรอบเรียน · นิ่งเกิน 2 นาที = จบรอบ ต้องสแกนใหม่ · ความคืบหน้ายังอยู่", async () => {
     const { a, docs } = await seed();
