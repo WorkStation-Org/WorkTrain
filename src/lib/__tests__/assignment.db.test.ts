@@ -90,14 +90,43 @@ describe("ผู้รับ", () => {
           { kind: "position", refId: 41, label: "ซ้ำ" },
         ],
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: true, assigned: 0 });
     const preview = await previewAudience(set.id);
     expect(preview.ok && preview.people.map((p) => p.personId)).toEqual([20, 31, 32]);
   });
 
-  it("แก้ผู้รับได้เฉพาะตอนร่าง", async () => {
+  it("ชุดที่ใช้อยู่: ผู้สร้างเพิ่มผู้รับได้ · คนใหม่ได้รับมอบทันทีพร้อมแจ้ง · คนที่หลุดเงื่อนไขเก็บการมอบไว้ · ลงประวัติ", async () => {
     const set = await activeSet();
+    await setAudience({ actor: pd, setId: set.id, rules: [{ kind: "position", refId: 41, label: "Sales" }] });
     await activate(set.id);
+    await syncAssignments({ setId: set.id, now: MON });
+    expect((await assignmentRows()).map((a) => a.personId)).toEqual([31, 32]);
+    pushes = [];
+
+    // เปลี่ยนเป็น: ทีม 8 (คิวซี) + รายคน 32 — เซลหนึ่ง (31) หลุดเงื่อนไข
+    const out = await setAudience({
+      actor: pd,
+      setId: set.id,
+      rules: [
+        { kind: "team", refId: 8, label: "ทีม QC" },
+        { kind: "person", refId: 32, label: "เซล สอง" },
+      ],
+      now: MON,
+    });
+    expect(out).toEqual({ ok: true, assigned: 1 });
+    expect((await assignmentRows()).map((a) => a.personId)).toEqual([31, 32, 40]);
+    expect(pushes.some((p) => p.text.includes("F331 Signature"))).toBe(true);
+    const [ev] = await testDb().select().from(schema.approvalEvents).where(eq(schema.approvalEvents.action, "audience_changed"));
+    expect(ev).toMatchObject({ actorPersonId: 10, comment: "ทีม QC · เซล สอง" });
+  });
+
+  it("แก้ผู้รับไม่ได้: คนที่ไม่ใช่ผู้สร้าง/TG · ชุดที่รออนุมัติหรือปิดแล้ว", async () => {
+    const set = await activeSet();
+    const other: Actor = { personId: 31, email: "s1@ws.co", name: "เซล", role: "author" };
+    expect((await setAudience({ actor: other, setId: set.id, rules: [] })).ok).toBe(false);
+    await testDb().update(schema.learningSets).set({ status: "pending_approval" }).where(eq(schema.learningSets.id, set.id));
+    expect((await setAudience({ actor: pd, setId: set.id, rules: [] })).ok).toBe(false);
+    await testDb().update(schema.learningSets).set({ status: "closed", approvedAt: new Date(), closedAt: new Date() }).where(eq(schema.learningSets.id, set.id));
     expect((await setAudience({ actor: pd, setId: set.id, rules: [] })).ok).toBe(false);
   });
 });

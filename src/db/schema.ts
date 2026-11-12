@@ -67,6 +67,10 @@ export type SetStatus = (typeof SET_STATUSES)[number];
  *
  * ผู้อนุมัติค่าเริ่มต้น = หัวหน้าตามผังของผู้สร้าง ณ ตอนสร้าง · ผู้สร้างเปลี่ยนได้ (ADR-0004)
  */
+/** วิธีเฉลี่ยข้อสอบตอนให้ AI ออก (`src/domain/spread.ts`) */
+export const SPREAD_MODES = ["file", "topic", "custom"] as const;
+export type SpreadMode = (typeof SPREAD_MODES)[number];
+
 export const learningSets = pgTable(
   "learning_sets",
   {
@@ -88,6 +92,8 @@ export const learningSets = pgTable(
     passPercent: smallint("pass_percent").notNull().default(80),
     /** สัดส่วนหัวข้อ × ระดับของ 10 ข้อ (spec §3) — `[{ topic, level, count }]` */
     blueprint: jsonb("blueprint").notNull(),
+    /** AI เฉลี่ยข้อสอบอย่างไร — `file` เท่ากันทุกไฟล์ · `topic` ตามหัวข้อของ blueprint อย่างเดียว · `custom` ตามน้ำหนักของแต่ละไฟล์ */
+    spreadMode: text("spread_mode", { enum: SPREAD_MODES }).notNull().default("file"),
     approvedAt: ts("approved_at"),
     closedAt: ts("closed_at"),
     createdAt: ts("created_at").notNull().defaultNow(),
@@ -162,10 +168,13 @@ export const documents = pgTable(
     coverKey: text("cover_key"),
     /** เฟรมที่ใช้เป็นปก (มิลลิวินาทีจากต้นคลิป) */
     coverMs: integer("cover_ms"),
+    /** น้ำหนักตอนเฉลี่ยข้อสอบแบบกำหนดเอง (0 = ไม่ออกจากไฟล์นี้) */
+    examWeight: smallint("exam_weight").notNull().default(1),
     sortOrder: smallint("sort_order").notNull().default(0),
     createdAt: ts("created_at").notNull().defaultNow(),
   },
   (t) => [
+    check("documents_exam_weight", sql`${t.examWeight} between 0 and 5`),
     uniqueIndex("documents_object_key_uniq").on(t.objectKey),
     index("documents_version_idx").on(t.versionId),
   ],
@@ -229,6 +238,22 @@ export const questions = pgTable(
   (t) => [uniqueIndex("questions_form_order_uniq").on(t.formId, t.sortOrder)],
 );
 
+/**
+ * "ตรวจแล้ว" ของแต่ละคนต่อข้อสอบหนึ่งข้อ — ให้ผู้อนุมัติ/ผู้สร้างรู้ว่าตรวจถึงไหน ไม่ต้องเปิดดูซ้ำ
+ * แก้ข้อเอง = ตรวจแล้ว · ให้ AI ออกข้อใหม่ = ล้างของทุกคน (เนื้อเปลี่ยน)
+ */
+export const questionReviews = pgTable(
+  "question_reviews",
+  {
+    questionId: integer("question_id")
+      .notNull()
+      .references(() => questions.id, { onDelete: "cascade" }),
+    personId: integer("person_id").notNull(),
+    reviewedAt: ts("reviewed_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.questionId, t.personId] })],
+);
+
 /** ตัวเลือก — ปรนัย 4 ตัวเลือก ถูกข้อเดียว (บังคับที่ service ตอนอนุมัติ ไม่ใช่ที่ฐาน เพราะแก้ทีละตัวเลือก) */
 export const choices = pgTable(
   "choices",
@@ -253,6 +278,7 @@ export const APPROVAL_ACTIONS = [
   "question_edited",
   "question_regenerated",
   "approver_changed",
+  "audience_changed",
 ] as const;
 export type ApprovalAction = (typeof APPROVAL_ACTIONS)[number];
 

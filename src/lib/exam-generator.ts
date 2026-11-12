@@ -55,6 +55,18 @@ export interface GenerateInput {
   formCount: number;
   /** ออกเฉพาะส่วนที่เปลี่ยนตามสรุปนี้ (ข้อสอบส่วนที่เปลี่ยนใหญ่ · ADR-0008) · ไม่มี = ทั้งเอกสาร */
   focus?: string;
+  /** จำนวนข้อต่อไฟล์ในแต่ละชุด `[ชุด][ลำดับใน documents]` (`spreadPlan`) · ไม่มี = ให้ AI กระจายเอง */
+  plan?: number[][];
+}
+
+/** บรรทัดแผนเฉลี่ยตามไฟล์ในคำสั่ง — ข้ามไฟล์ที่ชุดนั้นไม่ได้ */
+export function planLines(plan: number[][], fileNames: readonly string[]): string {
+  return plan
+    .map((row, f) => {
+      const parts = row.flatMap((n, i) => (n > 0 ? [`"${fileNames[i]}" ${n} ข้อ`] : []));
+      return `- ชุดที่ ${f + 1}: ${parts.join(" · ")}`;
+    })
+    .join("\n");
 }
 
 export interface SummarizeInput {
@@ -212,6 +224,13 @@ export function claudeExamModel(client?: Anthropic): ExamModel | null {
 ${slotLines(input.blueprint, topics.code)}
 
 คำถามห้ามซ้ำกันทั้งภายในชุดและข้ามชุด · แต่ละชุดควรครอบคลุมส่วนต่าง ๆ ของเอกสารไม่ซ้ำกัน${
+                    input.plan
+                      ? `
+
+เฉลี่ยให้ครอบคลุมทุกไฟล์ — จำนวนข้อที่ต้องมาจากแต่ละไฟล์ในแต่ละชุด (source_ref ต้องขึ้นต้นด้วยชื่อไฟล์นั้น · ยังคงสัดส่วนหัวข้อและระดับข้างบน):
+${planLines(input.plan, input.documents.map((d) => d.fileName))}`
+                      : ""
+                  }${
                     input.focus
                       ? `
 

@@ -40,6 +40,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
   `src/lib/kind-service.ts` — ทะเบียนชนิดของชุด (`/admin/kinds` · TG เท่านั้น · ADR-0011) · `src/domain/document.ts` — ชนิด/ขนาดไฟล์ · key ใน R2 ·
   ช่วงวิดีโอ 10 วินาที · `src/domain/mp4.ts` — ความยาววิดีโอจากหัวไฟล์ MP4 (ADR-0013)
 - `src/lib/set-service.ts` — สร้างชุด · ตั้งค่า · อัปโหลด (ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยันด้วย HEAD) · `getSetDetail()` (มีเฉลย — เฉพาะ `canManage`)
+- `/sets/[id]` — แถบขั้นตอน `?tab=` ตั้งค่า · เอกสาร · ข้อสอบ · ผู้รับ · ผู้เรียน · ประวัติ (ADR-0014) · client component ต่อขั้น:
+  `approver-picker` · `docs-manager` · `spread-panel` + `exam-workspace` (แก้/ตรวจแล้วอยู่ที่เดิม) · `audience-picker` (แก้ได้ทั้งร่างและชุดที่ใช้อยู่) ·
+  `src/domain/spread.ts` — แผนเฉลี่ยข้อสอบตามไฟล์ + นับจาก `source_ref`
 - `src/lib/exam-generator.ts` — **ที่เดียวที่คุยกับ Anthropic API** (`ExamModel`) · ออก 5 ชุดในคำขอเดียว · `checkForms()` ตรวจผลของ AI ก่อนลงฐานทุกครั้ง
 - `src/lib/exam-service.ts` — ออกข้อสอบ · แก้/ออกใหม่ทีละข้อ (ลงประวัติก่อน/หลัง) · `src/lib/approval-service.ts` — ส่ง · ตีกลับ · อนุมัติ
 - `src/lib/version-service.ts` — เวอร์ชันใหม่ (spec §7): เริ่ม · สรุปด้วย AI · ส่ง · ผู้อนุมัติเลือกเล็ก/ใหญ่ · ข้อสอบส่วนที่เปลี่ยน (`DELTA_BLUEPRINT`) · อนุมัติ + แจ้งคนที่ผ่านแล้ว ·

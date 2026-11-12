@@ -114,9 +114,17 @@ export function CoverEditor({
 }) {
   const router = useRouter();
   const picker = useRef<CoverPickerHandle>(null);
-  const [src, setSrc] = useState<string | null>(null);
+  const [src, setSrc] = useState<{ url: string; remote: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /** ทางเลือกเมื่อโหลดวิดีโอจาก R2 ไม่ได้ (CORS) — เลือกไฟล์เดิมจากเครื่องแล้วจับเฟรมจากไฟล์นั้น */
+  function pickLocal(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.currentTarget.files?.[0];
+    if (!file) return;
+    setError(null);
+    setSrc({ url: URL.createObjectURL(file), remote: false });
+  }
 
   async function open() {
     setBusy(true);
@@ -124,7 +132,7 @@ export function CoverEditor({
     const out = await authorVideoLinkAction({ documentId }).catch(() => null);
     setBusy(false);
     if (!out?.ok) return setError(out?.error ?? "เปิดวิดีโอไม่ได้");
-    setSrc(out.url);
+    setSrc({ url: out.url, remote: true });
   }
 
   async function save() {
@@ -159,11 +167,17 @@ export function CoverEditor({
               {busy ? "กำลังเปิด…" : coverUrl ? "เปลี่ยนปก" : "เลือกปกจากคลิป"}
             </Button>
           )}
+          {canEdit && (
+            <label className="cursor-pointer text-[12px] text-muted underline">
+              หรือเลือกไฟล์วิดีโอเดิมจากเครื่อง
+              <input type="file" accept="video/mp4" onChange={pickLocal} className="sr-only" />
+            </label>
+          )}
         </div>
       )}
       {src && (
         <div className="space-y-2 rounded-lg border border-line bg-canvas p-3">
-          <CoverPicker ref={picker} src={src} remote initialMs={coverMs} />
+          <CoverPicker ref={picker} src={src.url} remote={src.remote} initialMs={coverMs} />
           <div className="flex gap-2">
             <Button type="button" size="sm" variant="primary" onClick={save} disabled={busy}>
               {busy ? "กำลังบันทึก…" : "ใช้เฟรมนี้เป็นปก"}
@@ -177,6 +191,42 @@ export function CoverEditor({
       {error && <p className="text-[12px] text-danger">{error}</p>}
     </div>
   );
+}
+
+/**
+ * ปกอัตโนมัติจากไฟล์ในเครื่อง — จับเฟรมที่ 10% ของคลิป (เฟรมแรกมักเป็นจอดำ) ใช้ตอนอัปหลายไฟล์พร้อมกัน
+ * ไฟล์ในเครื่องจับเฟรมได้เสมอ ไม่ต้องพึ่ง CORS ของ R2 · เปิดไม่ได้ = null (อัปต่อได้ แค่ไม่มีปก)
+ */
+export async function captureCoverFromFile(file: File, fraction = 0.1): Promise<{ blob: Blob; ms: number } | null> {
+  const url = URL.createObjectURL(file);
+  const v = document.createElement("video");
+  v.muted = true;
+  v.playsInline = true;
+  v.preload = "auto";
+  v.src = url;
+  try {
+    await new Promise<void>((ok, fail) => {
+      v.onloadedmetadata = () => ok();
+      v.onerror = () => fail(new Error("load"));
+    });
+    const t = Math.max(0, Math.min(v.duration * fraction, v.duration - 0.1));
+    await new Promise<void>((ok, fail) => {
+      v.onseeked = () => ok();
+      v.onerror = () => fail(new Error("seek"));
+      v.currentTime = t;
+    });
+    const scale = Math.min(1, COVER_WIDTH / v.videoWidth);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(v.videoWidth * scale);
+    canvas.height = Math.round(v.videoHeight * scale);
+    canvas.getContext("2d")!.drawImage(v, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.82));
+    return blob && blob.size <= MAX_COVER_BYTES ? { blob, ms: Math.round(t * 1000) } : null;
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 /** ส่งปกเข้า server action (ภาพเล็ก ≤ 512 KB จึงส่งผ่าน action ได้ ไม่ต้องขอลิงก์อัป) */

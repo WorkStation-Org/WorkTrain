@@ -20,9 +20,23 @@ vi.mock("@/db", async () => {
   return { db: () => get(), schema: s };
 });
 
-const { createSet, updateSettings, requestUpload, confirmUpload, getSetDetail, listManagedSets, setVideoCover, coverImage, coverPath, authorVideoLink, removeDocument } =
-  await import("@/lib/set-service");
-const { generateExams, editQuestion, regenerateQuestion } = await import("@/lib/exam-service");
+const {
+  createSet,
+  updateSettings,
+  requestUpload,
+  confirmUpload,
+  getSetDetail,
+  listManagedSets,
+  setVideoCover,
+  coverImage,
+  coverPath,
+  authorVideoLink,
+  removeDocument,
+  updateDocument,
+  moveDocument,
+  setSpreadMode,
+} = await import("@/lib/set-service");
+const { generateExams, editQuestion, regenerateQuestion, setQuestionReviewed, reviewedQuestionIds } = await import("@/lib/exam-service");
 const { submitForApproval, returnToAuthor, approve } = await import("@/lib/approval-service");
 
 const pd: Actor = { personId: 10, email: "pd@ws.co", name: "พีดี ผู้สร้าง", role: "author" };
@@ -407,5 +421,86 @@ describe("การอนุมัติ", () => {
     expect(await submitForApproval({ actor: tgApprover, setId })).toEqual({ ok: false, error: "ผู้ส่งต้องไม่ใช่ผู้อนุมัติ — ให้ผู้สร้างกดส่ง หรือเปลี่ยนผู้อนุมัติ" });
     expect((await getSetDetail(pd, setId))?.set.status).toBe("draft");
     expect((await submitForApproval({ actor: pd, setId })).ok).toBe(true);
+  });
+});
+
+describe("จัดเอกสาร · เฉลี่ยข้อสอบ · ตรวจแล้ว (หน้ารวมแบบแถบขั้นตอน)", () => {
+  async function twoPdfSet() {
+    const created = await createSet({ actor: pd, title: "Onboarding", kindId: schema.SEEDED_KIND_IDS.general });
+    if (!created.ok) throw new Error(created.error);
+    await uploadPdf(pd, created.setId);
+    await uploadPdf(pd, created.setId);
+    const docs = (await getSetDetail(pd, created.setId))!.documents;
+    await updateDocument({ actor: pd, documentId: docs[0].id, fileName: "สวัสดิการ.pdf" });
+    await updateDocument({ actor: pd, documentId: docs[1].id, fileName: "ระเบียบ.pdf" });
+    return created.setId;
+  }
+
+  it("แก้ชื่อที่ผู้เรียนเห็น · ใช้ทำอะไร · น้ำหนัก · เลื่อนลำดับ — เฉพาะชุดร่างของตัวเอง", async () => {
+    const setId = await twoPdfSet();
+    const [a, b] = (await getSetDetail(pd, setId))!.documents;
+    expect(await updateDocument({ actor: pd, documentId: a.id, kind: "other", examWeight: 3 })).toEqual({ ok: true });
+    // ชนิด "ทั่วไป" ไม่เปิด Pricelist · น้ำหนักเกิน 5 · ชื่อว่าง · คนอื่นแก้ไม่ได้
+    expect((await updateDocument({ actor: pd, documentId: a.id, kind: "pricelist" })).ok).toBe(false);
+    expect((await updateDocument({ actor: pd, documentId: a.id, examWeight: 6 })).ok).toBe(false);
+    expect((await updateDocument({ actor: pd, documentId: a.id, fileName: "  " })).ok).toBe(false);
+    expect((await updateDocument({ actor: sales, documentId: a.id, fileName: "x" })).ok).toBe(false);
+
+    expect(await moveDocument({ actor: pd, documentId: b.id, direction: -1 })).toEqual({ ok: true });
+    const after = (await getSetDetail(pd, setId))!.documents;
+    expect(after.map((d) => [d.fileName, d.kind, d.examWeight])).toEqual([
+      ["ระเบียบ.pdf", "catalog", 1],
+      ["สวัสดิการ.pdf", "other", 3],
+    ]);
+  });
+
+  it("AI ได้แผนเฉลี่ยตามไฟล์ (ค่าตั้งต้น) · ตามหัวข้อ = ไม่ส่งแผน · กำหนดเอง = ตามน้ำหนัก", async () => {
+    const setId = await twoPdfSet();
+    const plans: (number[][] | undefined)[] = [];
+    const model = fakeModel();
+    const spy: ExamModel = { ...model, generateForms: (input) => (plans.push(input.plan), model.generateForms(input)) };
+
+    expect((await generateExams({ actor: pd, setId, model: spy })).ok).toBe(true);
+    expect(plans[0]).toEqual([
+      [5, 5],
+      [5, 5],
+      [5, 5],
+      [5, 5],
+      [5, 5],
+    ]);
+
+    expect(await setSpreadMode({ actor: pd, setId, mode: "topic" })).toEqual({ ok: true });
+    await generateExams({ actor: pd, setId, model: spy });
+    expect(plans[1]).toBeUndefined();
+
+    const [first] = (await getSetDetail(pd, setId))!.documents;
+    await updateDocument({ actor: pd, documentId: first.id, examWeight: 0 });
+    await setSpreadMode({ actor: pd, setId, mode: "custom" });
+    await generateExams({ actor: pd, setId, model: spy });
+    expect(plans[2]?.every((row) => row[0] === 0 && row[1] === 10)).toBe(true);
+
+    expect((await setSpreadMode({ actor: pd, setId, mode: "random" })).ok).toBe(false);
+    expect((await setSpreadMode({ actor: sales, setId, mode: "file" })).ok).toBe(false);
+  });
+
+  it("ตรวจแล้ว: กดเอง · แก้ข้อ = ตรวจแล้ว · ให้ AI ออกใหม่ = ล้าง · คนนอกชุดกดไม่ได้", async () => {
+    const setId = await readySet();
+    const detail = (await getSetDetail(pd, setId))!;
+    const [q1, q2] = detail.forms[0].questions;
+    const versionId = detail.version!.id;
+
+    expect(await setQuestionReviewed({ actor: pd, questionId: q1.id, reviewed: true })).toEqual({ ok: true });
+    expect([...(await reviewedQuestionIds(versionId, pd.personId))]).toEqual([q1.id]);
+    expect((await setQuestionReviewed({ actor: sales, questionId: q1.id, reviewed: true })).ok).toBe(false);
+
+    const edit = { text: "คำถามที่แก้แล้ว", sourceRef: "a.pdf หน้า 1", choices: ["ก", "ข", "ค", "ง"], correctIndex: 2 };
+    expect((await editQuestion({ actor: pd, questionId: q2.id, edit })).ok).toBe(true);
+    expect([...(await reviewedQuestionIds(versionId, pd.personId))].sort()).toEqual([q1.id, q2.id].sort());
+
+    expect((await regenerateQuestion({ actor: pd, questionId: q1.id, model: fakeModel() })).ok).toBe(true);
+    expect([...(await reviewedQuestionIds(versionId, pd.personId))]).toEqual([q2.id]);
+
+    await setQuestionReviewed({ actor: pd, questionId: q2.id, reviewed: false });
+    expect((await reviewedQuestionIds(versionId, pd.personId)).size).toBe(0);
   });
 });

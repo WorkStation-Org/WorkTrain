@@ -92,6 +92,13 @@
       "when": 1794471128948,
       "tag": "0012_video_cover",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794478488762,
+      "tag": "0013_set_page_steps",
+      "breakpoints": true
     }
   ]
 }
