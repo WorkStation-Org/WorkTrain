@@ -75,15 +75,23 @@ export function maxNewSegments(activeSeconds: number): number {
   return Math.ceil((Math.max(0, activeSeconds) * MAX_VIDEO_PLAYBACK_RATE) / VIDEO_SEGMENT_SECONDS) + 1;
 }
 
+/** ไฟล์ Template ข้อสอบที่ Import (ADR-0015) — server action รับได้ไม่เกิน 1 MB (ค่าตั้งต้นของ Next) · 50 ข้อจริงไม่ถึง 100 KB */
+export const MAX_EXAM_SHEET_BYTES = 900 * 1024;
+
 /**
  * ปกวิดีโอ (ADR-0013) — เบราว์เซอร์ของผู้สร้างจับเฟรมจากคลิปเป็น JPEG กว้างไม่เกิน 640 px แล้วส่งผ่าน server action
  * ไฟล์จริงราว 30–80 KB · จำกัด 512 KB ให้ต่ำกว่าเพดาน body ของ server action (1 MB)
  */
-/** ไฟล์ Template ข้อสอบที่ Import (ADR-0015) — server action รับได้ไม่เกิน 1 MB (ค่าตั้งต้นของ Next) · 50 ข้อจริงไม่ถึง 100 KB */
-export const MAX_EXAM_SHEET_BYTES = 900 * 1024;
-
 export const MAX_COVER_BYTES = 512 * 1024;
 export const COVER_WIDTH = 640;
+/** เฟรมปกตั้งต้นอยู่ที่วินาทีที่ 4 เสมอ — ทั้งตอนเปิดตัวเลือกเฟรมและปกอัตโนมัติตอนอัป */
+export const COVER_AT_SECONDS = 4;
+
+/** วินาทีของเฟรมปกตั้งต้น — คลิปสั้นกว่า 4 วินาทีใช้เฟรมท้าย (ถอย 0.1 วิ ให้ยังมีภาพ) */
+export function coverSeconds(duration: number): number {
+  if (Number.isNaN(duration) || duration <= 0) return 0;
+  return Math.max(0, Math.min(COVER_AT_SECONDS, duration - 0.1));
+}
 
 /** JPEG ขึ้นต้นด้วย FF D8 FF เสมอ — ไม่เชื่อ Content-Type ที่เบราว์เซอร์บอก */
 export function isJpeg(bytes: Uint8Array): boolean {

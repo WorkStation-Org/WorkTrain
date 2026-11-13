@@ -34,7 +34,6 @@ export interface DocItem {
   pageCount: number | null;
   durationSeconds: number | null;
   coverUrl: string | null;
-  coverMs: number | null;
   examWeight: number;
 }
 
@@ -391,7 +390,7 @@ function DocPanel({
         {video && (
           <div className="space-y-1.5">
             <span className="text-[12px] text-ink-2">ปกคลิป</span>
-            <CoverEditor setId={setId} documentId={doc.id} coverUrl={doc.coverUrl} coverMs={doc.coverMs} canEdit={canSetCover} />
+            <CoverEditor setId={setId} documentId={doc.id} coverUrl={doc.coverUrl} canEdit={canSetCover} />
           </div>
         )}
 
