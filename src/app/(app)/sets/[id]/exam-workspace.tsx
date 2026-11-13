@@ -55,9 +55,11 @@ export function ExamWorkspace({
     setEditing(null);
     setSaved(null);
     // จำชุดที่เปิดไว้ใน URL — รีเฟรชหรือกลับมาหน้านี้ยังอยู่ชุดเดิม
+    // ★ ผ่าน router ของ Next ไม่ใช่ history.replaceState ตรง ๆ — URL ที่ router ไม่รู้ทำให้การ refresh ครั้งแรกหลังกด
+    //   "ตรวจแล้ว"/"บันทึก" กลายเป็นการเปิดหน้าใหม่แล้วเลื่อนขึ้นบนสุด
     const url = new URL(window.location.href);
     url.searchParams.set("form", String(f.formNo));
-    window.history.replaceState(null, "", url);
+    router.replace(`${url.pathname}${url.search}`, { scroll: false });
   }
 
   async function toggleReview(q: QuestionCard) {
