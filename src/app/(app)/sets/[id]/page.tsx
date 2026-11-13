@@ -8,7 +8,7 @@ import { FORMS_PER_VERSION, type Level } from "@/db/schema";
 import { assignmentStatus, audienceRulesOf, type AssignmentState } from "@/lib/assignment-service";
 import { examEditor, reviewedQuestionIds } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
-import { canEditAudience, canEditDraft, canEditVersion, canManage, coverPath, getSetDetail } from "@/lib/set-service";
+import { canCloseSet, canDeleteDraft, canEditAudience, canEditDraft, canEditVersion, canManage, coverPath, getSetDetail } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { fetchOrg } from "@/lib/workid";
 import {
@@ -26,6 +26,7 @@ import {
   summarizeVersionAction,
   updateSettingsAction,
 } from "../actions";
+import { EndSetButton } from "../end-set-button";
 import { Flash, STATUS } from "../ui";
 import { ApproverPicker } from "./approver-picker";
 import { AudiencePicker } from "./audience-picker";
@@ -48,6 +49,8 @@ const EVENT_LABELS: Record<string, string> = {
   exams_imported: "Import ข้อสอบ 5 ชุด",
   approver_changed: "เปลี่ยนผู้อนุมัติ",
   audience_changed: "เปลี่ยนผู้รับ",
+  deleted: "ลบร่าง",
+  closed: "ปิดชุด",
 };
 
 type Tab = "settings" | "docs" | "exam" | "audience" | "learners" | "history";
@@ -139,6 +142,8 @@ export default async function SetPage({
         actions={
           <>
             <Badge tone={STATUS[set.status].tone} label={STATUS[set.status].label} />
+            {canDeleteDraft(actor, set) && <EndSetButton setId={set.id} title={set.title} mode="delete" tab={tab} />}
+            {canCloseSet(actor, set) && <EndSetButton setId={set.id} title={set.title} mode="close" tab={tab} />}
             {editable && (
               <form action={submitAction}>
                 <input type="hidden" name="setId" value={set.id} />

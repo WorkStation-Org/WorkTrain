@@ -5,10 +5,10 @@ import { approvalEvents, learningSets, setVersions } from "@/db/schema";
 import type { Blueprint } from "@/domain/blueprint";
 import type { Actor } from "@/lib/auth";
 import { formsComplete } from "@/lib/exam-service";
-import { canEditDraft, type Outcome, type SetRow } from "@/lib/set-service";
+import { canCloseSet, canDeleteDraft, canEditDraft, type Outcome, type SetRow } from "@/lib/set-service";
 
 /**
- * การอนุมัติ (spec §4 · ADR-0004) — ร่าง → รออนุมัติ → (ตีกลับ → ร่าง) → ใช้อยู่
+ * การอนุมัติ (spec §4 · ADR-0004) — ร่าง → รออนุมัติ → (ตีกลับ → ร่าง) → ใช้อยู่ → ปิด · ร่างลบได้ (ADR-0016)
  *
  * ★ อนุมัติแล้วยังไม่มอบให้ใคร — การมอบตามผู้รับเป็น slice ถัดไป (spec §5)
  */
@@ -109,4 +109,46 @@ export async function approve(input: { actor: Actor; setId: number; now?: Date }
     }).returning({ id: approvalEvents.id }),
   ]);
   return { ok: true, eventId: eventIdOf(results) };
+}
+
+/**
+ * ลบร่าง (ADR-0016) — ผู้สร้าง/TG · สถานะเป็น `deleted` ไม่ลบแถวจริง (ประวัติใน `approval_events` มีแต่ insert)
+ * ชุดหายจากรายการและเปิดหน้าชุดไม่ได้อีก · ร่างไม่เคยมอบให้ใคร จึงไม่มีผู้เรียนได้รับผล
+ */
+export async function deleteDraft(input: { actor: Actor; setId: number; now?: Date }): Promise<Outcome> {
+  const set = await loadSet(input.setId);
+  if (!set || set.status === "deleted") return { ok: false, error: "ไม่พบชุดนี้" };
+  if (!canDeleteDraft(input.actor, set)) return { ok: false, error: "ลบได้เฉพาะชุดร่างของตัวเอง" };
+  await endSet(input.actor, set, "deleted", input.now ?? new Date());
+  return { ok: true };
+}
+
+/**
+ * ปิดชุดที่ใช้อยู่ (spec §2 · ADR-0016) — ผู้สร้าง/TG · เลิกมอบคนใหม่ · เลิกเตือน · หายจากหน้าผู้เรียน
+ * ผลที่สอบไปแล้วยังอยู่ในสถิติ · เปิดกลับไม่ได้ (ทำชุดใหม่แทน)
+ */
+export async function closeSet(input: { actor: Actor; setId: number; now?: Date }): Promise<Outcome> {
+  const set = await loadSet(input.setId);
+  if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
+  if (!canCloseSet(input.actor, set)) return { ok: false, error: "ปิดได้เฉพาะชุดที่ใช้อยู่ของตัวเอง" };
+  await endSet(input.actor, set, "closed", input.now ?? new Date());
+  return { ok: true };
+}
+
+async function endSet(actor: Actor, set: SetRow, to: "deleted" | "closed", now: Date) {
+  const version = await latestVersion(set.id);
+  await atomic([
+    db()
+      .update(learningSets)
+      .set({ status: to, updatedAt: now, ...(to === "closed" ? { closedAt: now } : {}) })
+      .where(eq(learningSets.id, set.id)),
+    db().insert(approvalEvents).values({
+      setId: set.id,
+      versionId: version?.id ?? null,
+      action: to,
+      actorPersonId: actor.personId,
+      actorName: actor.name,
+      createdAt: now,
+    }),
+  ]);
 }

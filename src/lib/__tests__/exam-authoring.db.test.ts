@@ -37,7 +37,7 @@ const {
   setSpreadMode,
 } = await import("@/lib/set-service");
 const { generateExams, editQuestion, regenerateQuestion, setQuestionReviewed, reviewedQuestionIds } = await import("@/lib/exam-service");
-const { submitForApproval, returnToAuthor, approve } = await import("@/lib/approval-service");
+const { submitForApproval, returnToAuthor, approve, deleteDraft, closeSet } = await import("@/lib/approval-service");
 
 const pd: Actor = { personId: 10, email: "pd@ws.co", name: "พีดี ผู้สร้าง", role: "author" };
 const pdMgr: Actor = { personId: 20, email: "mgr@ws.co", name: "ผจก. พีดี", role: "user" };
@@ -422,6 +422,49 @@ describe("การอนุมัติ", () => {
     expect(await submitForApproval({ actor: tgApprover, setId })).toEqual({ ok: false, error: "ผู้ส่งต้องไม่ใช่ผู้อนุมัติ — ให้ผู้สร้างกดส่ง หรือเปลี่ยนผู้อนุมัติ" });
     expect((await getSetDetail(pd, setId))?.set.status).toBe("draft");
     expect((await submitForApproval({ actor: pd, setId })).ok).toBe(true);
+  });
+});
+
+describe("ลบร่าง · ปิดชุด (ADR-0016)", () => {
+  it("ผู้สร้างลบร่างได้ → หายจากรายการและเปิดไม่ได้ · ประวัติยังอยู่ · คนอื่นลบไม่ได้", async () => {
+    const setId = await readySet();
+    expect((await deleteDraft({ actor: pdMgr, setId })).ok).toBe(false);
+    expect((await deleteDraft({ actor: sales, setId })).ok).toBe(false);
+    expect(await deleteDraft({ actor: pd, setId })).toEqual({ ok: true });
+    expect(await getSetDetail(pd, setId)).toBeNull();
+    expect((await listManagedSets(pd)).map((s) => s.id)).not.toContain(setId);
+    expect((await listManagedSets({ personId: 99, role: "admin" })).map((s) => s.id)).not.toContain(setId);
+    expect((await events(setId)).map((e) => e.action)).toEqual(["exams_generated", "deleted"]);
+    expect((await deleteDraft({ actor: pd, setId })).ok).toBe(false);
+    expect((await submitForApproval({ actor: pd, setId })).ok).toBe(false);
+  });
+
+  it("ร่างที่ถูกตีกลับลบได้ · รออนุมัติและใช้อยู่ลบไม่ได้", async () => {
+    const setId = await readySet();
+    await submitForApproval({ actor: pd, setId });
+    expect(await deleteDraft({ actor: pd, setId })).toEqual({ ok: false, error: "ลบได้เฉพาะชุดร่างของตัวเอง" });
+    await returnToAuthor({ actor: pdMgr, setId, comment: "แก้ราคา" });
+    expect((await deleteDraft({ actor: pd, setId })).ok).toBe(true);
+
+    const active = await readySet();
+    await submitForApproval({ actor: pd, setId: active });
+    await approve({ actor: pdMgr, setId: active });
+    expect((await deleteDraft({ actor: pd, setId: active })).ok).toBe(false);
+  });
+
+  it("ปิดได้เฉพาะชุดที่ใช้อยู่ · ผู้สร้างหรือ TG · ผู้อนุมัติปิดไม่ได้ · ยังเปิดดูได้", async () => {
+    const setId = await readySet();
+    expect((await closeSet({ actor: pd, setId })).ok).toBe(false);
+    await submitForApproval({ actor: pd, setId });
+    await approve({ actor: pdMgr, setId });
+    expect((await closeSet({ actor: pdMgr, setId })).ok).toBe(false);
+    const tg: Actor = { personId: 99, email: "tg@ws.co", name: "TG", role: "admin" };
+    expect(await closeSet({ actor: tg, setId })).toEqual({ ok: true });
+    const d = await getSetDetail(pd, setId);
+    expect(d?.set.status).toBe("closed");
+    expect(d?.set.closedAt).not.toBeNull();
+    expect((await events(setId)).at(-1)).toMatchObject({ action: "closed", actorName: "TG" });
+    expect((await closeSet({ actor: pd, setId })).ok).toBe(false);
   });
 });
 

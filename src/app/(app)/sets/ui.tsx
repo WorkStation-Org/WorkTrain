@@ -8,6 +8,7 @@ export const STATUS: Record<SetStatus, { label: string; tone: BadgeTone }> = {
   pending_approval: { label: "รออนุมัติ", tone: "warning" },
   active: { label: "ใช้อยู่", tone: "success" },
   closed: { label: "ปิดแล้ว", tone: "neutral" },
+  deleted: { label: "ลบแล้ว", tone: "neutral" },
 };
 
 export function Flash({ msg, err }: { msg?: string; err?: string }) {

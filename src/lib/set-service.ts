@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, or } from "drizzle-orm";
 import { PDFDocument } from "pdf-lib";
 import { db } from "@/db";
 import {
@@ -65,6 +65,15 @@ export function canEditAudience(actor: Pick<Actor, "personId" | "role">, set: Pi
 /** เห็นชุดนี้ในฐานะคนทำงานกับมัน (ไม่ใช่ผู้เรียน) — ผู้สร้าง · ผู้อนุมัติ · TG */
 export function canManage(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "authorPersonId" | "approverPersonId">): boolean {
   return isOwnerOrAdmin(actor, set) || set.approverPersonId === actor.personId;
+}
+
+/** ลบได้เฉพาะร่าง · ปิดได้เฉพาะชุดที่ใช้อยู่ — ผู้สร้างหรือ TG (ADR-0016) */
+export function canDeleteDraft(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "authorPersonId" | "status">): boolean {
+  return canEditDraft(actor, set);
+}
+
+export function canCloseSet(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "authorPersonId" | "status">): boolean {
+  return set.status === "active" && isOwnerOrAdmin(actor, set);
 }
 
 export function canEditDraft(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "authorPersonId" | "status">): boolean {
@@ -508,15 +517,18 @@ export function coverPath(doc: { id: number; coverKey: string | null; coverMs: n
 // ── อ่าน ───────────────────────────────────────────────────────────────────
 
 /** ชุดที่คนนี้ทำงานด้วย — ของตัวเอง + ที่ตัวเองเป็นผู้อนุมัติ · TG เห็นทุกชุด */
+/** ชุดที่คนนี้ทำงานด้วย — ร่างที่ลบแล้วไม่ขึ้น (ADR-0016) */
 export async function listManagedSets(actor: Pick<Actor, "personId" | "role">) {
-  const q = db().select().from(learningSets);
-  const rows =
-    actor.role === "admin"
-      ? await q.orderBy(desc(learningSets.updatedAt))
-      : await q
-          .where(or(eq(learningSets.authorPersonId, actor.personId), eq(learningSets.approverPersonId, actor.personId)))
-          .orderBy(desc(learningSets.updatedAt));
-  return rows;
+  const live = ne(learningSets.status, "deleted");
+  return db()
+    .select()
+    .from(learningSets)
+    .where(
+      actor.role === "admin"
+        ? live
+        : and(live, or(eq(learningSets.authorPersonId, actor.personId), eq(learningSets.approverPersonId, actor.personId))),
+    )
+    .orderBy(desc(learningSets.updatedAt));
 }
 
 export interface QuestionView {
@@ -543,7 +555,7 @@ export interface SetDetail {
 /** รายละเอียดชุด + ข้อสอบของเวอร์ชันล่าสุด — เฉพาะคนที่ `canManage` (มีเฉลยอยู่ในนี้) */
 export async function getSetDetail(actor: Pick<Actor, "personId" | "role">, setId: number): Promise<SetDetail | null> {
   const set = await loadSet(setId);
-  if (!set || !canManage(actor, set)) return null;
+  if (!set || set.status === "deleted" || !canManage(actor, set)) return null;
   const [kind] = await db()
     .select({ id: setKinds.id, name: setKinds.name, allowPricelist: setKinds.allowPricelist })
     .from(setKinds)

@@ -54,7 +54,7 @@ export async function addPath(input: { actor: Actor; positionId: number; positio
   const label = input.positionLabel.trim();
   if (!label) return { ok: false, error: "เลือกตำแหน่ง" };
   const [set] = await db().select().from(learningSets).where(eq(learningSets.id, input.setId));
-  if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
+  if (!set || set.status === "deleted") return { ok: false, error: "ไม่พบชุดนี้" };
   if (set.status === "closed") return { ok: false, error: "ชุดนี้ปิดแล้ว" };
   await db()
     .insert(onboardingPaths)
