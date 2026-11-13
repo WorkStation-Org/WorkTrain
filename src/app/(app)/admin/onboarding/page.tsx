@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ne } from "drizzle-orm";
+import { notInArray } from "drizzle-orm";
 import { buttonClass, Card, EmptyState, FIELD_LABEL_CLASS, PageHeader, SectionTitle, SELECT_CLASS } from "@/components/ui";
 import { db } from "@/db";
 import { learningSets } from "@/db/schema";
@@ -21,7 +21,7 @@ export default async function OnboardingPage({ searchParams }: { searchParams: P
   const org = await fetchOrg();
   const positions = org.ok ? positionsFromOrg(org.people) : [];
   const paths = await listPaths();
-  const sets = await db().select({ id: learningSets.id, title: learningSets.title }).from(learningSets).where(ne(learningSets.status, "closed")).orderBy(learningSets.title);
+  const sets = await db().select({ id: learningSets.id, title: learningSets.title }).from(learningSets).where(notInArray(learningSets.status, ["closed", "deleted"])).orderBy(learningSets.title);
 
   const groups = new Map<number, { label: string; rows: typeof paths }>();
   for (const p of paths) {

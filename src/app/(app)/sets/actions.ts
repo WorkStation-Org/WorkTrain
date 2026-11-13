@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAuthor, requireUser } from "@/lib/auth";
-import { approve, returnToAuthor, submitForApproval } from "@/lib/approval-service";
+import { approve, closeSet, deleteDraft, returnToAuthor, submitForApproval } from "@/lib/approval-service";
 import { notifyApprovalEvent, setAudience, syncAssignments } from "@/lib/assignment-service";
 import { claudeExamModel } from "@/lib/exam-generator";
 import { editQuestion, generateExams, importExams, regenerateQuestion, setQuestionReviewed, type ImportOutcome, type QuestionEdit } from "@/lib/exam-service";
@@ -63,6 +63,25 @@ export async function createSetAction(form: FormData) {
   const out = await createSet({ actor, title: str(form, "title"), kindId: int(form, "kindId") });
   if (!out.ok) redirect(`/sets?err=${encodeURIComponent(out.error)}`);
   redirect(`/sets/${out.setId}`);
+}
+
+/** ลบร่าง / ปิดชุดที่ใช้อยู่ (ADR-0016) — สำเร็จกลับไปหน้ารายการ · ไม่สำเร็จอยู่หน้าเดิม */
+export async function deleteSetAction(form: FormData) {
+  const actor = await requireAuthor();
+  const setId = int(form, "setId");
+  const out = await deleteDraft({ actor, setId });
+  revalidatePath("/sets");
+  if (!out.ok) redirect(`/sets?err=${encodeURIComponent(out.error)}`);
+  redirect(`/sets?msg=${encodeURIComponent("ลบร่างแล้ว")}`);
+}
+
+export async function closeSetAction(form: FormData) {
+  const actor = await requireAuthor();
+  const setId = int(form, "setId");
+  const out = await closeSet({ actor, setId });
+  if (!out.ok) back(setId, out, "", str(form, "tab"));
+  revalidatePath("/sets");
+  redirect(`/sets?msg=${encodeURIComponent("ปิดชุดแล้ว — ไม่มอบและไม่เตือนอีก")}`);
 }
 
 export async function updateSettingsAction(form: FormData) {

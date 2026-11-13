@@ -58,8 +58,12 @@ export const setKinds = pgTable(
 /** สองชนิดที่ migration 0007 ย้ายมาจาก enum เดิม (`product` · `general`) */
 export const SEEDED_KIND_IDS = { product: 1, general: 2 } as const;
 
-/** สถานะของชุด (spec §2) — ตีกลับ = กลับไป `draft` พร้อมเหตุการณ์ใน `approval_events` */
-export const SET_STATUSES = ["draft", "pending_approval", "active", "closed"] as const;
+/**
+ * สถานะของชุด (spec §2) — ตีกลับ = กลับไป `draft` พร้อมเหตุการณ์ใน `approval_events`
+ * `closed` = ชุดที่ใช้อยู่ถูกปิด (เลิกมอบ/เตือน · ผลเดิมอยู่ในสถิติ) · `deleted` = ร่างที่ผู้สร้างลบ (ADR-0016)
+ * ★ ลบแถวจริงไม่ได้ — `approval_events` มีแต่ insert · ทุกที่ที่ทำงานกับชุดกรองด้วย `active` อยู่แล้ว
+ */
+export const SET_STATUSES = ["draft", "pending_approval", "active", "closed", "deleted"] as const;
 export type SetStatus = (typeof SET_STATUSES)[number];
 
 /**
@@ -287,6 +291,10 @@ export const APPROVAL_ACTIONS = [
   "exams_imported",
   "approver_changed",
   "audience_changed",
+  /** ผู้สร้าง/TG ลบร่าง (ADR-0016) */
+  "deleted",
+  /** ผู้สร้าง/TG ปิดชุดที่ใช้อยู่ (ADR-0016) */
+  "closed",
 ] as const;
 export type ApprovalAction = (typeof APPROVAL_ACTIONS)[number];
 
