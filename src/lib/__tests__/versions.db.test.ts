@@ -9,7 +9,7 @@ import { devStoreObjects } from "@/lib/object-store";
 import { clearOrgCache } from "@/lib/workid";
 
 /**
- * เวอร์ชันใหม่ของเอกสาร (spec §7 · ADR-0008) — เริ่ม → อัป → ออกข้อสอบ → สรุป → ส่ง → เล็ก/ใหญ่ → อนุมัติ →
+ * เวอร์ชันใหม่ของเอกสาร (spec §7 · ADR-0008) — เริ่ม → อัป → ออกข้อสอบ → สรุป → ส่ง → อ่านเพื่อรับทราบ/เรียนรู้และทดสอบ → อนุมัติ →
  * ผู้เรียนที่ผ่านแล้วรับทราบ / สอบส่วนที่เปลี่ยน · PGlite + migration จริง · AI ปลอมที่ขอบ `ExamModel`
  */
 
@@ -153,12 +153,12 @@ describe("เริ่มและส่งเวอร์ชันใหม่"
   });
 });
 
-describe("เปลี่ยนเล็ก", () => {
-  it("ต้องเลือกเล็ก/ใหญ่ก่อนอนุมัติ · ผ่านแล้วกดรับทราบ · ข้อสอบของเวอร์ชันที่อนุมัติแล้วแก้ไม่ได้", async () => {
+describe("อ่านเพื่อรับทราบ", () => {
+  it("ต้องเลือกก่อนอนุมัติ · ผ่านแล้วกดรับทราบ · ข้อสอบของเวอร์ชันที่อนุมัติแล้วแก้ไม่ได้", async () => {
     const { setId, assignmentId } = await activeSetWithPassedLearner();
     await draftV2(setId);
     await V.submitVersion({ actor: pd, setId });
-    expect(await V.approveVersion({ actor: mgr, setId })).toEqual({ ok: false, error: "เลือกก่อนว่าเปลี่ยนเล็กหรือเปลี่ยนใหญ่" });
+    expect(await V.approveVersion({ actor: mgr, setId })).toEqual({ ok: false, error: "เลือกก่อนว่าอ่านเพื่อรับทราบหรือเรียนรู้และทดสอบ" });
     expect((await V.setChangeKind({ actor: pd, setId, kind: "small" })).ok).toBe(false);
     await V.setChangeKind({ actor: mgr, setId, kind: "small" });
     const ap = await V.approveVersion({ actor: mgr, setId, now: T_V2 });
@@ -220,7 +220,7 @@ describe("เปลี่ยนเล็ก", () => {
   });
 });
 
-describe("เปลี่ยนใหญ่", () => {
+describe("เรียนรู้และทดสอบ", () => {
   it("ต้องออกข้อสอบส่วนที่เปลี่ยนก่อนอนุมัติ · ผู้เรียนที่ผ่านแล้วสอบ 5 ข้อ · ผ่าน = ไม่ค้าง", async () => {
     const { setId, assignmentId } = await activeSetWithPassedLearner();
     await draftV2(setId);
@@ -253,7 +253,7 @@ describe("เปลี่ยนใหญ่", () => {
     expect(a.passedAt).toEqual(T_PASS);
   });
 
-  it("เปลี่ยนเป็นเล็กแล้วข้อสอบส่วนที่เปลี่ยนถูกลบ · ตีกลับแล้วผู้สร้างแก้ได้อีก", async () => {
+  it("เปลี่ยนเป็นอ่านเพื่อรับทราบแล้วข้อสอบส่วนที่เปลี่ยนถูกลบ · ตีกลับแล้วผู้สร้างแก้ได้อีก", async () => {
     const { setId } = await activeSetWithPassedLearner();
     await draftV2(setId);
     await V.submitVersion({ actor: pd, setId });

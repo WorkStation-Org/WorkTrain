@@ -6,7 +6,8 @@ import { requireAuthor, requireUser } from "@/lib/auth";
 import { approve, returnToAuthor, submitForApproval } from "@/lib/approval-service";
 import { notifyApprovalEvent, setAudience, syncAssignments } from "@/lib/assignment-service";
 import { claudeExamModel } from "@/lib/exam-generator";
-import { editQuestion, generateExams, regenerateQuestion, setQuestionReviewed, type QuestionEdit } from "@/lib/exam-service";
+import { editQuestion, generateExams, importExams, regenerateQuestion, setQuestionReviewed, type ImportOutcome, type QuestionEdit } from "@/lib/exam-service";
+import { MAX_EXAM_SHEET_BYTES } from "@/domain/document";
 import {
   authorVideoLink,
   confirmUpload,
@@ -297,5 +298,26 @@ export async function saveAudienceAction(input: { setId: number; rules: { kind: 
   const actor = await requireAuthor();
   const out = await setAudience({ actor, setId: input.setId, rules: input.rules });
   revalidatePath(`/sets/${input.setId}`);
+  return out;
+}
+
+/**
+ * Import ข้อสอบจาก Template ที่กรอกแล้ว (ADR-0015) — คืนผลให้หน้าแสดงอยู่ที่เดิม (รายการข้อผิดตามแถวยาวเกินใส่ใน URL)
+ * ผู้อนุมัติไม่จำเป็นต้องมี role author (ข้อสอบส่วนที่เปลี่ยน) — service ตรวจสิทธิ์ต่อส่วนเอง
+ */
+export async function importExamsAction(form: FormData): Promise<ImportOutcome> {
+  const actor = await requireUser();
+  const setId = int(form, "setId");
+  const file = form.get("file");
+  if (!(file instanceof File) || file.size === 0) return { ok: false, error: "เลือกไฟล์ .xlsx ก่อน" };
+  if (file.size > MAX_EXAM_SHEET_BYTES) return { ok: false, error: "ไฟล์ใหญ่เกิน 900 KB — Template ข้อสอบไม่ควรใหญ่ขนาดนี้ ลองโหลด Template ใหม่" };
+  const out = await importExams({
+    actor,
+    setId,
+    kind: str(form, "kind") === "delta" ? "delta" : "full",
+    fileName: file.name.slice(0, 200),
+    bytes: new Uint8Array(await file.arrayBuffer()),
+  });
+  if (out.ok) revalidatePath(`/sets/${setId}`);
   return out;
 }

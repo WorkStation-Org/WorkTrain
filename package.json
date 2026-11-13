@@ -28,6 +28,7 @@
     "@neondatabase/serverless": "^1.0.1",
     "aws-amplify": "^6.22.2",
     "drizzle-orm": "^0.45.2",
+    "exceljs": "^4.4.0",
     "next": "^16.4.3",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.4.299",

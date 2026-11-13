@@ -44,8 +44,11 @@ This version has breaking changes — APIs, conventions, and file structure may 
   `approver-picker` · `docs-manager` · `spread-panel` + `exam-workspace` (แก้/ตรวจแล้วอยู่ที่เดิม) · `audience-picker` (แก้ได้ทั้งร่างและชุดที่ใช้อยู่) ·
   `src/domain/spread.ts` — แผนเฉลี่ยข้อสอบตามไฟล์ + นับจาก `source_ref`
 - `src/lib/exam-generator.ts` — **ที่เดียวที่คุยกับ Anthropic API** (`ExamModel`) · ออก 5 ชุดในคำขอเดียว · `checkForms()` ตรวจผลของ AI ก่อนลงฐานทุกครั้ง
-- `src/lib/exam-service.ts` — ออกข้อสอบ · แก้/ออกใหม่ทีละข้อ (ลงประวัติก่อน/หลัง) · `src/lib/approval-service.ts` — ส่ง · ตีกลับ · อนุมัติ
-- `src/lib/version-service.ts` — เวอร์ชันใหม่ (spec §7): เริ่ม · สรุปด้วย AI · ส่ง · ผู้อนุมัติเลือกเล็ก/ใหญ่ · ข้อสอบส่วนที่เปลี่ยน (`DELTA_BLUEPRINT`) · อนุมัติ + แจ้งคนที่ผ่านแล้ว ·
+- `src/lib/exam-service.ts` — ออกข้อสอบ · แก้/ออกใหม่ทีละข้อ (ลงประวัติก่อน/หลัง) · `examTemplate()` / `importExams()` (ADR-0015)
+- `src/lib/exam-sheet.ts` — **ที่เดียวที่แตะ exceljs** · Template .xlsx ของชุด · `parseSheet()` ตรวจทุกแถวบอกเลขแถว แล้ว `checkForms()` เป็นด่านสุดท้าย ·
+  ปุ่ม `sets/[id]/exam-import.tsx` (Template · Import) · route `/sets/[id]/exam-template`
+- `src/lib/approval-service.ts` — ส่ง · ตีกลับ · อนุมัติ
+- `src/lib/version-service.ts` — เวอร์ชันใหม่ (spec §7): เริ่ม · สรุปด้วย AI · ส่ง · ผู้อนุมัติเลือกอ่านเพื่อรับทราบ/เรียนรู้และทดสอบ (`small`/`large`) · ข้อสอบส่วนที่เปลี่ยน (`DELTA_BLUEPRINT`) · อนุมัติ + แจ้งคนที่ผ่านแล้ว ·
   ฝั่งผู้เรียน `pendingUpdate()` / `acknowledgeVersion()` ใน learn-service · เวอร์ชันแรกยังใช้สถานะของชุด (approval-service)
 - `src/lib/watermark.ts` — ประทับลายน้ำ Pricelist ทุกหน้า · `pricelistPdf()` + route `/learn/[id]/doc/[documentId]` (ไม่ส่งไฟล์ต้นฉบับ)
 - `src/lib/object-store.ts` — **ที่เดียวที่แตะ R2** · dev ไม่มี R2 = ที่เก็บในหน่วยความจำผ่าน `/api/dev-store`

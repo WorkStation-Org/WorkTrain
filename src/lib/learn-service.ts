@@ -92,7 +92,7 @@ export interface PendingUpdate {
 
 /**
  * สิ่งที่ผู้เรียนที่ผ่านแล้วยังค้างจากเวอร์ชันใหม่ — เวอร์ชันที่อนุมัติหลังวันที่ผ่าน เรียงเก่าไปใหม่ ทีละเวอร์ชัน
- * เปลี่ยนเล็ก = ต้องกดรับทราบ · เปลี่ยนใหญ่ = ต้องสอบส่วนที่เปลี่ยนให้ผ่าน · ไม่มีค้าง = null
+ * อ่านเพื่อรับทราบ = ต้องกดรับทราบ · เรียนรู้และทดสอบ = ต้องสอบส่วนที่เปลี่ยนให้ผ่าน · ไม่มีค้าง = null
  * ★ ผ่านแล้วไม่ย้อนกลับเป็นไม่ผ่าน (`passedAt` คงเดิม) — WorkHR และ Dashboard ยังนับว่าผ่าน
  */
 export async function pendingUpdate(a: Pick<AssignmentRow, "id" | "setId" | "passedAt">): Promise<PendingUpdate | null> {
@@ -139,7 +139,7 @@ async function passedVersionNo(assignmentId: number): Promise<number | null> {
   return row?.no ?? null;
 }
 
-/** รับทราบเปลี่ยนเล็ก — เฉพาะเวอร์ชันที่ค้างอยู่ตอนนี้ (กดข้ามเวอร์ชันไม่ได้) */
+/** รับทราบเวอร์ชันแบบอ่านเพื่อรับทราบ — เฉพาะเวอร์ชันที่ค้างอยู่ตอนนี้ (กดข้ามเวอร์ชันไม่ได้) */
 export async function acknowledgeVersion(input: { personId: number; assignmentId: number; versionId: number; now?: Date }): Promise<Outcome> {
   const mine = await myAssignment(input.personId, input.assignmentId);
   if (!mine || mine.set.status !== "active") return { ok: false, error: "ไม่พบการมอบนี้" };
@@ -540,7 +540,7 @@ export async function startAttempt(input: {
   if (!mine || mine.set.status !== "active") return { ok: false, error: "ไม่พบการมอบนี้" };
   if (await openAttempt(mine.a.id, now)) return { ok: false, error: "มีการสอบที่ยังค้างอยู่" };
 
-  // ผ่านแล้ว = สอบได้อย่างเดียวคือส่วนที่เปลี่ยนของเวอร์ชันใหม่ที่เปลี่ยนใหญ่ (ADR-0008) — ไม่ต้องอ่านใหม่ทั้งเล่ม
+  // ผ่านแล้ว = สอบได้อย่างเดียวคือส่วนที่เปลี่ยนของเวอร์ชันใหม่แบบเรียนรู้และทดสอบ (ADR-0008) — ไม่ต้องอ่านใหม่ทั้งเล่ม
   let version: VersionRow | null;
   let kind: FormKind = "full";
   if (mine.a.passedAt) {

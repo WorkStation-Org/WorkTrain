@@ -357,7 +357,8 @@ describe("แก้ข้อสอบ", () => {
     const after = (await getSetDetail(pd, setId))!.forms[0].questions[0];
     expect(after).toMatchObject({ id: q.id, text: "STELVIO มีสีอะไรบ้าง" });
     expect(after.choices.find((c) => c.isCorrect)?.text).toBe("Black Oak / Anthracite");
-    const [ev] = await events(setId);
+    const [gen, ev] = await events(setId);
+    expect(gen).toMatchObject({ action: "exams_generated", detail: { kind: "full" } });
     expect(ev).toMatchObject({ action: "question_edited", actorPersonId: 10 });
     expect((ev.detail as { before: { text: string } }).before.text).toBe(q.text);
   });
@@ -392,7 +393,7 @@ describe("การอนุมัติ", () => {
     const d = await getSetDetail(pdMgr, setId);
     expect(d?.set.status).toBe("active");
     expect(d?.version?.approvedAt).not.toBeNull();
-    expect((await events(setId)).map((e) => e.action)).toEqual(["submitted", "question_edited", "approved"]);
+    expect((await events(setId)).map((e) => e.action)).toEqual(["exams_generated", "submitted", "question_edited", "approved"]);
   });
 
   it("ตีกลับต้องมีความเห็น → กลับเป็นร่าง ผู้สร้างแก้ต่อได้", async () => {

@@ -110,9 +110,13 @@ export const learningSets = pgTable(
   ],
 );
 
-/** การเปลี่ยนของเวอร์ชันใหม่ (ADR-0008) — `initial` = เวอร์ชันแรก */
+/**
+ * การเปลี่ยนของเวอร์ชันใหม่ (ADR-0008) — `initial` = เวอร์ชันแรก
+ * `small` = **อ่านเพื่อรับทราบ** · `large` = **เรียนรู้และทดสอบ** (ชื่อบนจอ `CHANGE_KIND_LABELS` · ค่าในฐานคงเดิม)
+ */
 export const CHANGE_KINDS = ["initial", "small", "large"] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
+export const CHANGE_KIND_LABELS: Record<"small" | "large", string> = { small: "อ่านเพื่อรับทราบ", large: "เรียนรู้และทดสอบ" };
 
 /**
  * เวอร์ชันของเอกสารต้นทาง — ครั้งที่สอบผูกกับเวอร์ชันที่สอบเสมอ (ADR-0008)
@@ -182,7 +186,7 @@ export const documents = pgTable(
 
 // ── ข้อสอบ ─────────────────────────────────────────────────────────────────
 
-/** `full` = ชุดข้อสอบเต็ม 10 ข้อ (5 ชุดต่อเวอร์ชัน · ADR-0003) · `delta` = ข้อสอบเฉพาะส่วนที่เปลี่ยนใหญ่ (ADR-0008) */
+/** `full` = ชุดข้อสอบเต็ม 10 ข้อ (5 ชุดต่อเวอร์ชัน · ADR-0003) · `delta` = ข้อสอบเฉพาะส่วนที่เปลี่ยน ของเวอร์ชันแบบเรียนรู้และทดสอบ (ADR-0008) */
 export const FORM_KINDS = ["full", "delta"] as const;
 export type FormKind = (typeof FORM_KINDS)[number];
 
@@ -277,6 +281,10 @@ export const APPROVAL_ACTIONS = [
   "returned",
   "question_edited",
   "question_regenerated",
+  /** ให้ AI ออกทั้ง 5 ชุด · detail `{ kind }` */
+  "exams_generated",
+  /** Import ข้อสอบจากไฟล์ Excel (ADR-0015) · detail `{ kind, fileName }` */
+  "exams_imported",
   "approver_changed",
   "audience_changed",
 ] as const;
@@ -372,7 +380,7 @@ export const ASSIGNMENT_SOURCES = ["audience", "onboarding"] as const;
 
 /**
  * การมอบ (CONTEXT.md) — คนหนึ่งต่อชุดหนึ่งมีได้แถวเดียว
- * `passedAt` = สอบผ่านชุดเต็มครั้งแรก · ผ่านแล้วไม่ย้อนกลับ (เปลี่ยนใหญ่สอบเพิ่มที่ `delta` แยก)
+ * `passedAt` = สอบผ่านชุดเต็มครั้งแรก · ผ่านแล้วไม่ย้อนกลับ (เรียนรู้และทดสอบ สอบเพิ่มที่ `delta` แยก)
  */
 export const assignments = pgTable(
   "assignments",
@@ -400,7 +408,7 @@ export const assignments = pgTable(
   ],
 );
 
-/** รับทราบเปลี่ยนเล็ก (ADR-0008) — มีแต่ insert */
+/** รับทราบเวอร์ชันแบบอ่านเพื่อรับทราบ (ADR-0008) — มีแต่ insert */
 export const versionAcknowledgements = pgTable(
   "version_acknowledgements",
   {
