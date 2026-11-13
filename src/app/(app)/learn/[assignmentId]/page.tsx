@@ -72,8 +72,8 @@ export default async function LearnSetPage({
           <SectionTitle className="mb-2">มีเวอร์ชันใหม่{view.update.label ? ` · ${view.update.label}` : ""}</SectionTitle>
           <p className="mb-3 text-[13px] text-ink-3">
             {view.update.kind === "small"
-              ? "เปลี่ยนเล็ก — อ่านสิ่งที่เปลี่ยนแล้วกดรับทราบ ไม่ต้องสอบ"
-              : "เปลี่ยนใหญ่ — สอบเฉพาะส่วนที่เปลี่ยน 5 ข้อให้ผ่าน (ผลผ่านเดิมยังอยู่)"}
+              ? "อ่านเพื่อรับทราบ — อ่านสิ่งที่เปลี่ยนแล้วกดรับทราบ ไม่ต้องสอบ"
+              : "เรียนรู้และทดสอบ — สอบเฉพาะส่วนที่เปลี่ยน 5 ข้อให้ผ่าน (ผลผ่านเดิมยังอยู่)"}
           </p>
           <div className="mb-4 whitespace-pre-line rounded-lg border border-line bg-subtle px-3.5 py-3 text-[13px] text-ink-2">{view.update.summary}</div>
           {view.update.kind === "small" ? (

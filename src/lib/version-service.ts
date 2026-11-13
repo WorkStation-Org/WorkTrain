@@ -1,12 +1,12 @@
 import { and, asc, eq, isNotNull, lt } from "drizzle-orm";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
-import { approvalEvents, assignments, documents, examForms, FORMS_PER_VERSION, learningSets, notifications, setVersions, type ChangeKind } from "@/db/schema";
+import { approvalEvents, assignments, CHANGE_KIND_LABELS, documents, examForms, FORMS_PER_VERSION, learningSets, notifications, setVersions, type ChangeKind } from "@/db/schema";
 import { DELTA_BLUEPRINT, type Blueprint } from "@/domain/blueprint";
 import type { Actor } from "@/lib/auth";
 import { MAX_SEND_ATTEMPTS, sendToPerson, type SendResult } from "@/lib/deliver";
 import { checkForms, type ExamModel } from "@/lib/exam-generator";
-import { formsComplete, insertForms, sourceDocuments } from "@/lib/exam-service";
+import { formsComplete, logFormsEvent, replaceForms, sourceDocuments } from "@/lib/exam-service";
 import { canEditVersion, currentVersion, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
 import { fetchOrg } from "@/lib/workid";
 
@@ -14,7 +14,7 @@ import { fetchOrg } from "@/lib/workid";
  * เวอร์ชันใหม่ของเอกสารต้นทาง (spec §7 · ADR-0008)
  *
  * เริ่มเวอร์ชันใหม่ → อัปเอกสาร → AI ออกข้อสอบชุดเต็ม 5 ชุด + สรุปสิ่งที่เปลี่ยน → ส่ง →
- * ผู้อนุมัติเลือกเปลี่ยนเล็ก/ใหญ่ (ใหญ่ = ให้ AI ออกข้อสอบเฉพาะส่วนที่เปลี่ยน) → อนุมัติ → แจ้งผู้เรียนที่ผ่านแล้ว
+ * ผู้อนุมัติเลือกอ่านเพื่อรับทราบ/เรียนรู้และทดสอบ (เรียนรู้และทดสอบ = ออกข้อสอบเฉพาะส่วนที่เปลี่ยน ด้วย AI หรือ Import) → อนุมัติ → แจ้งผู้เรียนที่ผ่านแล้ว
  *
  * ★ ระหว่างทำเวอร์ชันใหม่ ชุดยัง `active` และผู้เรียนเรียน/สอบเวอร์ชันที่อนุมัติล่าสุดตามเดิม
  * ★ เวอร์ชันแรกใช้สถานะของชุด (approval-service) · ไฟล์นี้ดูแลเวอร์ชันที่ 2 ขึ้นไปเท่านั้น
@@ -67,7 +67,7 @@ export async function startVersion(input: { actor: Actor; setId: number; label?:
   return { ok: true, versionId: rows[0].id };
 }
 
-/** ให้ AI สรุปสิ่งที่เปลี่ยนเทียบกับเวอร์ชันที่ใช้อยู่ — ผู้สร้างกดก่อนส่ง (ผู้อนุมัติใช้ตัดสินเล็ก/ใหญ่) */
+/** ให้ AI สรุปสิ่งที่เปลี่ยนเทียบกับเวอร์ชันที่ใช้อยู่ — ผู้สร้างกดก่อนส่ง (ผู้อนุมัติใช้ตัดสินว่าอ่านเพื่อรับทราบหรือเรียนรู้และทดสอบ) */
 export async function summarizeVersion(input: { actor: Actor; setId: number; model: ExamModel | null }): Promise<Outcome> {
   if (!input.model) return { ok: false, error: "ยังไม่ได้ตั้ง ANTHROPIC_API_KEY บนเซิร์ฟเวอร์นี้" };
   const set = await loadSet(input.setId);
@@ -125,9 +125,9 @@ export async function submitVersion(input: { actor: Actor; setId: number; now?: 
   return { ok: true, eventId: eventIdOf(results) };
 }
 
-/** ผู้อนุมัติเลือกเปลี่ยนเล็ก/ใหญ่ — เปลี่ยนเป็นเล็กแล้วข้อสอบส่วนที่เปลี่ยนที่ออกไว้ถูกลบ (ยังไม่มีใครสอบ) */
+/** ผู้อนุมัติเลือกอ่านเพื่อรับทราบ/เรียนรู้และทดสอบ — เปลี่ยนเป็นอ่านเพื่อรับทราบแล้วข้อสอบส่วนที่เปลี่ยนที่ออกไว้ถูกลบ (ยังไม่มีใครสอบ) */
 export async function setChangeKind(input: { actor: Actor; setId: number; kind: ChangeKind }): Promise<Outcome> {
-  if (input.kind !== "small" && input.kind !== "large") return { ok: false, error: "เลือกเปลี่ยนเล็กหรือเปลี่ยนใหญ่" };
+  if (input.kind !== "small" && input.kind !== "large") return { ok: false, error: "เลือกอ่านเพื่อรับทราบหรือเรียนรู้และทดสอบ" };
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
   const v = await newVersion(set);
@@ -137,22 +137,22 @@ export async function setChangeKind(input: { actor: Actor; setId: number; kind: 
   return { ok: true };
 }
 
-/** เปลี่ยนใหญ่ → ให้ AI ออกข้อสอบเฉพาะส่วนที่เปลี่ยน 5 ชุด ชุดละ 5 ข้อ (ADR-0008) — ผู้อนุมัติกด แล้วตรวจ/แก้ได้เหมือนข้อสอบชุดเต็ม */
+/** เรียนรู้และทดสอบ → ให้ AI ออกข้อสอบเฉพาะส่วนที่เปลี่ยน 5 ชุด ชุดละ 5 ข้อ (ADR-0008) — ผู้อนุมัติกด แล้วตรวจ/แก้ได้เหมือนข้อสอบชุดเต็ม */
 export async function generateDeltaExams(input: { actor: Actor; setId: number; model: ExamModel | null }): Promise<Outcome> {
   if (!input.model) return { ok: false, error: "ยังไม่ได้ตั้ง ANTHROPIC_API_KEY บนเซิร์ฟเวอร์นี้" };
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
   const v = await newVersion(set);
   if (!isVersionApprover(input.actor, set, v)) return { ok: false, error: "ออกได้เฉพาะผู้อนุมัติของเวอร์ชันที่รออนุมัติ" };
-  if (v.changeKind !== "large") return { ok: false, error: "เลือก \"เปลี่ยนใหญ่\" ก่อน" };
+  if (v.changeKind !== "large") return { ok: false, error: 'เลือก "เรียนรู้และทดสอบ" ก่อน' };
   const src = await sourceDocuments(v.id);
   if (!src.ok) return src;
   const out = await input.model.generateForms({ setTitle: set.title, documents: src.docs, blueprint: DELTA_BLUEPRINT, formCount: FORMS_PER_VERSION, focus: v.changeSummary ?? "" });
   if (!out.ok) return out;
   const bad = checkForms(out.value, DELTA_BLUEPRINT, FORMS_PER_VERSION);
   if (bad) return { ok: false, error: `AI ออกข้อสอบส่วนที่เปลี่ยนไม่ครบ (${bad}) — ลองกดออกใหม่` };
-  await db().delete(examForms).where(and(eq(examForms.versionId, v.id), eq(examForms.kind, "delta")));
-  await insertForms(v.id, "delta", out.value);
+  await replaceForms(v.id, "delta", out.value);
+  await logFormsEvent({ actor: input.actor, setId: set.id, versionId: v.id, action: "exams_generated", detail: { kind: "delta" } });
   return { ok: true };
 }
 
@@ -181,7 +181,7 @@ export async function approveVersion(input: { actor: Actor; setId: number; now?:
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
   const v = await newVersion(set);
   if (!isVersionApprover(input.actor, set, v)) return { ok: false, error: "อนุมัติได้เฉพาะผู้อนุมัติของเวอร์ชันที่รออนุมัติ" };
-  if (v.changeKind !== "small" && v.changeKind !== "large") return { ok: false, error: "เลือกก่อนว่าเปลี่ยนเล็กหรือเปลี่ยนใหญ่" };
+  if (v.changeKind !== "small" && v.changeKind !== "large") return { ok: false, error: "เลือกก่อนว่าอ่านเพื่อรับทราบหรือเรียนรู้และทดสอบ" };
   // ผู้อนุมัติแก้ข้อสอบได้ — ตรวจซ้ำตอนกดอนุมัติ
   const incomplete = await formsComplete(v.id, set.blueprint as Blueprint);
   if (incomplete) return { ok: false, error: incomplete };
@@ -217,7 +217,7 @@ export async function notifyNewVersion(versionId: number): Promise<Record<SendRe
   const targets = passed.filter((a) => a.passedAt! < row.v.approvedAt!);
   if (!targets.length) return tally;
   const org = await fetchOrg();
-  const what = row.v.changeKind === "large" ? "ต้องสอบเฉพาะส่วนที่เปลี่ยน (~5 ข้อ)" : "อ่านสิ่งที่เปลี่ยนแล้วกดรับทราบ";
+  const what = row.v.changeKind === "large" ? `${CHANGE_KIND_LABELS.large}: สอบเฉพาะส่วนที่เปลี่ยน (~5 ข้อ)` : `${CHANGE_KIND_LABELS.small}: อ่านสิ่งที่เปลี่ยนแล้วกดรับทราบ`;
   const results = await Promise.all(
     targets.map((a) =>
       sendToPerson(

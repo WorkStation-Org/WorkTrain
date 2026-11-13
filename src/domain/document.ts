@@ -79,6 +79,9 @@ export function maxNewSegments(activeSeconds: number): number {
  * ปกวิดีโอ (ADR-0013) — เบราว์เซอร์ของผู้สร้างจับเฟรมจากคลิปเป็น JPEG กว้างไม่เกิน 640 px แล้วส่งผ่าน server action
  * ไฟล์จริงราว 30–80 KB · จำกัด 512 KB ให้ต่ำกว่าเพดาน body ของ server action (1 MB)
  */
+/** ไฟล์ Template ข้อสอบที่ Import (ADR-0015) — server action รับได้ไม่เกิน 1 MB (ค่าตั้งต้นของ Next) · 50 ข้อจริงไม่ถึง 100 KB */
+export const MAX_EXAM_SHEET_BYTES = 900 * 1024;
+
 export const MAX_COVER_BYTES = 512 * 1024;
 export const COVER_WIDTH = 640;
 

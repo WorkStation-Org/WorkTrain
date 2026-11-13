@@ -30,6 +30,7 @@ import { Flash, STATUS } from "../ui";
 import { ApproverPicker } from "./approver-picker";
 import { AudiencePicker } from "./audience-picker";
 import { DocsManager } from "./docs-manager";
+import { ExamImport } from "./exam-import";
 import { ExamWorkspace } from "./exam-workspace";
 import { SpreadPanel } from "./spread-panel";
 
@@ -43,6 +44,8 @@ const EVENT_LABELS: Record<string, string> = {
   returned: "ตีกลับ",
   question_edited: "แก้ข้อสอบ",
   question_regenerated: "ให้ AI ออกข้อใหม่",
+  exams_generated: "ให้ AI ออกข้อสอบ 5 ชุด",
+  exams_imported: "Import ข้อสอบ 5 ชุด",
   approver_changed: "เปลี่ยนผู้อนุมัติ",
   audience_changed: "เปลี่ยนผู้รับ",
 };
@@ -109,7 +112,7 @@ export default async function SetPage({
       key: "docs",
       label: "เอกสาร",
       sub: documents.length ? [videos.length && `${videos.length} วิดีโอ`, documents.length - videos.length && `${documents.length - videos.length} เอกสาร`].filter(Boolean).join(" · ") : "ยังไม่มี",
-      state: aiDocs.length ? "done" : "warn",
+      state: documents.length ? "done" : "warn",
     },
     {
       key: "exam",
@@ -275,38 +278,48 @@ export default async function SetPage({
 
       {tab === "exam" && (
         <div className="space-y-4">
-          <SpreadPanel
-            setId={set.id}
-            mode={set.spreadMode}
-            files={aiDocs.map((d) => ({ name: d.fileName, weight: d.examWeight }))}
-            topics={topicsOf(set.blueprint as Blueprint).map(topicLabel)}
-            perForm={slots(set.blueprint as Blueprint).length}
-            formCount={FORMS_PER_VERSION}
-            editable={docsEditable}
-            coverage={
-              fullForms.length
-                ? coverage(
-                    fullForms.map((f) => f.questions),
-                    aiDocs.map((d) => d.fileName),
-                  )
-                : null
-            }
-          />
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-[17px] font-semibold text-fg">ข้อสอบ ({forms.length} ชุด)</h2>
+          {/* แผนเฉลี่ยมีไว้สั่ง AI — ไม่มี PDF ให้ AI อ่าน (มีแต่วิดีโอ) ก็ไม่ต้องแสดง */}
+          {aiDocs.length > 0 && (
+            <SpreadPanel
+              setId={set.id}
+              mode={set.spreadMode}
+              files={aiDocs.map((d) => ({ name: d.fileName, weight: d.examWeight }))}
+              topics={topicsOf(set.blueprint as Blueprint).map(topicLabel)}
+              perForm={slots(set.blueprint as Blueprint).length}
+              formCount={FORMS_PER_VERSION}
+              editable={docsEditable}
+              coverage={
+                fullForms.length
+                  ? coverage(
+                      fullForms.map((f) => f.questions),
+                      aiDocs.map((d) => d.fileName),
+                    )
+                  : null
+              }
+            />
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="mr-auto text-[17px] font-semibold text-fg">ข้อสอบ ({forms.length} ชุด)</h2>
             {docsEditable && (
               <form action={generateExamsAction}>
                 <input type="hidden" name="setId" value={set.id} />
                 <input type="hidden" name="tab" value="exam" />
-                <Button type="submit" variant={fullForms.length ? "secondary" : "primary"}>
+                <Button type="submit" variant={fullForms.length || !aiDocs.length ? "secondary" : "primary"}>
                   {fullForms.length ? "ให้ AI ออกใหม่ทั้ง 5 ชุด" : "ให้ AI ออกข้อสอบ"}
                 </Button>
               </form>
             )}
+            {docsEditable && documents.length > 0 && <ExamImport setId={set.id} kind="full" hasExisting={fullForms.length > 0} />}
           </div>
           {forms.length === 0 ? (
             <p className="rounded-[13px] border border-dashed border-line-strong px-4 py-8 text-center text-[13px] text-muted">
-              {docsEditable ? "อัปเอกสาร PDF แล้วกดให้ AI ออกข้อสอบ — ใช้เวลาหลายนาที อย่าปิดหน้านี้" : "ยังไม่มีข้อสอบ"}
+              {!docsEditable
+                ? "ยังไม่มีข้อสอบ"
+                : documents.length === 0
+                  ? "อัปเอกสารก่อน แล้วให้ AI ออกข้อสอบ หรือกด Template กรอกเองแล้ว Import"
+                  : aiDocs.length
+                    ? "กดให้ AI ออกข้อสอบจาก PDF (ใช้เวลาหลายนาที อย่าปิดหน้านี้) หรือกด Template กรอกเองแล้ว Import"
+                    : "AI อ่านได้เฉพาะ PDF — ชุดนี้มีแต่วิดีโอ ให้กด Template กรอกข้อสอบเองแล้ว Import"}
             </p>
           ) : (
             <ExamWorkspace
@@ -418,6 +431,7 @@ export default async function SetPage({
                   <span className="w-36 shrink-0 text-muted">{formatBangkok(e.createdAt)}</span>
                   <span className="min-w-0 flex-1">
                     <strong className="font-semibold">{e.actorName}</strong> {EVENT_LABELS[e.action] ?? e.action}
+                    {eventNote(e.action, e.detail) && <span className="text-ink-2"> {eventNote(e.action, e.detail)}</span>}
                     {e.comment && <span className="text-ink-2"> — {e.comment}</span>}
                   </span>
                 </li>
@@ -428,6 +442,14 @@ export default async function SetPage({
       )}
     </main>
   );
+}
+
+/** ข้อสอบทั้งชุดมาจากไหน — ส่วนที่เปลี่ยน · ชื่อไฟล์ที่ Import */
+function eventNote(action: string, detail: unknown): string | null {
+  if (action !== "exams_generated" && action !== "exams_imported") return null;
+  const d = (detail ?? {}) as { kind?: string; fileName?: string };
+  const parts = [d.kind === "delta" && "(ส่วนที่เปลี่ยน)", d.fileName && `จากไฟล์ ${d.fileName}`].filter(Boolean);
+  return parts.length ? parts.join(" ") : null;
 }
 
 function Item({ label, value }: { label: string; value: string }) {
@@ -441,7 +463,7 @@ function Item({ label, value }: { label: string; value: string }) {
 
 type VersionRow = NonNullable<Awaited<ReturnType<typeof getSetDetail>>>["version"];
 
-/** เวอร์ชันใหม่ของชุดที่ใช้อยู่ (spec §7 · ADR-0008) — ผู้สร้างเริ่ม/สรุป/ส่ง · ผู้อนุมัติเลือกเล็ก/ใหญ่ แล้วอนุมัติ */
+/** เวอร์ชันใหม่ของชุดที่ใช้อยู่ (spec §7 · ADR-0008) — ผู้สร้างเริ่ม/สรุป/ส่ง · ผู้อนุมัติเลือกอ่านเพื่อรับทราบ/เรียนรู้และทดสอบ แล้วอนุมัติ */
 function VersionCard({
   setId,
   version,
@@ -529,27 +551,30 @@ function VersionCard({
               <form action={setChangeKindAction} className="space-y-1">
                 <input type="hidden" name="setId" value={setId} />
                 {tab}
-                <p className="font-semibold">เปลี่ยนแค่ไหน</p>
+                <p className="font-semibold">ผู้เรียนที่ผ่านแล้วต้องทำอะไร</p>
                 <label className="flex items-center gap-2">
                   <input type="radio" name="kind" value="small" defaultChecked={newVersion.changeKind === "small"} required />
-                  เปลี่ยนเล็ก (ราคาบางรุ่น · แก้คำผิด) — ผู้เรียนที่ผ่านแล้วกดรับทราบ
+                  อ่านเพื่อรับทราบ (ราคาบางรุ่น · แก้คำผิด) — อ่านสิ่งที่เปลี่ยนแล้วกดรับทราบ ไม่ต้องสอบ
                 </label>
                 <label className="flex items-center gap-2">
                   <input type="radio" name="kind" value="large" defaultChecked={newVersion.changeKind === "large"} />
-                  เปลี่ยนใหญ่ (Series ใหม่ · เงื่อนไขการขาย) — ผู้เรียนที่ผ่านแล้วสอบส่วนที่เปลี่ยน
+                  เรียนรู้และทดสอบ (Series ใหม่ · เงื่อนไขการขาย) — สอบเฉพาะส่วนที่เปลี่ยน 5 ข้อ
                 </label>
                 <Button type="submit" size="sm" variant="secondary">
                   บันทึก
                 </Button>
               </form>
               {newVersion.changeKind === "large" && (
-                <form action={generateDeltaAction}>
-                  <input type="hidden" name="setId" value={setId} />
-                  {tab}
-                  <Button type="submit" variant="secondary">
-                    {hasDelta ? "ให้ AI ออกข้อสอบส่วนที่เปลี่ยนใหม่" : "ให้ AI ออกข้อสอบส่วนที่เปลี่ยน (5 ชุด × 5 ข้อ)"}
-                  </Button>
-                </form>
+                <div className="flex flex-wrap items-center gap-2">
+                  <form action={generateDeltaAction}>
+                    <input type="hidden" name="setId" value={setId} />
+                    {tab}
+                    <Button type="submit" variant="secondary">
+                      {hasDelta ? "ให้ AI ออกข้อสอบส่วนที่เปลี่ยนใหม่" : "ให้ AI ออกข้อสอบส่วนที่เปลี่ยน (5 ชุด × 5 ข้อ)"}
+                    </Button>
+                  </form>
+                  <ExamImport setId={setId} kind="delta" hasExisting={hasDelta} />
+                </div>
               )}
               <form action={approveVersionAction}>
                 <input type="hidden" name="setId" value={setId} />

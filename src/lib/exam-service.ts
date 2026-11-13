@@ -12,11 +12,12 @@ import {
   setVersions,
   type FormKind,
 } from "@/db/schema";
-import { slots, type Blueprint } from "@/domain/blueprint";
+import { DELTA_BLUEPRINT, slots, type Blueprint } from "@/domain/blueprint";
 import { aiReadable } from "@/domain/document";
 import { spreadPlan } from "@/domain/spread";
 import type { Actor } from "@/lib/auth";
 import { checkForms, checkQuestion, type ExamModel, type GeneratedQuestion, type SourceDocument } from "@/lib/exam-generator";
+import { buildTemplate, parseSheet, readSheet, type ExistingQuestion, type RowError } from "@/lib/exam-sheet";
 import { objectStore } from "@/lib/object-store";
 import { canEditVersion, canManage, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
 
@@ -114,11 +115,37 @@ export async function generateExams(input: { actor: Actor; setId: number; model:
   const bad = checkForms(out.value, blueprint, FORMS_PER_VERSION);
   if (bad) return { ok: false, error: `AI ออกข้อสอบไม่ครบตามที่ตั้งไว้ (${bad}) — ลองกดออกใหม่` };
 
-  // ของเดิมลบได้เพราะยังเป็นร่าง ไม่มีใครสอบ (attempts อ้างชุดข้อสอบด้วย restrict — ถ้ามีจะล้มตรงนี้ ไม่ใช่ลบเงียบ)
-  await db().delete(examForms).where(and(eq(examForms.versionId, version.id), eq(examForms.kind, "full")));
-  await insertForms(version.id, "full", out.value);
+  await replaceForms(version.id, "full", out.value);
   await db().update(learningSets).set({ updatedAt: new Date() }).where(eq(learningSets.id, set.id));
+  await logFormsEvent({ actor: input.actor, setId: set.id, versionId: version.id, action: "exams_generated", detail: { kind: "full" } });
   return { ok: true };
+}
+
+/**
+ * แทนข้อสอบทั้งหมดของส่วนนี้ (ชุดเต็มหรือส่วนที่เปลี่ยน) — เรียกหลังผ่าน `checkForms` แล้วเท่านั้น
+ * ลบได้เพราะยังไม่มีใครสอบ (attempts อ้างชุดข้อสอบด้วย restrict — ถ้ามีจะล้มตรงนี้ ไม่ใช่ลบเงียบ) · "ตรวจแล้ว" หายตามข้อ
+ */
+export async function replaceForms(versionId: number, kind: FormKind, forms: GeneratedQuestion[][]): Promise<void> {
+  await db().delete(examForms).where(and(eq(examForms.versionId, versionId), eq(examForms.kind, kind)));
+  await insertForms(versionId, kind, forms);
+}
+
+/** ลงประวัติว่าข้อสอบทั้งชุดมาจากไหน — AI ออก หรือ Import จากไฟล์ */
+export async function logFormsEvent(input: {
+  actor: Pick<Actor, "personId" | "name">;
+  setId: number;
+  versionId: number;
+  action: "exams_generated" | "exams_imported";
+  detail: { kind: FormKind; fileName?: string };
+}): Promise<void> {
+  await db().insert(approvalEvents).values({
+    setId: input.setId,
+    versionId: input.versionId,
+    action: input.action,
+    actorPersonId: input.actor.personId,
+    actorName: input.actor.name,
+    detail: input.detail,
+  });
 }
 
 async function loadQuestion(questionId: number) {
@@ -258,7 +285,7 @@ export async function reviewedQuestionIds(versionId: number, personId: number): 
 
 /**
  * ข้อสอบของเวอร์ชันครบพร้อมส่ง/อนุมัติไหม — 5 ชุด · ชุดละ 10 ข้อ · ทุกข้อ 4 ตัวเลือกถูกข้อเดียว
- * `kind = "delta"` = ข้อสอบส่วนที่เปลี่ยนใหญ่ (ADR-0008) ตาม `DELTA_BLUEPRINT`
+ * `kind = "delta"` = ข้อสอบส่วนที่เปลี่ยน ของเวอร์ชันแบบเรียนรู้และทดสอบ (ADR-0008) ตาม `DELTA_BLUEPRINT`
  */
 export async function formsComplete(versionId: number, blueprint: Blueprint, kind: FormKind = "full"): Promise<string | null> {
   const forms = await db().select().from(examForms).where(eq(examForms.versionId, versionId));
@@ -281,4 +308,81 @@ export async function formsComplete(versionId: number, blueprint: Blueprint, kin
 
 function slotsPerForm(blueprint: Blueprint): number {
   return blueprint.reduce((n, c) => n + c.count, 0);
+}
+
+// ── Template / Import (ADR-0015) ────────────────────────────────────────────
+
+/**
+ * ใคร Template/Import ข้อสอบส่วนไหนได้ — ตามคนที่กดให้ AI ออกส่วนนั้นอยู่แล้ว
+ * ชุดเต็ม = ผู้สร้าง/TG ตอนร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่ง (`canEditVersion`) · ผู้อนุมัติ import ชุดเต็มไม่ได้
+ * ส่วนที่เปลี่ยน = ผู้อนุมัติของเวอร์ชันใหม่ที่รออนุมัติ หลังเลือก "เรียนรู้และทดสอบ" (ADR-0008)
+ * ไม่ต้องมี PDF (ต่างจาก AI) — แค่ต้องมีเอกสารอย่างน้อย 1 ไฟล์ให้อ้างเป็นที่มา
+ */
+async function sheetTarget(actor: Pick<Actor, "personId" | "role">, setId: number, kind: FormKind) {
+  const set = await loadSet(setId);
+  if (!set) return { ok: false as const, error: "ไม่พบชุดนี้" };
+  const version = await latestVersion(set.id);
+  if (!version) return { ok: false as const, error: "ชุดนี้ยังไม่มีเอกสาร" };
+  if (kind === "full") {
+    if (!canEditVersion(actor, set, version)) return { ok: false as const, error: "Import ข้อสอบได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
+  } else {
+    const pending = set.status === "active" && version.versionNo > 1 && !version.approvedAt && version.submittedAt;
+    if (!pending || set.approverPersonId !== actor.personId) return { ok: false as const, error: "Import ข้อสอบส่วนที่เปลี่ยนได้เฉพาะผู้อนุมัติของเวอร์ชันที่รออนุมัติ" };
+    if (version.changeKind !== "large") return { ok: false as const, error: 'เลือก "เรียนรู้และทดสอบ" ก่อน' };
+  }
+  const docs = await db().select({ fileName: documents.fileName }).from(documents).where(eq(documents.versionId, version.id)).orderBy(asc(documents.sortOrder));
+  if (!docs.length) return { ok: false as const, error: "ชุดนี้ยังไม่มีเอกสาร" };
+  const blueprint = kind === "delta" ? DELTA_BLUEPRINT : (set.blueprint as Blueprint);
+  return { ok: true as const, set, version, blueprint, fileNames: docs.map((d) => d.fileName) };
+}
+
+async function existingForms(versionId: number, kind: FormKind): Promise<ExistingQuestion[][]> {
+  const forms = await db().select().from(examForms).where(and(eq(examForms.versionId, versionId), eq(examForms.kind, kind))).orderBy(asc(examForms.formNo));
+  if (!forms.length) return [];
+  const qs = await db().select().from(questions).where(inArray(questions.formId, forms.map((f) => f.id))).orderBy(asc(questions.sortOrder));
+  const opts = qs.length ? await db().select().from(choices).where(inArray(choices.questionId, qs.map((q) => q.id))).orderBy(asc(choices.sortOrder)) : [];
+  return forms.map((f) =>
+    qs
+      .filter((q) => q.formId === f.id)
+      .map((q) => {
+        const mine = opts.filter((c) => c.questionId === q.id);
+        return { topic: q.topic, level: q.level, text: q.text, sourceRef: q.sourceRef, choices: mine.map((c) => c.text), correctIndex: mine.findIndex((c) => c.isCorrect) };
+      }),
+  );
+}
+
+/** Template .xlsx ของชุดนี้ — มีข้อสอบอยู่แล้วก็เติมลงไป ให้แก้แล้ว import กลับได้ */
+export async function examTemplate(input: { actor: Actor; setId: number; kind: FormKind }): Promise<Outcome<{ bytes: Uint8Array; fileName: string }>> {
+  const t = await sheetTarget(input.actor, input.setId, input.kind);
+  if (!t.ok) return t;
+  const bytes = await buildTemplate({
+    setTitle: t.set.title,
+    kind: input.kind,
+    blueprint: t.blueprint,
+    formCount: FORMS_PER_VERSION,
+    fileNames: t.fileNames,
+    existing: await existingForms(t.version.id, input.kind),
+  });
+  const what = input.kind === "delta" ? "ข้อสอบส่วนที่เปลี่ยน" : "ข้อสอบ";
+  return { ok: true, bytes, fileName: `${what} - ${t.set.title}.xlsx` };
+}
+
+export type ImportOutcome = { ok: true; count: number } | { ok: false; error: string; rows?: RowError[] };
+
+/** Import ข้อสอบจาก Template ที่กรอกแล้ว — ผ่านทุกข้อถึงจะแทนของเดิมทั้งหมด · ไม่ผ่านบอกทุกจุดพร้อมเลขแถว */
+export async function importExams(input: { actor: Actor; setId: number; kind: FormKind; fileName: string; bytes: Uint8Array }): Promise<ImportOutcome> {
+  const t = await sheetTarget(input.actor, input.setId, input.kind);
+  if (!t.ok) return t;
+  const read = await readSheet(input.bytes);
+  if (!read.ok) return read;
+  if (read.kind && read.kind !== input.kind) {
+    return { ok: false, error: read.kind === "delta" ? "ไฟล์นี้เป็น Template ของข้อสอบส่วนที่เปลี่ยน ไม่ใช่ข้อสอบชุดเต็ม" : "ไฟล์นี้เป็น Template ของข้อสอบชุดเต็ม ไม่ใช่ข้อสอบส่วนที่เปลี่ยน" };
+  }
+  const parsed = parseSheet(read.rows, t.blueprint, FORMS_PER_VERSION, t.fileNames);
+  if (!parsed.ok) return { ok: false, error: `ไฟล์ยังไม่ผ่าน ${parsed.errors.length} จุด — แก้แล้ว Import ใหม่ (ข้อสอบเดิมยังอยู่)`, rows: parsed.errors };
+
+  await replaceForms(t.version.id, input.kind, parsed.forms);
+  await db().update(learningSets).set({ updatedAt: new Date() }).where(eq(learningSets.id, t.set.id));
+  await logFormsEvent({ actor: input.actor, setId: t.set.id, versionId: t.version.id, action: "exams_imported", detail: { kind: input.kind, fileName: input.fileName } });
+  return { ok: true, count: parsed.forms.flat().length };
 }

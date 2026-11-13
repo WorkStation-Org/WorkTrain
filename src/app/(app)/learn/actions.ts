@@ -85,7 +85,7 @@ export async function endStudyAction(form: FormData) {
   redirect(`/learn/${Number(form.get("assignmentId"))}`);
 }
 
-/** รับทราบเวอร์ชันใหม่ที่เปลี่ยนเล็ก (ADR-0008) */
+/** รับทราบเวอร์ชันใหม่แบบอ่านเพื่อรับทราบ (ADR-0008) */
 export async function acknowledgeVersionAction(form: FormData) {
   const actor = await learner();
   const assignmentId = Number(form.get("assignmentId"));
