@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maxNewSegments, segmentWatchTarget, videoSegmentCount, formatDuration, maxBytesFor, kindAllowsMime } from "@/domain/document";
+import { maxNewSegments, segmentWatchTarget, videoSegmentCount, formatDuration, maxBytesFor, kindAllowsMime, coverSeconds } from "@/domain/document";
 import { mp4DurationSeconds } from "@/domain/mp4";
 import { fakeMp4, rangeReader } from "./mp4-fixture";
 
@@ -66,5 +66,23 @@ describe("ช่วงวิดีโอ", () => {
     expect(kindAllowsMime("catalog", "video/mp4")).toBe(true);
     expect(formatDuration(65)).toBe("1:05");
     expect(formatDuration(3725)).toBe("1:02:05");
+  });
+});
+
+describe("coverSeconds — เฟรมปกตั้งต้น", () => {
+  it("หยุดที่วินาทีที่ 4 เสมอ ไม่ว่าคลิปยาวเท่าไร", () => {
+    expect(coverSeconds(10)).toBe(4);
+    expect(coverSeconds(3600)).toBe(4);
+  });
+
+  it("คลิปสั้นกว่า 4 วินาที ใช้เฟรมท้าย", () => {
+    expect(coverSeconds(3)).toBeCloseTo(2.9);
+    expect(coverSeconds(0.05)).toBe(0);
+  });
+
+  it("ยังไม่รู้ความยาว — NaN/0 = 0 · Infinity (สตรีม) ยังเป็น 4", () => {
+    expect(coverSeconds(NaN)).toBe(0);
+    expect(coverSeconds(0)).toBe(0);
+    expect(coverSeconds(Infinity)).toBe(4);
   });
 });

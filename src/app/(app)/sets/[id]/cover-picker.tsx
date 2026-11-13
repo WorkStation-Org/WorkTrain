@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { type Ref, useImperativeHandle, useRef, useState } from "react";
 import { Button } from "@/components/ui";
-import { COVER_WIDTH, formatDuration, MAX_COVER_BYTES } from "@/domain/document";
+import { COVER_WIDTH, coverSeconds, formatDuration, MAX_COVER_BYTES } from "@/domain/document";
 import { authorVideoLinkAction, setCoverAction } from "../actions";
 
 /**
@@ -19,7 +19,7 @@ export interface CoverPickerHandle {
 
 const CORS_HINT = "จับภาพจากวิดีโอที่อยู่บน R2 ไม่ได้ — ต้องตั้ง CORS ของ bucket ให้รับ GET จากโดเมน WorkTrain (หรือเลือกปกตอนอัปวิดีโอ)";
 
-export function CoverPicker({ src, remote = false, initialMs, ref }: { src: string; remote?: boolean; initialMs?: number | null; ref?: Ref<CoverPickerHandle> }) {
+export function CoverPicker({ src, remote = false, ref }: { src: string; remote?: boolean; ref?: Ref<CoverPickerHandle> }) {
   const video = useRef<HTMLVideoElement>(null);
   const [duration, setDuration] = useState(0);
   const [time, setTime] = useState(0);
@@ -36,8 +36,8 @@ export function CoverPicker({ src, remote = false, initialMs, ref }: { src: stri
     const v = video.current;
     if (!v) return;
     setDuration(v.duration);
-    // ตั้งต้นที่ 10% ของคลิป — เฟรมแรกมักเป็นจอดำหรือโลโก้
-    seek(initialMs != null ? Math.min(initialMs / 1000, v.duration) : v.duration * 0.1);
+    // เปิดมาหยุดที่วินาทีที่ 4 เสมอ — เฟรมแรกมักเป็นจอดำหรือโลโก้
+    seek(coverSeconds(v.duration));
   }
 
   useImperativeHandle(ref, () => ({
@@ -103,13 +103,11 @@ export function CoverEditor({
   setId,
   documentId,
   coverUrl,
-  coverMs,
   canEdit,
 }: {
   setId: number;
   documentId: number;
   coverUrl: string | null;
-  coverMs: number | null;
   canEdit: boolean;
 }) {
   const router = useRouter();
@@ -177,7 +175,7 @@ export function CoverEditor({
       )}
       {src && (
         <div className="space-y-2 rounded-lg border border-line bg-canvas p-3">
-          <CoverPicker ref={picker} src={src.url} remote={src.remote} initialMs={coverMs} />
+          <CoverPicker ref={picker} src={src.url} remote={src.remote} />
           <div className="flex gap-2">
             <Button type="button" size="sm" variant="primary" onClick={save} disabled={busy}>
               {busy ? "กำลังบันทึก…" : "ใช้เฟรมนี้เป็นปก"}
@@ -194,10 +192,10 @@ export function CoverEditor({
 }
 
 /**
- * ปกอัตโนมัติจากไฟล์ในเครื่อง — จับเฟรมที่ 10% ของคลิป (เฟรมแรกมักเป็นจอดำ) ใช้ตอนอัปหลายไฟล์พร้อมกัน
+ * ปกอัตโนมัติจากไฟล์ในเครื่อง — จับเฟรมที่วินาทีที่ 4 (เฟรมแรกมักเป็นจอดำ) ใช้ตอนอัปหลายไฟล์พร้อมกัน
  * ไฟล์ในเครื่องจับเฟรมได้เสมอ ไม่ต้องพึ่ง CORS ของ R2 · เปิดไม่ได้ = null (อัปต่อได้ แค่ไม่มีปก)
  */
-export async function captureCoverFromFile(file: File, fraction = 0.1): Promise<{ blob: Blob; ms: number } | null> {
+export async function captureCoverFromFile(file: File): Promise<{ blob: Blob; ms: number } | null> {
   const url = URL.createObjectURL(file);
   const v = document.createElement("video");
   v.muted = true;
@@ -209,7 +207,7 @@ export async function captureCoverFromFile(file: File, fraction = 0.1): Promise<
       v.onloadedmetadata = () => ok();
       v.onerror = () => fail(new Error("load"));
     });
-    const t = Math.max(0, Math.min(v.duration * fraction, v.duration - 0.1));
+    const t = coverSeconds(v.duration);
     await new Promise<void>((ok, fail) => {
       v.onseeked = () => ok();
       v.onerror = () => fail(new Error("seek"));

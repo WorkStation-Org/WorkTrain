@@ -270,7 +270,6 @@ export default async function SetPage({
               pageCount: d.pageCount,
               durationSeconds: d.durationSeconds,
               coverUrl: coverPath(d),
-              coverMs: d.coverMs,
               examWeight: d.examWeight,
             }))}
             editable={docsEditable}
