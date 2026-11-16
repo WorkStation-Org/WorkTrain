@@ -60,7 +60,7 @@ function isOwnerOrAdmin(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRo
 
 /**
  * แก้ผู้รับได้ไหม — ร่าง: ผู้สร้าง/TG · ใช้อยู่: ผู้สร้าง/TG เพิ่มหรือเปลี่ยนเงื่อนไขได้ (คนที่เพิ่มได้รับมอบทันที ·
- * คนที่หลุดเงื่อนไขเก็บการมอบเดิมไว้ตาม spec §5)
+ * คนที่หลุดเงื่อนไขถูกตัดจบ — ADR-0017)
  */
 export function canEditAudience(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "authorPersonId" | "status">): boolean {
   return (set.status === "draft" || set.status === "active") && isOwnerOrAdmin(actor, set);

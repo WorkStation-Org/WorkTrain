@@ -22,9 +22,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     return Number.isInteger(n) && n > 0 ? n : undefined;
   };
   const month = firstParam(sp.month) ?? bangkokMonth();
-  const filter = { month, teamId: num("team"), managerPersonId: num("manager"), setId: num("set") };
+  const showHidden = firstParam(sp.hidden) === "1";
+  const filter = { month, teamId: num("team"), managerPersonId: num("manager"), setId: num("set"), showHidden };
   const data = await dashboard(actor, filter);
-  const board = await monthLeaderboard(month);
+  const board = await monthLeaderboard(month, { showHidden });
   if (!data || !board) {
     return (
       <main className="mx-auto w-full max-w-md">
@@ -36,6 +37,16 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     );
   }
   const qs = new URLSearchParams(Object.entries({ month, team: filter.teamId, manager: filter.managerPersonId, set: filter.setId }).flatMap(([k, v]) => (v ? [[k, String(v)]] : [])));
+  /** บรรทัด "ซ่อน n คน · แสดง" ใต้แต่ละส่วน — ปุ่มเดียวสลับทั้งหน้า */
+  const hiddenLine = (n: number, unit = "คน") =>
+    n > 0 || showHidden ? (
+      <p className="mt-3 border-t border-line pt-3 text-[12px] text-ink-3">
+        {showHidden ? "แสดงคนที่ไม่อยู่ในผังหรือถูกตัดจบด้วย" : `ซ่อน ${n} ${unit}ที่ไม่อยู่ในผังหรือถูกตัดจบ`} ·{" "}
+        <Link href={`/dashboard?${qs}${showHidden ? "" : "&hidden=1"}`} className="underline">
+          {showHidden ? "ซ่อน" : "แสดง"}
+        </Link>
+      </p>
+    ) : null;
 
   return (
     <main className="mx-auto w-full max-w-6xl space-y-5">
@@ -111,6 +122,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             ))}
           </ol>
         )}
+        {hiddenLine(board.hiddenPeople)}
       </Card>
 
       <Card>
@@ -151,6 +163,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             </TBody>
           </Table>
         )}
+        {hiddenLine(data.hiddenPeople)}
       </Card>
 
       <Card>
@@ -191,6 +204,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             </TBody>
           </Table>
         )}
+        {hiddenLine(data.hiddenRows, "การมอบ")}
       </Card>
     </main>
   );

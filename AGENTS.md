@@ -21,7 +21,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/session.ts` + `src/proxy.ts` — session cookie ที่เซ็นแล้ว · ถาม WorkID ใหม่ทุก 5 นาที (fail-open)
 - `src/lib/workid.ts` — SSO · `/v1/session/check` · `fetchOrg()` (ผัง: `positionId` · `teamId` · `managedTeamIds` · `managerPersonId` · `lineGroupId`)
 - `src/lib/gateway.ts` — client ของ WorkGateWay · `src/lib/deliver.ts` — ส่งตัวต่อตัว/เข้ากลุ่มประจำตัว พร้อมจองแถวและบันทึกผล (ยกจาก WorkDaily)
-- `src/domain/audience.ts` — เงื่อนไขผู้รับ → รายชื่อ · `src/lib/assignment-service.ts` — ผู้รับ · มอบ (`syncAssignments`) · เตือน (`runReminders`) · แจ้งเรื่องอนุมัติ
+- `src/domain/audience.ts` — เงื่อนไขผู้รับ → รายชื่อ · `src/lib/assignment-service.ts` — ผู้รับ · มอบ/ตัดจบ/เปิดใหม่ (`syncAssignments`) · เตือน (`runReminders`) ·
+  แจ้งเรื่องอนุมัติ · ข้อความรายคนรวมต่อคนต่อรอบ (`sendCombined`) · `src/domain/assignment-end.ts` — กติกาตัดจบ · ด่านกันผังเพี้ยน · ซ่อนจากรายชื่อ (ADR-0017)
 - `src/lib/onboarding-service.ts` — เส้นทาง Onboarding (`/admin/onboarding`) · `trainingStatus()` ให้ WorkHR ·
   `src/lib/api-consumers.ts` — ด่าน `/api/v1/*` (Bearer `wtr_…` · ตาราง `api_consumers` เก็บแค่ hash · TG ออก/ถอนที่ `/admin/api-keys` · ADR-0012)
 - `src/domain/stats.ts` — สถิติรายคนต่อเดือน · Leaderboard (คะแนนครั้งแรก → ความไว) · `src/lib/stats-service.ts` — `/dashboard` ·

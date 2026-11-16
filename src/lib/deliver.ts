@@ -36,6 +36,10 @@ export type NotificationKind =
   | "approval_returned"
   | "approval_approved"
   | "assigned"
+  | "reassigned"
+  | "assignment_ended"
+  | "end_guard"
+  | "end_held"
   | "remind_day3"
   | "remind_day5"
   | "overdue_summary"
@@ -123,6 +127,29 @@ export async function markCoveredBy(groupKey: string, items: Omit<Target, "text"
       set: { status: "sent", jobIds: g.jobIds, detail: `ส่งรวมใน ${groupKey}` },
       setWhere: sql`${notifications.status} <> 'sent'`,
     });
+}
+
+/**
+ * ข้อความรวม (`groupKey`) ส่งไม่ได้เพราะการตั้งค่า (`skipped` — ไม่ผูก LINE ฯลฯ) → ลงแถวของแต่ละเรื่องเป็น `skipped` ด้วย
+ * — รอบถัดไปไม่หยิบเรื่องเหล่านี้มารวมส่งซ้ำ (ตั้งค่าเสร็จแล้วก็ไม่ย้อนส่งเรื่องเก่า เหมือนข้อความเดี่ยวที่ `skipped`)
+ */
+export async function markSkippedBy(groupKey: string, items: Omit<Target, "text">[]): Promise<void> {
+  const [g] = await db().select().from(notifications).where(and(eq(notifications.dedupeKey, groupKey), eq(notifications.status, "skipped")));
+  if (!g || items.length === 0) return;
+  await db()
+    .insert(notifications)
+    .values(
+      items.map((i) => ({
+        dedupeKey: i.dedupeKey,
+        kind: i.kind,
+        personId: i.personId,
+        setId: i.setId ?? null,
+        assignmentId: i.assignmentId ?? null,
+        status: "skipped" as const,
+        detail: `${g.detail ?? "ส่งไม่ได้"} (รวมใน ${groupKey})`.slice(0, 500),
+      })),
+    )
+    .onConflictDoNothing();
 }
 
 /** เหตุที่ส่งตัวต่อตัวไม่ได้ — บันทึกใน `notifications.detail` ให้ TG เห็นว่าใครตั้งค่าไม่ครบ */

@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
 import { isUniqueViolation } from "@/db/errors";
@@ -55,13 +55,19 @@ const secureRng: Rng = () => randomInt(0, 2 ** 32) / 2 ** 32;
 type AssignmentRow = typeof assignments.$inferSelect;
 type SetRow = typeof learningSets.$inferSelect;
 
+/**
+ * การมอบที่ผู้เรียนยังเห็น — ยังเปิดอยู่ หรือผ่านแล้ว · ตัดจบที่ยังไม่ผ่าน = ไม่ต้องเรียนแล้ว (หายจากหน้า · เข้าต่อไม่ได้)
+ * ★ ใช้กับทุกคำถามของฝั่งผู้เรียน — ผ่านแล้วถูกตัดจบยังเห็นในแท็บ "ผ่านแล้ว" แต่ไม่รับเวอร์ชันใหม่ (`pendingUpdate`)
+ */
+const stillMine = or(isNull(assignments.endedAt), isNotNull(assignments.passedAt));
+
 async function myAssignment(personId: number, assignmentId: number): Promise<{ a: AssignmentRow; set: SetRow } | null> {
   if (!Number.isSafeInteger(assignmentId) || assignmentId <= 0) return null;
   const [row] = await db()
     .select({ a: assignments, set: learningSets })
     .from(assignments)
     .innerJoin(learningSets, eq(learningSets.id, assignments.setId))
-    .where(and(eq(assignments.id, assignmentId), eq(assignments.personId, personId)));
+    .where(and(eq(assignments.id, assignmentId), eq(assignments.personId, personId), stillMine));
   return row ?? null;
 }
 
@@ -95,8 +101,9 @@ export interface PendingUpdate {
  * อ่านเพื่อรับทราบ = ต้องกดรับทราบ · เรียนรู้และทดสอบ = ต้องสอบส่วนที่เปลี่ยนให้ผ่าน · ไม่มีค้าง = null
  * ★ ผ่านแล้วไม่ย้อนกลับเป็นไม่ผ่าน (`passedAt` คงเดิม) — WorkHR และ Dashboard ยังนับว่าผ่าน
  */
-export async function pendingUpdate(a: Pick<AssignmentRow, "id" | "setId" | "passedAt">): Promise<PendingUpdate | null> {
-  if (!a.passedAt) return null;
+export async function pendingUpdate(a: Pick<AssignmentRow, "id" | "setId" | "passedAt" | "endedAt">): Promise<PendingUpdate | null> {
+  // ตัดจบแล้ว (ย้ายทีมหลังผ่าน) — ยังนับว่าผ่าน แต่ไม่ต้องตามเวอร์ชันใหม่ของชุดที่ไม่ใช่ของตัวเองแล้ว
+  if (!a.passedAt || a.endedAt) return null;
   // เทียบกับเวอร์ชันที่สอบผ่านจริง ไม่ใช่เวลาที่ผ่าน — เริ่มสอบ v1 แล้ว v2 อนุมัติระหว่างสอบ ผ่านทีหลัง
   // ยังต้องตามเวอร์ชัน 2 · ไม่มีครั้งที่สอบผ่าน (ข้อมูลเก่า/นำเข้า) ค่อยใช้เวลาแทน
   const passedNo = await passedVersionNo(a.id);
@@ -340,7 +347,7 @@ export async function myAssignments(personId: number) {
     .select({ a: assignments, title: learningSets.title, passPercent: learningSets.passPercent })
     .from(assignments)
     .innerJoin(learningSets, eq(learningSets.id, assignments.setId))
-    .where(and(eq(assignments.personId, personId), eq(learningSets.status, "active")))
+    .where(and(eq(assignments.personId, personId), eq(learningSets.status, "active"), stillMine))
     .orderBy(asc(assignments.dueAt));
   return rows;
 }
@@ -381,7 +388,7 @@ export async function myLearningList(personId: number, now: Date = new Date()): 
     .from(assignments)
     .innerJoin(learningSets, eq(learningSets.id, assignments.setId))
     .innerJoin(setKinds, eq(setKinds.id, learningSets.kindId))
-    .where(and(eq(assignments.personId, personId), eq(learningSets.status, "active")));
+    .where(and(eq(assignments.personId, personId), eq(learningSets.status, "active"), stillMine));
   const items: LearningListItem[] = [];
   for (const { a, title, kindName } of rows) {
     const version = await approvedVersion(a.setId);
@@ -614,7 +621,7 @@ async function myAttempt(personId: number, attemptId: number) {
     .select({ t: attempts, personId: assignments.personId })
     .from(attempts)
     .innerJoin(assignments, eq(assignments.id, attempts.assignmentId))
-    .where(eq(attempts.id, attemptId));
+    .where(and(eq(attempts.id, attemptId), stillMine));
   return row && row.personId === personId ? row.t : null;
 }
 

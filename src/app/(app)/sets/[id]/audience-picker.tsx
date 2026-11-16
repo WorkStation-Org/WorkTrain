@@ -9,7 +9,7 @@ import { saveAudienceAction } from "../actions";
 
 /**
  * ผู้รับ (spec §5) — ค้นหา + แท็บตามชนิดเงื่อนไข · ชิปของที่เลือก · รายชื่อคำนวณสดตามที่ติ๊ก (ไม่ต้องบันทึกก่อน)
- * ชุดที่ใช้อยู่: สรุปก่อนบันทึกว่าใครจะได้รับมอบเพิ่ม (มอบทันที) และใครไม่ตรงเงื่อนไขแล้ว (เก็บการมอบเดิมไว้)
+ * ชุดที่ใช้อยู่: สรุปก่อนบันทึกว่าใครจะได้รับมอบเพิ่ม (มอบทันที) และใครไม่ตรงเงื่อนไขแล้ว (ตัดจบทันทีเมื่อบันทึก)
  */
 
 export interface AudiencePerson {
@@ -46,14 +46,18 @@ export function AudiencePicker({
   editable,
   active,
   assignedIds,
+  pathIds = [],
 }: {
   setId: number;
   people: AudiencePerson[];
   initialRules: Rule[];
   editable: boolean;
-  /** ชุดที่ใช้อยู่ — สรุปก่อนบันทึก และมอบทันทีหลังบันทึก */
+  /** ชุดที่ใช้อยู่ — สรุปก่อนบันทึก และมอบ/ตัดจบทันทีหลังบันทึก */
   active: boolean;
+  /** คนที่มีการมอบที่ยังเปิดอยู่ (ไม่นับที่ตัดจบแล้ว) */
   assignedIds: number[];
+  /** คนที่ยังตรงผ่านเส้นทาง Onboarding ของชุดนี้ — ไม่ถูกตัดจบแม้ไม่ตรงเงื่อนไขผู้รับ */
+  pathIds?: number[];
 }) {
   const router = useRouter();
   const [rules, setRules] = useState<Rule[]>(initialRules);
@@ -65,14 +69,20 @@ export function AudiencePicker({
 
   const options = useMemo(() => audienceOptions(people), [people]);
   const chosen = useMemo(() => resolveAudience(people, rules), [people, rules]);
-  const before = useMemo(() => resolveAudience(people, initialRules), [people, initialRules]);
   const chosenIds = useMemo(() => new Set(chosen.map((p) => p.personId)), [chosen]);
   const assigned = useMemo(() => new Set(assignedIds), [assignedIds]);
+  const onPath = useMemo(() => new Set(pathIds), [pathIds]);
+  const nameOf = useMemo(() => new Map(people.map((p) => [p.personId, p.fullName])), [people]);
   const dirty = rules.map(keyOf).sort().join() !== initialRules.map(keyOf).sort().join();
   const picked = new Set(rules.map(keyOf));
 
+  // คนที่เคยถูกตัดจบแล้วกลับมาตรง = เปิดการมอบเดิมใหม่ (นับเป็นได้รับมอบทันทีเหมือนกัน)
   const added = chosen.filter((p) => !assigned.has(p.personId));
-  const leaving = before.filter((p) => !chosenIds.has(p.personId) && assigned.has(p.personId));
+  // ตัดจบเมื่อบันทึก — มีการมอบที่เปิดอยู่ แต่ไม่ตรงเงื่อนไขใหม่และไม่ตรงเส้นทาง Onboarding (รวมคนที่ลาออกแล้วแต่ยังไม่ถูกตัด)
+  const leaving = assignedIds.filter((id) => !chosenIds.has(id) && !onPath.has(id)).map((id) => ({ personId: id, fullName: nameOf.get(id) ?? "ไม่อยู่ในผังแล้ว" }));
+
+  const changes = [added.length > 0 && `มอบให้ ${added.length} คน`, leaving.length > 0 && `ตัดจบ ${leaving.length} คน`].filter(Boolean);
+  const saveLabel = changes.length ? `บันทึก — ${changes.join(" · ")}` : "บันทึก";
 
   function toggle(r: Rule) {
     setMsg(null);
@@ -110,7 +120,10 @@ export function AudiencePicker({
     setBusy(false);
     setConfirming(false);
     if (!out?.ok) return setMsg({ ok: false, text: out?.error ?? "บันทึกไม่สำเร็จ" });
-    setMsg({ ok: true, text: active ? `บันทึกผู้รับแล้ว · มอบให้ ${out.assigned} คนเพิ่ม` : "บันทึกผู้รับแล้ว" });
+    setMsg({
+      ok: true,
+      text: active ? `บันทึกผู้รับแล้ว · มอบให้ ${out.assigned + out.reopened} คน${out.ended ? ` · ตัดจบ ${out.ended} คน` : ""}` : "บันทึกผู้รับแล้ว",
+    });
     router.refresh();
   }
 
@@ -244,14 +257,17 @@ export function AudiencePicker({
                 </div>
                 {leaving.length > 0 && (
                   <div className="rounded-[10px] bg-warn-soft px-3 py-2.5 text-[13px]">
-                    <strong className="text-warn">{leaving.length} คนไม่ตรงเงื่อนไขแล้ว — เก็บการมอบเดิมไว้</strong>
-                    <p className="mt-1 text-ink-2">{leaving.slice(0, 12).map((p) => p.fullName).join(" · ")}</p>
-                    <p className="mt-1 text-[12px] text-muted">ยังเรียนต่อได้ · ผลสอบเดิมยังนับ</p>
+                    <strong className="text-warn">บันทึกแล้วจะตัดจบ {leaving.length} คน — ไม่ตรงเงื่อนไขแล้ว</strong>
+                    <p className="mt-1 text-ink-2">
+                      {leaving.slice(0, 12).map((p) => p.fullName).join(" · ")}
+                      {leaving.length > 12 ? ` และอีก ${leaving.length - 12} คน` : ""}
+                    </p>
+                    <p className="mt-1 text-[12px] text-muted">หยุดเตือน · ชุดหายจากหน้าของเขา · แจ้งทาง LINE ว่าไม่ต้องเรียนแล้ว · คนที่สอบผ่านแล้วยังนับว่าผ่าน</p>
                   </div>
                 )}
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="primary" onClick={save} disabled={busy}>
-                    {busy ? "กำลังบันทึก…" : added.length ? `บันทึก และมอบให้ ${added.length} คน` : "บันทึก"}
+                  <Button type="button" variant={leaving.length ? "danger" : "primary"} onClick={save} disabled={busy}>
+                    {busy ? "กำลังบันทึก…" : saveLabel}
                   </Button>
                   <Button type="button" variant="ghost" onClick={() => setConfirming(false)} disabled={busy}>
                     กลับไปแก้
