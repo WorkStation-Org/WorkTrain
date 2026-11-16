@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { videoChipLabel } from "@/components/set-cover";
 import { EmptyState, PageHeader } from "@/components/ui";
 import { formatDuration } from "@/domain/document";
 import { myLearningList, type LearningListItem } from "@/lib/learn-service";
@@ -41,7 +42,7 @@ function toCard(i: LearningListItem): LearnCard {
     kindName: i.kindName,
     badge,
     contents: parts.join(" · ") || "ยังไม่มีเนื้อหา",
-    videoChip: i.videos ? (i.videos > 1 ? `${i.videos} คลิป · ${formatDuration(i.videoSeconds)}` : formatDuration(i.videoSeconds)) : null,
+    videoChip: videoChipLabel(i.videos, formatDuration(i.videoSeconds)),
     coverUrl: i.coverUrl,
     hasVideo: i.videos > 0,
     percent,

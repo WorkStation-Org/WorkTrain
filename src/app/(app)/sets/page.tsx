@@ -37,7 +37,16 @@ export default async function SetsPage({ searchParams }: { searchParams: Promise
 
   return (
     <main className="mx-auto w-full max-w-4xl">
-      <PageHeader kicker="Library" title="ชุดการเรียนรู้" subtitle="สร้าง · ออกข้อสอบ · อนุมัติ" />
+      <PageHeader
+        kicker="Library"
+        title="ชุดการเรียนรู้"
+        subtitle="สร้าง · ออกข้อสอบ · อนุมัติ"
+        actions={
+          <Button href="/sets/released" variant="ghost" icon="grid">
+            ภาพรวมชุดที่ปล่อยแล้ว
+          </Button>
+        }
+      />
       <Flash msg={firstParam(sp.msg)} err={firstParam(sp.err)} />
 
       {canCreate && (

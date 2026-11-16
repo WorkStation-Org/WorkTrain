@@ -20,11 +20,11 @@ export function firstParam(v: string | string[] | undefined): string | undefined
 
 /**
  * ด่านของหน้าผู้เรียน — ล็อกอินแล้ว **และยินยอมสแกนใบหน้าแล้ว** (spec §8: ไม่ยินยอม = ใช้แอปไม่ได้)
- * ยังไม่ยินยอม → `/consent`
+ * ยังไม่ยินยอม → `/consent` · พักการสแกนอยู่ไม่บังคับ (ADR-0019)
  */
 export async function learnerActor(): Promise<Actor> {
   const actor = await pageActor();
-  const { hasConsent } = await import("@/lib/identity-service");
-  if (!(await hasConsent(actor.personId))) redirect("/consent");
+  const { consentRequired } = await import("@/lib/identity-service");
+  if (await consentRequired(actor.personId)) redirect("/consent");
   return actor;
 }

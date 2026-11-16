@@ -647,6 +647,11 @@ export async function onboardingPositionsOf(setId: number): Promise<number[]> {
 
 export type AssignmentState = "passed" | "started" | "not_started" | "overdue";
 
+/** สถานะของการมอบหนึ่ง — ผ่าน · เลยกำหนด (ยังไม่ผ่าน) · เริ่มแล้ว (อ่านหรือสอบแล้ว) · ยังไม่เริ่ม */
+export function assignmentState(a: { passedAt: Date | null; dueAt: Date }, started: boolean, now: Date): AssignmentState {
+  return a.passedAt ? "passed" : a.dueAt <= now ? "overdue" : started ? "started" : "not_started";
+}
+
 /** สถานะรายคนของชุดหนึ่ง — หน้าชุดของผู้สร้าง/ผู้อนุมัติ/TG (spec §12 ส่วนแรก) */
 export async function assignmentStatus(setId: number, now: Date = new Date()) {
   const rows = await db().select().from(assignments).where(eq(assignments.setId, setId)).orderBy(assignments.personName);
@@ -658,7 +663,6 @@ export async function assignmentStatus(setId: number, now: Date = new Date()) {
   const attemptCount = new Map<number, number>();
   for (const t of tried) attemptCount.set(t.id, (attemptCount.get(t.id) ?? 0) + 1);
   return rows.map((r) => {
-    const state: AssignmentState = r.passedAt ? "passed" : r.dueAt <= now ? "overdue" : started.has(r.id) ? "started" : "not_started";
-    return { ...r, state, attempts: attemptCount.get(r.id) ?? 0 };
+    return { ...r, state: assignmentState(r, started.has(r.id), now), attempts: attemptCount.get(r.id) ?? 0 };
   });
 }

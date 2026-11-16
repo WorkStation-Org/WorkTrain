@@ -120,6 +120,13 @@
       "when": 1794831761435,
       "tag": "0016_audience_added_by",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794835056166,
+      "tag": "0017_pause_face_scan",
+      "breakpoints": true
     }
   ]
 }

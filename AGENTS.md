@@ -31,7 +31,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/domain/exam.ts` — เลือกชุด (ไม่ซ้ำจนครบ 5) · สลับข้อ/ตัวเลือก · คะแนน · ไม่ผ่าน 2 ครั้งติด = อ่านใหม่
 - `src/lib/rekognition.ts` — **ที่เดียวที่คุยกับ AWS** (`FaceApi`: liveness session · ผล liveness · CompareFaces · credential ชั่วคราวให้เบราว์เซอร์)
 - `src/lib/identity-service.ts` — ความยินยอม PDPA · ลงทะเบียนใบหน้า (ครั้งแรกใช้ได้ทันที · ใหม่ต้องให้ TG อนุมัติ) · `beginScan`/`finishScan` เทียบฝั่งเซิร์ฟเวอร์ ·
-  ไม่ผ่าน 3 ครั้งติด → คิว TG (`/admin/faces`) · ภาพสแกนลบเมื่อครบ 90 วัน (cron เช้า) · ไม่ตั้ง AWS = `scanMode()` เป็น `off` บน production
+  ไม่ผ่าน 3 ครั้งติด → คิว TG (`/admin/faces`) · ภาพสแกนลบเมื่อครบ 90 วัน (cron เช้า) · ไม่ตั้ง AWS = `scanMode()` เป็น `off` บน production ·
+  env `FACE_SCAN_PAUSED=1` = `paused` — เรียน/สอบได้โดยไม่สแกน ไม่บังคับยินยอม (`scanGate()` · `consentRequired()` · ADR-0019)
 - `src/app/(app)/learn/scan-flow.tsx` — FaceLivenessDetector (Amplify) · บนเครื่อง dev เป็นปุ่มข้ามกล้อง
 - `src/lib/learn-service.ts` — รอบเรียน (นิ่ง 2 นาที = จบ) · ความคืบหน้าการอ่าน · ครั้งที่สอบ (ทีละข้อ · หมดเวลา/ออกหน้าสอบตัดสินที่เซิร์ฟเวอร์) · ทุกฟังก์ชันตรวจว่าเป็นของคนที่ล็อกอิน
 - `/learn` (`myLearningList()`: สรุปตัวเลข · ทำต่อจากที่ค้างไว้ · แท็บกรอง + ค้นหา · การ์ดพร้อมปกคลิป) · `/learn/[id]` (`LessonWorkspace`: ตัวแสดงทางซ้าย + รายการเนื้อหาในชุดทางขวา · ตัวอ่าน PDF ด้วย pdfjs ≥ 6.2.108 · ตัวเล่นวิดีโอนับช่วงที่เล่นผ่าน)
@@ -40,6 +41,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/domain/blueprint.ts` — สัดส่วนหัวข้อ×ระดับของ 10 ข้อ · หัวข้อเป็นข้อความ (`topicLabel()` แปลรหัสเดิม) · แม่แบบตั้งต้นของสองชนิดเดิม ·
   `src/lib/kind-service.ts` — ทะเบียนชนิดของชุด (`/admin/kinds` · TG เท่านั้น · ADR-0011) · `src/domain/document.ts` — ชนิด/ขนาดไฟล์ · key ใน R2 ·
   ช่วงวิดีโอ 10 วินาที · `src/domain/mp4.ts` — ความยาววิดีโอจากหัวไฟล์ MP4 (ADR-0013)
+- `src/lib/set-overview.ts` — `/sets/released` ภาพรวมชุดที่ปล่อยแล้ว (ใช้อยู่ + ปิดแล้ว) แบบการ์ด: เนื้อหา · วันที่ปล่อย · ผ่าน/กำลังเรียน/ยังไม่เริ่ม/เลยกำหนด
+  (นับด้วย `assignmentState()` ตัวเดียวกับแท็บผู้เรียน) · ปกการ์ดใช้ `components/set-cover.tsx` ร่วมกับ `/learn`
 - `src/lib/set-service.ts` — สร้างชุด · ตั้งค่า · อัปโหลด (ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยันด้วย HEAD) · `getSetDetail()` (มีเฉลย — เฉพาะ `canManage`)
 - `/sets/[id]` — แถบขั้นตอน `?tab=` ตั้งค่า · เอกสาร · ข้อสอบ · ผู้รับ · ผู้เรียน · ประวัติ (ADR-0014) · client component ต่อขั้น:
   `approver-picker` · `docs-manager` + `doc-preview` (เล่นวิดีโอ/อ่าน PDF ให้คนที่ทำงานกับชุด · `previewLink()` · Pricelist ทาง `/sets/[id]/doc/[documentId]`) ·

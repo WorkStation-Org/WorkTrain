@@ -13,7 +13,10 @@ export const dynamic = "force-dynamic";
 
 const REASON: Record<string, string> = { submitted: "ส่งเอง", timeout: "หมดเวลา", left_page: "ออกจากหน้าสอบครบ 5 ครั้ง" };
 
-/** หน้าเรียนของการมอบหนึ่ง — สแกนเริ่มรอบ → อ่านครบทุกหน้า + ดูวิดีโอครบทุกช่วง → สแกนเริ่มสอบ (spec §9 · §10) */
+/**
+ * หน้าเรียนของการมอบหนึ่ง — สแกนเริ่มรอบ → อ่านครบทุกหน้า + ดูวิดีโอครบทุกช่วง → สแกนเริ่มสอบ (spec §9 · §10)
+ * พักการสแกนอยู่ (ADR-0019) = ปุ่มเริ่มเรียน/เริ่มสอบเฉย ๆ ไม่ต้องลงทะเบียนใบหน้า
+ */
 export default async function LearnSetPage({
   params,
   searchParams,
@@ -27,9 +30,11 @@ export default async function LearnSetPage({
   if (!view) notFound();
   const err = firstParam((await searchParams).err);
   const mode = scanMode();
-  const enrolled = (await enrollmentState(actor.personId)).state === "active";
-  const confirmedStudy = await confirmedScanFor(actor.personId, "study");
-  const confirmedExam = await confirmedScanFor(actor.personId, "exam");
+  const paused = mode === "paused";
+  const enrolled = paused || (await enrollmentState(actor.personId)).state === "active";
+  const confirmedStudy = paused ? null : await confirmedScanFor(actor.personId, "study");
+  const confirmedExam = paused ? null : await confirmedScanFor(actor.personId, "exam");
+  const scanLabel = (step: string) => (paused ? step : `สแกนใบหน้า · ${step}`);
 
   return (
     <main className="mx-auto w-full max-w-6xl space-y-5">
@@ -85,7 +90,7 @@ export default async function LearnSetPage({
               </Button>
             </form>
           ) : (
-            <ScanFlow mode={mode} purpose="exam" assignmentId={view.assignment.id} label="สแกนใบหน้า · สอบส่วนที่เปลี่ยน" confirmedScanId={confirmedExam} />
+            <ScanFlow mode={mode} purpose="exam" assignmentId={view.assignment.id} label={scanLabel("สอบส่วนที่เปลี่ยน")} confirmedScanId={confirmedExam} />
           )}
         </Card>
       )}
@@ -114,9 +119,10 @@ export default async function LearnSetPage({
               {enrolled ? (
                 <>
                   <p className="mb-3 text-[13px] text-ink-3">
-                    สแกนใบหน้าเพื่อเริ่มรอบเรียน · นิ่งเกิน 2 นาทีรอบจะจบ ต้องสแกนใหม่ (หน้าและช่วงวิดีโอที่ดูแล้วยังนับอยู่)
+                    {paused ? "กดเริ่มรอบเรียน" : "สแกนใบหน้าเพื่อเริ่มรอบเรียน"} · นิ่งเกิน 2 นาทีรอบจะจบ ต้อง{paused ? "กดเริ่มใหม่" : "สแกนใหม่"}{" "}
+                    (หน้าและช่วงวิดีโอที่ดูแล้วยังนับอยู่)
                   </p>
-                  <ScanFlow mode={mode} purpose="study" label="สแกนใบหน้า · เริ่มเรียน" confirmedScanId={confirmedStudy} />
+                  <ScanFlow mode={mode} purpose="study" label={scanLabel("เริ่มเรียน")} confirmedScanId={confirmedStudy} />
                 </>
               ) : (
                 <p className="text-[13px] text-ink-3">ลงทะเบียนใบหน้าก่อน แล้วจึงสแกนเริ่มรอบเรียนได้</p>
@@ -125,7 +131,7 @@ export default async function LearnSetPage({
           }
           exam={
             view.state === "ready" ? (
-              <ScanFlow mode={mode} purpose="exam" assignmentId={view.assignment.id} label="สแกนใบหน้า · เริ่มสอบ" confirmedScanId={confirmedExam} />
+              <ScanFlow mode={mode} purpose="exam" assignmentId={view.assignment.id} label={scanLabel("เริ่มสอบ")} confirmedScanId={confirmedExam} />
             ) : undefined
           }
         />

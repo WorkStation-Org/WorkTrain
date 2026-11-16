@@ -538,9 +538,8 @@ export const studySessions = pgTable(
   {
     id: serial("id").primaryKey(),
     personId: integer("person_id").notNull(),
-    scanId: integer("scan_id")
-      .notNull()
-      .references(() => faceScans.id, { onDelete: "restrict" }),
+    /** null = เริ่มตอนพักการสแกน (ADR-0019) */
+    scanId: integer("scan_id").references(() => faceScans.id, { onDelete: "restrict" }),
     startedAt: ts("started_at").notNull().defaultNow(),
     lastActiveAt: ts("last_active_at").notNull().defaultNow(),
     endedAt: ts("ended_at"),
@@ -598,9 +597,8 @@ export const attempts = pgTable(
       .notNull()
       .references(() => examForms.id, { onDelete: "restrict" }),
     kind: text("kind", { enum: FORM_KINDS }).notNull(),
-    scanId: integer("scan_id")
-      .notNull()
-      .references(() => faceScans.id, { onDelete: "restrict" }),
+    /** null = เริ่มตอนพักการสแกน (ADR-0019) */
+    scanId: integer("scan_id").references(() => faceScans.id, { onDelete: "restrict" }),
     /** รอบอ่านของการมอบตอนเริ่มสอบ — "ไม่ผ่าน 2 ครั้งติด" นับเฉพาะครั้งในรอบอ่านเดียวกัน (อ่านใหม่ = เริ่มนับใหม่) */
     readRound: smallint("read_round").notNull().default(1),
     /** `[{ questionId, choiceIds: [...] }]` ตามลำดับที่แสดง */
