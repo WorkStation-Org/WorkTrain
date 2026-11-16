@@ -21,7 +21,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/session.ts` + `src/proxy.ts` — session cookie ที่เซ็นแล้ว · ถาม WorkID ใหม่ทุก 5 นาที (fail-open)
 - `src/lib/workid.ts` — SSO · `/v1/session/check` · `fetchOrg()` (ผัง: `positionId` · `teamId` · `managedTeamIds` · `managerPersonId` · `lineGroupId`)
 - `src/lib/gateway.ts` — client ของ WorkGateWay · `src/lib/deliver.ts` — ส่งตัวต่อตัว/เข้ากลุ่มประจำตัว พร้อมจองแถวและบันทึกผล (ยกจาก WorkDaily)
-- `src/domain/audience.ts` — เงื่อนไขผู้รับ → รายชื่อ · `src/lib/assignment-service.ts` — ผู้รับ · มอบ (`syncAssignments`) · เตือน (`runReminders`) · แจ้งเรื่องอนุมัติ
+- `src/domain/audience.ts` — เงื่อนไขผู้รับ → รายชื่อ · `src/lib/assignment-service.ts` — ผู้รับ · มอบ/ตัดจบ/เปิดใหม่ (`syncAssignments`) · เตือน (`runReminders`) ·
+  แจ้งเรื่องอนุมัติ · ข้อความรายคนรวมต่อคนต่อรอบ (`sendCombined`) · `src/domain/assignment-end.ts` — กติกาตัดจบ · ด่านกันผังเพี้ยน · ซ่อนจากรายชื่อ (ADR-0017)
 - `src/lib/onboarding-service.ts` — เส้นทาง Onboarding (`/admin/onboarding`) · `trainingStatus()` ให้ WorkHR ·
   `src/lib/api-consumers.ts` — ด่าน `/api/v1/*` (Bearer `wtr_…` · ตาราง `api_consumers` เก็บแค่ hash · TG ออก/ถอนที่ `/admin/api-keys` · ADR-0012)
 - `src/domain/stats.ts` — สถิติรายคนต่อเดือน · Leaderboard (คะแนนครั้งแรก → ความไว) · `src/lib/stats-service.ts` — `/dashboard` ·
@@ -48,7 +49,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/exam-service.ts` — ออกข้อสอบ · แก้/ออกใหม่ทีละข้อ (ลงประวัติก่อน/หลัง) · `examTemplate()` / `importExams()` (ADR-0015)
 - `src/lib/exam-sheet.ts` — **ที่เดียวที่แตะ exceljs** · Template .xlsx ของชุด · `parseSheet()` ตรวจทุกแถวบอกเลขแถว แล้ว `checkForms()` เป็นด่านสุดท้าย ·
   ปุ่ม `sets/[id]/exam-import.tsx` (Template · Import) · route `/sets/[id]/exam-template`
-- `src/lib/approval-service.ts` — ส่ง · ตีกลับ · อนุมัติ · ลบร่าง / ปิดชุด (`deleteDraft` · `closeSet` · ADR-0016 — ลบแถวจริงไม่ได้เพราะประวัติมีแต่ insert)
+- `src/lib/approval-service.ts` — ส่ง · ตีกลับ · อนุมัติ · ลบร่าง / ปิดชุด (`deleteDraft` · `closeSet` · ADR-0016 — ลบแถวจริงไม่ได้เพราะประวัติมีแต่ insert) ·
+  ใครทำในฐานะผู้อนุมัติได้ = `approverRole()` ใน set-service (ผู้อนุมัติที่ระบุ หรือ TG กดแทน · `detail.onBehalfOf` · ADR-0018) ·
+  ใครแก้ผู้รับได้แบบไหน = `audienceMode()` (`full` ผู้สร้าง/TG · `addOnly` ผู้อนุมัติ)
 - `src/lib/version-service.ts` — เวอร์ชันใหม่ (spec §7): เริ่ม · สรุปด้วย AI · ส่ง · ผู้อนุมัติเลือกอ่านเพื่อรับทราบ/เรียนรู้และทดสอบ (`small`/`large`) · ข้อสอบส่วนที่เปลี่ยน (`DELTA_BLUEPRINT`) · อนุมัติ + แจ้งคนที่ผ่านแล้ว ·
   ฝั่งผู้เรียน `pendingUpdate()` / `acknowledgeVersion()` ใน learn-service · เวอร์ชันแรกยังใช้สถานะของชุด (approval-service)
 - `src/lib/watermark.ts` — ประทับลายน้ำ Pricelist ทุกหน้า · `pricelistPdf()` + route `/learn/[id]/doc/[documentId]` (ไม่ส่งไฟล์ต้นฉบับ)

@@ -9,7 +9,8 @@ import { saveAudienceAction } from "../actions";
 
 /**
  * ผู้รับ (spec §5) — ค้นหา + แท็บตามชนิดเงื่อนไข · ชิปของที่เลือก · รายชื่อคำนวณสดตามที่ติ๊ก (ไม่ต้องบันทึกก่อน)
- * ชุดที่ใช้อยู่: สรุปก่อนบันทึกว่าใครจะได้รับมอบเพิ่ม (มอบทันที) และใครไม่ตรงเงื่อนไขแล้ว (เก็บการมอบเดิมไว้)
+ * ชุดที่ใช้อยู่: สรุปก่อนบันทึกว่าใครจะได้รับมอบเพิ่ม (มอบทันที) และใครไม่ตรงเงื่อนไขแล้ว (ตัดจบทันทีเมื่อบันทึก)
+ * ผู้อนุมัติ (`addOnly` · ADR-0018): เพิ่มเงื่อนไขได้ · เงื่อนไขของผู้สร้างล็อกไว้ เอาออกได้เฉพาะที่ตัวเองเพิ่ม · ผู้สร้างได้ LINE
  */
 
 export interface AudiencePerson {
@@ -28,6 +29,8 @@ interface Rule {
   kind: AudienceKind;
   refId: number;
   label: string;
+  /** คนที่เพิ่มเงื่อนไขนี้ ถ้าไม่ใช่ผู้สร้าง · null = ผู้สร้าง */
+  addedByPersonId?: number | null;
 }
 
 const TABS: { kind: Kind; label: string }[] = [
@@ -46,14 +49,23 @@ export function AudiencePicker({
   editable,
   active,
   assignedIds,
+  pathIds = [],
+  mode = "full",
+  actorId,
 }: {
   setId: number;
   people: AudiencePerson[];
   initialRules: Rule[];
   editable: boolean;
-  /** ชุดที่ใช้อยู่ — สรุปก่อนบันทึก และมอบทันทีหลังบันทึก */
+  /** ชุดที่ใช้อยู่ — สรุปก่อนบันทึก และมอบ/ตัดจบทันทีหลังบันทึก */
   active: boolean;
+  /** คนที่มีการมอบที่ยังเปิดอยู่ (ไม่นับที่ตัดจบแล้ว) */
   assignedIds: number[];
+  /** คนที่ยังตรงผ่านเส้นทาง Onboarding ของชุดนี้ — ไม่ถูกตัดจบแม้ไม่ตรงเงื่อนไขผู้รับ */
+  pathIds?: number[];
+  /** `addOnly` = ผู้อนุมัติ: เพิ่มได้ · ลบได้เฉพาะที่ตัวเองเพิ่ม */
+  mode?: "full" | "addOnly";
+  actorId?: number;
 }) {
   const router = useRouter();
   const [rules, setRules] = useState<Rule[]>(initialRules);
@@ -65,16 +77,26 @@ export function AudiencePicker({
 
   const options = useMemo(() => audienceOptions(people), [people]);
   const chosen = useMemo(() => resolveAudience(people, rules), [people, rules]);
-  const before = useMemo(() => resolveAudience(people, initialRules), [people, initialRules]);
   const chosenIds = useMemo(() => new Set(chosen.map((p) => p.personId)), [chosen]);
   const assigned = useMemo(() => new Set(assignedIds), [assignedIds]);
+  const onPath = useMemo(() => new Set(pathIds), [pathIds]);
+  const nameOf = useMemo(() => new Map(people.map((p) => [p.personId, p.fullName])), [people]);
   const dirty = rules.map(keyOf).sort().join() !== initialRules.map(keyOf).sort().join();
   const picked = new Set(rules.map(keyOf));
+  // ผู้อนุมัติเอาเงื่อนไขที่คนอื่นตั้งไว้ออกไม่ได้ (เซิร์ฟเวอร์ตรวจซ้ำ)
+  const initialBy = useMemo(() => new Map(initialRules.map((r) => [keyOf(r), r.addedByPersonId ?? null])), [initialRules]);
+  const locked = (r: { kind: string; refId: number }) => mode === "addOnly" && initialBy.has(keyOf(r)) && initialBy.get(keyOf(r)) !== actorId;
 
+  // คนที่เคยถูกตัดจบแล้วกลับมาตรง = เปิดการมอบเดิมใหม่ (นับเป็นได้รับมอบทันทีเหมือนกัน)
   const added = chosen.filter((p) => !assigned.has(p.personId));
-  const leaving = before.filter((p) => !chosenIds.has(p.personId) && assigned.has(p.personId));
+  // ตัดจบเมื่อบันทึก — มีการมอบที่เปิดอยู่ แต่ไม่ตรงเงื่อนไขใหม่และไม่ตรงเส้นทาง Onboarding (รวมคนที่ลาออกแล้วแต่ยังไม่ถูกตัด)
+  const leaving = assignedIds.filter((id) => !chosenIds.has(id) && !onPath.has(id)).map((id) => ({ personId: id, fullName: nameOf.get(id) ?? "ไม่อยู่ในผังแล้ว" }));
+
+  const changes = [added.length > 0 && `มอบให้ ${added.length} คน`, leaving.length > 0 && `ตัดจบ ${leaving.length} คน`].filter(Boolean);
+  const saveLabel = changes.length ? `บันทึก — ${changes.join(" · ")}` : "บันทึก";
 
   function toggle(r: Rule) {
+    if (locked(r)) return;
     setMsg(null);
     setConfirming(false);
     setRules((rs) => (rs.some((x) => keyOf(x) === keyOf(r)) ? rs.filter((x) => keyOf(x) !== keyOf(r)) : [...rs, r]));
@@ -110,7 +132,10 @@ export function AudiencePicker({
     setBusy(false);
     setConfirming(false);
     if (!out?.ok) return setMsg({ ok: false, text: out?.error ?? "บันทึกไม่สำเร็จ" });
-    setMsg({ ok: true, text: active ? `บันทึกผู้รับแล้ว · มอบให้ ${out.assigned} คนเพิ่ม` : "บันทึกผู้รับแล้ว" });
+    setMsg({
+      ok: true,
+      text: active ? `บันทึกผู้รับแล้ว · มอบให้ ${out.assigned + out.reopened} คน${out.ended ? ` · ตัดจบ ${out.ended} คน` : ""}` : "บันทึกผู้รับแล้ว",
+    });
     router.refresh();
   }
 
@@ -160,7 +185,7 @@ export function AudiencePicker({
             {rules.map((r) => (
               <span key={keyOf(r)} className="inline-flex min-h-8 items-center gap-1.5 rounded-full bg-fg pl-3 pr-1 text-[12px] text-canvas">
                 <span className="opacity-70">{KIND_LABEL[r.kind]}</span> {r.label}
-                {editable ? (
+                {editable && !locked(r) ? (
                   <button type="button" onClick={() => toggle(r)} aria-label={`เอา ${r.label} ออก`} className="flex size-6 items-center justify-center rounded-full hover:bg-white/15">
                     ×
                   </button>
@@ -174,6 +199,11 @@ export function AudiencePicker({
 
         {editable && (
           <>
+            {mode === "addOnly" && (
+              <p className="px-4 pt-3 text-[12px] text-ink-2">
+                ผู้อนุมัติเพิ่มผู้รับได้ · เงื่อนไขที่ผู้สร้างตั้งไว้เอาออกไม่ได้ (ลบได้เฉพาะที่คุณเพิ่ม) · บันทึกแล้วแจ้งผู้สร้างทาง LINE และลงประวัติ
+              </p>
+            )}
             {tab === "position" && options.peopleWithoutPosition > 0 && (
               <p className="px-4 pt-3 text-[12px] text-warn">
                 {options.peopleWithoutPosition} คนยังไม่มีรหัสตำแหน่งใน WorkID — จะไม่ติดเงื่อนไขตำแหน่งจนกว่า WorkHR จะเติมให้ (เลือกตามทีมหรือรายคนแทนได้)
@@ -187,7 +217,7 @@ export function AudiencePicker({
                 return (
                   <li key={keyOf(o)}>
                     <label className={`flex min-h-14 cursor-pointer items-center gap-3 rounded-[10px] px-3 py-2 ${on ? "bg-subtle ring-1 ring-fg" : "hover:bg-canvas"}`}>
-                      <input type="checkbox" checked={on} onChange={() => toggle(o)} className="size-[18px] accent-[var(--color-fg)]" />
+                      <input type="checkbox" checked={on} disabled={locked(o)} onChange={() => toggle(o)} className="size-[18px] accent-[var(--color-fg)] disabled:opacity-50" />
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate text-[14px] font-semibold text-fg">{o.label}</span>
                         <span className="truncate text-[12px] text-muted">{o.sub}</span>
@@ -244,14 +274,17 @@ export function AudiencePicker({
                 </div>
                 {leaving.length > 0 && (
                   <div className="rounded-[10px] bg-warn-soft px-3 py-2.5 text-[13px]">
-                    <strong className="text-warn">{leaving.length} คนไม่ตรงเงื่อนไขแล้ว — เก็บการมอบเดิมไว้</strong>
-                    <p className="mt-1 text-ink-2">{leaving.slice(0, 12).map((p) => p.fullName).join(" · ")}</p>
-                    <p className="mt-1 text-[12px] text-muted">ยังเรียนต่อได้ · ผลสอบเดิมยังนับ</p>
+                    <strong className="text-warn">บันทึกแล้วจะตัดจบ {leaving.length} คน — ไม่ตรงเงื่อนไขแล้ว</strong>
+                    <p className="mt-1 text-ink-2">
+                      {leaving.slice(0, 12).map((p) => p.fullName).join(" · ")}
+                      {leaving.length > 12 ? ` และอีก ${leaving.length - 12} คน` : ""}
+                    </p>
+                    <p className="mt-1 text-[12px] text-muted">หยุดเตือน · ชุดหายจากหน้าของเขา · แจ้งทาง LINE ว่าไม่ต้องเรียนแล้ว · คนที่สอบผ่านแล้วยังนับว่าผ่าน</p>
                   </div>
                 )}
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="primary" onClick={save} disabled={busy}>
-                    {busy ? "กำลังบันทึก…" : added.length ? `บันทึก และมอบให้ ${added.length} คน` : "บันทึก"}
+                  <Button type="button" variant={leaving.length ? "danger" : "primary"} onClick={save} disabled={busy}>
+                    {busy ? "กำลังบันทึก…" : saveLabel}
                   </Button>
                   <Button type="button" variant="ghost" onClick={() => setConfirming(false)} disabled={busy}>
                     กลับไปแก้

@@ -2,8 +2,8 @@ import Link from "next/link";
 import { Badge, Button, Card, EmptyState, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SELECT_CLASS } from "@/components/ui";
 import { firstParam, pageActor } from "@/lib/page";
 import { activeKinds, listKinds } from "@/lib/kind-service";
-import { canDeleteDraft, listManagedSets, type SetRow } from "@/lib/set-service";
-import { formatBangkok } from "@/lib/time";
+import { canDeleteDraft, listManagedSets, pendingSince, type SetRow } from "@/lib/set-service";
+import { ageInDays, formatBangkok } from "@/lib/time";
 import { createSetAction } from "./actions";
 import { EndSetButton } from "./end-set-button";
 import { Flash, STATUS } from "./ui";
@@ -13,13 +13,24 @@ export const dynamic = "force-dynamic";
 /**
  * ชุดการเรียนรู้ที่คนนี้ทำงานด้วย — ของตัวเอง + ที่เป็นผู้อนุมัติ · TG เห็นทุกชุด
  * ร่างลบได้จากรายการ · ชุดที่ปิดแล้วพับไว้ท้ายรายการ (ADR-0016)
+ * งานที่รออนุมัติ (ชุดใหม่ · เวอร์ชันใหม่) ขึ้นบนสุด "รออนุมัติ (n)" — บอกว่ารอใครมากี่วัน · TG อนุมัติแทนได้ (ADR-0018)
  */
 export default async function SetsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const actor = await pageActor();
   const sp = await searchParams;
   const all = await listManagedSets(actor);
-  const sets = all.filter((s) => s.status !== "closed");
+  const open = all.filter((s) => s.status !== "closed");
   const closed = all.filter((s) => s.status === "closed");
+  const pending = await pendingSince(open);
+  const waiting = open.filter((s) => pending.has(s.id)).sort((a, b) => pending.get(a.id)!.since.getTime() - pending.get(b.id)!.since.getTime());
+  const sets = open.filter((s) => !pending.has(s.id));
+  const now = new Date();
+  const waitNote = (s: SetRow) => {
+    const p = pending.get(s.id);
+    if (!p) return null;
+    const days = ageInDays(p.since, now);
+    return `รอ ${s.approverName ?? "ผู้อนุมัติ"} อนุมัติ${p.what === "version" ? "เวอร์ชันใหม่" : ""} · ${days > 0 ? `รอมา ${days} วัน` : "ส่งวันนี้"}`;
+  };
   const canCreate = actor.role === "admin" || actor.role === "author";
   const kinds = canCreate ? await activeKinds() : [];
   const kindNames = new Map((await listKinds()).map((k) => [k.id, k.name]));
@@ -53,7 +64,14 @@ export default async function SetsPage({ searchParams }: { searchParams: Promise
         </Card>
       )}
 
-      {sets.length === 0 ? (
+      {waiting.length > 0 && (
+        <section aria-label="รออนุมัติ" className="mb-5">
+          <h2 className="mb-2 text-[13px] font-semibold text-warn">รออนุมัติ ({waiting.length})</h2>
+          <SetList sets={waiting} kindNames={kindNames} canDelete={() => false} note={waitNote} />
+        </section>
+      )}
+
+      {sets.length === 0 && waiting.length === 0 ? (
         <EmptyState title="ยังไม่มีชุดการเรียนรู้" />
       ) : (
         <SetList sets={sets} kindNames={kindNames} canDelete={(s) => canDeleteDraft(actor, s)} />
@@ -71,7 +89,18 @@ export default async function SetsPage({ searchParams }: { searchParams: Promise
   );
 }
 
-function SetList({ sets, kindNames, canDelete }: { sets: SetRow[]; kindNames: Map<number, string>; canDelete: (s: SetRow) => boolean }) {
+function SetList({
+  sets,
+  kindNames,
+  canDelete,
+  note,
+}: {
+  sets: SetRow[];
+  kindNames: Map<number, string>;
+  canDelete: (s: SetRow) => boolean;
+  /** บรรทัดเพิ่ม (รออนุมัติ: รอใคร · กี่วัน) */
+  note?: (s: SetRow) => string | null;
+}) {
   return (
     <ul className="space-y-2">
       {sets.map((s) => (
@@ -90,6 +119,7 @@ function SetList({ sets, kindNames, canDelete }: { sets: SetRow[]; kindNames: Ma
             <p className="mt-1 text-[12px] text-ink-3">
               {kindNames.get(s.kindId)} · ผู้สร้าง {s.authorName} · ผู้อนุมัติ {s.approverName ?? "ยังไม่ได้เลือก"} · แก้ล่าสุด {formatBangkok(s.updatedAt)}
             </p>
+            {note?.(s) && <p className="mt-1 text-[12px] font-semibold text-warn">{note(s)}</p>}
           </Card>
         </li>
       ))}
