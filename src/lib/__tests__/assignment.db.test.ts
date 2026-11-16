@@ -90,12 +90,12 @@ describe("ผู้รับ", () => {
           { kind: "position", refId: 41, label: "ซ้ำ" },
         ],
       }),
-    ).toEqual({ ok: true, assigned: 0 });
+    ).toEqual({ ok: true, assigned: 0, ended: 0, reopened: 0 });
     const preview = await previewAudience(set.id);
     expect(preview.ok && preview.people.map((p) => p.personId)).toEqual([20, 31, 32]);
   });
 
-  it("ชุดที่ใช้อยู่: ผู้สร้างเพิ่มผู้รับได้ · คนใหม่ได้รับมอบทันทีพร้อมแจ้ง · คนที่หลุดเงื่อนไขเก็บการมอบไว้ · ลงประวัติ", async () => {
+  it("ชุดที่ใช้อยู่: ผู้สร้างเพิ่มผู้รับได้ · คนใหม่ได้รับมอบทันทีพร้อมแจ้ง · คนที่หลุดเงื่อนไขถูกตัดจบพร้อมแจ้ง · ลงประวัติ", async () => {
     const set = await activeSet();
     await setAudience({ actor: pd, setId: set.id, rules: [{ kind: "position", refId: 41, label: "Sales" }] });
     await activate(set.id);
@@ -113,9 +113,15 @@ describe("ผู้รับ", () => {
       ],
       now: MON,
     });
-    expect(out).toEqual({ ok: true, assigned: 1 });
-    expect((await assignmentRows()).map((a) => a.personId)).toEqual([31, 32, 40]);
-    expect(pushes.some((p) => p.text.includes("F331 Signature"))).toBe(true);
+    expect(out).toEqual({ ok: true, assigned: 1, ended: 1, reopened: 0 });
+    // ไม่ลบแถว — เซลหนึ่ง (31) ถูกตัดจบเพราะยังอยู่ในผังแต่ไม่ตรงเงื่อนไข
+    expect((await assignmentRows()).map((a) => [a.personId, a.endReason])).toEqual([
+      [31, "not_in_audience"],
+      [32, null],
+      [40, null],
+    ]);
+    expect(pushes.some((p) => p.text.includes("📚 ชุดการเรียนรู้ใหม่: F331 Signature"))).toBe(true);
+    expect(pushes.some((p) => p.text.includes("เซล หนึ่ง") && p.text.includes("📕 ชุดการเรียนรู้ F331 Signature ไม่ต้องเรียนแล้ว"))).toBe(true);
     const [ev] = await testDb().select().from(schema.approvalEvents).where(eq(schema.approvalEvents.action, "audience_changed"));
     expect(ev).toMatchObject({ actorPersonId: 10, comment: "ทีม QC · เซล สอง" });
   });
@@ -210,7 +216,8 @@ describe("เตือนแบบไล่ระดับ (spec §11)", () => {
   it("วันที่ 3 ยังไม่เริ่ม → เตือนตัวต่อตัว · รันซ้ำวันเดียวกันไม่เตือนซ้ำ", async () => {
     await assignedDaysAgo(3);
     expect((await runReminders({ now: MON })).day3).toMatchObject({ sent: 2 });
-    expect((await runReminders({ now: MON })).day3).toMatchObject({ sent: 0, duplicate: 2 });
+    expect((await runReminders({ now: MON })).day3).toMatchObject({ sent: 0, duplicate: 0 });
+    expect(pushes).toHaveLength(2);
   });
 
   it("นับวันตามปฏิทินไทย — มอบบ่ายศุกร์ เตือนวันที่ 3 เช้าจันทร์ ไม่ใช่อังคาร", async () => {
@@ -341,5 +348,115 @@ describe("แจ้งเรื่องการอนุมัติ", () => {
     expect(await retryApprovalNotices()).toMatchObject({ sent: 1 });
     expect(pushes.at(-1)?.text).toContain("ส่งข้อสอบให้ตรวจ");
     expect(await retryApprovalNotices()).toMatchObject({ sent: 0 });
+  });
+});
+
+describe("ตัดจบ · เปิดใหม่ · ด่านกันผังเพี้ยน · รวมข้อความต่อคน (16 พ.ย. 2569)", () => {
+  async function salesSet(title = "F331 Signature") {
+    const set = await activeSet(title);
+    await setAudience({ actor: pd, setId: set.id, rules: [{ kind: "position", refId: 41, label: "Sales" }] });
+    await activate(set.id);
+    return set;
+  }
+  function withOrg(people: readonly Record<string, unknown>[]) {
+    vi.stubEnv("WORKTRAIN_DEV_ORG", JSON.stringify(people));
+    clearOrgCache();
+  }
+  const day = (n: number) => new Date(MON.getTime() + n * DAY);
+  const byPerson = async (personId: number) => (await assignmentRows()).find((r) => r.personId === personId)!;
+
+  it("ลาออก (หายจากผัง) → ตัดจบ left_org ไม่แจ้งใคร · กลับมาทำงาน → เปิดการมอบเดิม นับวันใหม่ แจ้ง 'ได้รับมอบอีกครั้ง'", async () => {
+    await salesSet();
+    await syncAssignments({ now: MON });
+    pushes = [];
+    withOrg(ORG.filter((p) => p.personId !== 32));
+    expect(await syncAssignments({ now: day(1), guard: false })).toMatchObject({ ended: 1, notified: { sent: 0 } });
+    expect(await byPerson(32)).toMatchObject({ endReason: "left_org", assignRound: 1 });
+    expect(pushes).toHaveLength(0);
+
+    withOrg(ORG);
+    expect(await syncAssignments({ now: day(10), guard: false })).toMatchObject({ reopened: 1, notified: { sent: 1 } });
+    const back = await byPerson(32);
+    expect(back).toMatchObject({ endedAt: null, endReason: null, assignRound: 2 });
+    expect(back.assignedAt.getTime()).toBe(day(10).getTime());
+    expect(back.dueAt.getTime() - day(10).getTime()).toBe(7 * DAY);
+    expect(pushes[0].text).toContain("🔁 ได้รับมอบอีกครั้ง: F331 Signature");
+    // เปิดใหม่แล้วเตือนวันที่ 3 ของรอบใหม่ได้ (คีย์แยกตามรอบ) · เซลหนึ่งเลยกำหนดไปแล้วจึงไม่อยู่ในวันที่ 3
+    pushes = [];
+    expect((await runReminders({ now: day(13) })).day3).toMatchObject({ sent: 1 });
+    expect(pushes[0].text).toContain("เซล สอง");
+  });
+
+  it("ย้ายตำแหน่ง → ตัดจบ not_in_audience + แจ้ง 'ไม่ต้องเรียนแล้ว' · ผ่านแล้วค่อยย้าย = ตัดจบแต่ยังผ่าน ไม่แจ้ง · ไม่เตือนการมอบที่ตัดจบ", async () => {
+    await salesSet();
+    await syncAssignments({ now: MON });
+    const s1 = await byPerson(31);
+    await testDb().update(schema.assignments).set({ passedAt: MON }).where(eq(schema.assignments.id, s1.id));
+    pushes = [];
+    withOrg(ORG.map((p) => (p.personId === 31 || p.personId === 32 ? { ...p, positionId: 77 } : p)));
+    expect(await syncAssignments({ now: day(1), guard: false })).toMatchObject({ ended: 2, notified: { sent: 1 } });
+    expect(await byPerson(31)).toMatchObject({ endReason: "not_in_audience", passedAt: MON });
+    expect(await byPerson(32)).toMatchObject({ endReason: "not_in_audience", passedAt: null });
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0].text).toContain("เซล สอง");
+    expect(pushes[0].text).toContain("📕 ชุดการเรียนรู้ F331 Signature ไม่ต้องเรียนแล้ว");
+    pushes = [];
+    expect(await runReminders({ now: day(5) })).toMatchObject({ day3: { sent: 0 }, day5: { sent: 0 } });
+  });
+
+  it("ฝั่งผู้เรียน: ตัดจบที่ยังไม่ผ่าน = ชุดหายจากรายการ · ผ่านแล้วถูกตัดจบยังอยู่ในรายการ", async () => {
+    const L = await import("@/lib/learn-service");
+    await salesSet();
+    await syncAssignments({ now: MON });
+    withOrg(ORG.map((p) => (p.personId === 32 ? { ...p, positionId: 77 } : p)));
+    await syncAssignments({ now: day(1), guard: false });
+    expect(await L.myAssignments(32)).toEqual([]);
+    expect(await L.myAssignments(31)).toHaveLength(1);
+    const s2 = await byPerson(32);
+    await testDb().update(schema.assignments).set({ passedAt: MON }).where(eq(schema.assignments.id, s2.id));
+    expect(await L.myAssignments(32)).toHaveLength(1);
+  });
+
+  it("ด่าน: รอบอัตโนมัติจะตัดจบเกิน 10% → หยุดไว้ แจ้ง TG ครั้งเดียว · วันถัดไปผังยังเหมือนเดิม → ตัดจบ", async () => {
+    vi.stubEnv("WORKTRAIN_DEV_ADMINS", "20");
+    await salesSet();
+    await syncAssignments({ now: MON });
+    pushes = [];
+    withOrg(ORG.filter((p) => p.personId !== 32));
+    expect(await syncAssignments({ now: day(1) })).toMatchObject({ ended: 0, heldEnds: 1 });
+    expect((await assignmentRows()).every((r) => r.endedAt === null)).toBe(true);
+    expect(pushes.filter((p) => p.text.includes("หยุดไว้ก่อน"))).toHaveLength(1);
+    // วันเดียวกันรันซ้ำ — ยังหยุด และไม่แจ้ง TG ซ้ำ
+    expect(await syncAssignments({ now: day(1) })).toMatchObject({ ended: 0, heldEnds: 1 });
+    expect(pushes.filter((p) => p.text.includes("หยุดไว้ก่อน"))).toHaveLength(1);
+    // วันถัดไปผังยังบอกเหมือนเดิม = ไม่ใช่ผังเพี้ยนชั่วคราว
+    expect(await syncAssignments({ now: day(2) })).toMatchObject({ ended: 1 });
+    expect(await byPerson(32)).toMatchObject({ endReason: "left_org" });
+  });
+
+  it("คนเดียวได้หลายชุดในรอบเดียว → ข้อความเดียว · รอบถัดไปไม่ส่งซ้ำแยกทีละชุด", async () => {
+    await salesSet("ชุด ก");
+    await salesSet("ชุด ข");
+    pushes = [];
+    expect(await syncAssignments({ now: MON })).toMatchObject({ assigned: 4, notified: { sent: 4 } });
+    expect(pushes).toHaveLength(2);
+    expect(pushes[0].text).toContain("📚 ชุดการเรียนรู้ใหม่ 2 ชุด");
+    expect(pushes[0].text).toContain("- ชุด ก · ภายใน");
+    expect(pushes[0].text).toContain("- ชุด ข · ภายใน");
+    pushes = [];
+    expect(await syncAssignments({ now: day(1) })).toMatchObject({ notified: { sent: 0 } });
+    expect(pushes).toHaveLength(0);
+  });
+
+  it("เตือนวันที่ 3 หลายชุดของคนเดียวกัน → ข้อความเดียว", async () => {
+    await salesSet("ชุด ก");
+    await salesSet("ชุด ข");
+    await syncAssignments({ now: day(-3) });
+    pushes = [];
+    expect((await runReminders({ now: MON })).day3).toMatchObject({ sent: 4 });
+    expect(pushes).toHaveLength(2);
+    expect(pushes[0].text).toContain("⏰ ยังไม่ได้เริ่มเรียน 2 ชุด");
+    pushes = [];
+    expect((await runReminders({ now: day(1) })).day3).toMatchObject({ sent: 0 });
   });
 });

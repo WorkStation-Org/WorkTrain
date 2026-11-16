@@ -387,6 +387,13 @@ export const onboardingPaths = pgTable(
 export const ASSIGNMENT_SOURCES = ["audience", "onboarding"] as const;
 
 /**
+ * เหตุที่ตัดจบ (CONTEXT.md) — `left_org` = ไม่อยู่ในผัง WorkID แล้ว (พ้นสภาพ) ·
+ * `not_in_audience` = ยังอยู่แต่ไม่ตรงเงื่อนไขผู้รับ/เส้นทาง Onboarding ของชุดแล้ว (ย้ายทีม · ผู้สร้างแก้เงื่อนไข)
+ */
+export const END_REASONS = ["left_org", "not_in_audience"] as const;
+export type EndReason = (typeof END_REASONS)[number];
+
+/**
  * การมอบ (CONTEXT.md) — คนหนึ่งต่อชุดหนึ่งมีได้แถวเดียว
  * `passedAt` = สอบผ่านชุดเต็มครั้งแรก · ผ่านแล้วไม่ย้อนกลับ (เรียนรู้และทดสอบ สอบเพิ่มที่ `delta` แยก)
  */
@@ -407,12 +414,21 @@ export const assignments = pgTable(
     relearnRequiredAt: ts("relearn_required_at"),
     /** รอบการอ่านปัจจุบัน — เริ่ม 1 · ต้องอ่านใหม่ = +1 แล้วนับหน้าที่อ่านใหม่ทั้งหมดใน `reading_progress` รอบนั้น */
     readRound: smallint("read_round").notNull().default(1),
+    /**
+     * ตัดจบเมื่อ (รอบ sync เห็นว่าไม่ตรงเงื่อนไขผู้รับแล้ว) · null = ยังเปิดอยู่
+     * ★ ไม่ลบแถว — ผลสอบยังอยู่ · ผ่านแล้วยังนับว่าผ่าน แต่ไม่รับเวอร์ชันใหม่ · กลับมาตรงเงื่อนไข = เปิดแถวเดิมใหม่
+     */
+    endedAt: ts("ended_at"),
+    endReason: text("end_reason", { enum: END_REASONS }),
+    /** รอบที่ได้รับมอบ — เริ่ม 1 · เปิดใหม่หลังตัดจบ = +1 (dedupe key ของข้อความวันที่ 0 / เตือน แยกตามรอบ) */
+    assignRound: smallint("assign_round").notNull().default(1),
     createdAt: ts("created_at").notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex("assignments_set_person_uniq").on(t.setId, t.personId),
     index("assignments_person_idx").on(t.personId),
     check("assignments_due_after_assigned", sql`${t.dueAt} > ${t.assignedAt}`),
+    check("assignments_end_pair", sql`(${t.endedAt} is null) = (${t.endReason} is null)`),
   ],
 );
 

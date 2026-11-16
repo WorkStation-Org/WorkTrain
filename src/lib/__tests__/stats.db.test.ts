@@ -105,6 +105,33 @@ describe("Dashboard", () => {
     expect(d.teams.map((t) => t.name).sort()).toEqual(["QC", "ขาย"]);
   });
 
+  it("ซ่อนคนลาออกและการมอบที่ตัดจบที่ยังไม่ผ่าน · ตัดจบที่ผ่านแล้วยังแสดง · showHidden แสดงกลับพร้อมบอกว่าอยู่ในผังไหม", async () => {
+    const set = await seed();
+    await assign(set.id, 31);
+    const a32 = await assign(set.id, 32, "2026-11-03T09:00:00");
+    const a40 = await assign(set.id, 40);
+    // 32 ผ่านแล้วค่อยย้ายทีม (ตัดจบแต่ยังแสดง) · 40 ย้ายก่อนผ่าน (ซ่อน) · 31 ลาออก (หายจากผัง = ซ่อน)
+    const { eq } = await import("drizzle-orm");
+    const ended = { endedAt: at("2026-11-05T09:00:00"), endReason: "not_in_audience" as const };
+    await testDb().update(schema.assignments).set(ended).where(eq(schema.assignments.id, a32.id));
+    await testDb().update(schema.assignments).set(ended).where(eq(schema.assignments.id, a40.id));
+    vi.stubEnv("WORKTRAIN_DEV_ORG", JSON.stringify(ORG.filter((p) => p.personId !== 31)));
+    clearOrgCache();
+
+    const tg = { personId: 1, role: "admin" as const };
+    const d = (await S.dashboard(tg, { month: NOV }))!;
+    expect(d.rows.map((r) => r.personId)).toEqual([32]);
+    expect(d.hiddenPeople).toBe(2);
+    expect(d.hiddenRows).toBe(2);
+    const all = (await S.dashboard(tg, { month: NOV, showHidden: true }))!;
+    expect(all.rows.map((r) => [r.personId, r.inOrg]).sort()).toEqual([
+      [31, false],
+      [32, true],
+      [40, true],
+    ]);
+    expect(all.hiddenPeople).toBe(0);
+  });
+
   it("เดือนผิดรูป = null", async () => {
     expect(await S.dashboard({ personId: 1, role: "admin" }, { month: "พ.ย." })).toBeNull();
   });

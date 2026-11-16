@@ -6,7 +6,8 @@ import { LEVEL_LABELS, slots, topicLabel, topicsOf, type Blueprint } from "@/dom
 import { aiReadable, isVideoMime } from "@/domain/document";
 import { coverage } from "@/domain/spread";
 import { FORMS_PER_VERSION, type Level } from "@/db/schema";
-import { assignmentStatus, audienceRulesOf, type AssignmentState } from "@/lib/assignment-service";
+import { hiddenFromLists, hiddenReason } from "@/domain/assignment-end";
+import { assignmentStatus, audienceRulesOf, onboardingPositionsOf, type AssignmentState } from "@/lib/assignment-service";
 import { examEditor, reviewedQuestionIds } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
 import { personLabelsFrom } from "@/lib/person-name";
@@ -108,8 +109,15 @@ export default async function SetPage({
               ? "audience"
               : "exam";
   const tab: Tab = requested && TABS.includes(requested) && (requested !== "learners" || status.length > 0) ? requested : fallback;
-  const needOrg = (tab === "settings" && editable) || tab === "audience" || tab === "learners";
+  // มีผู้เรียนแล้ว = ต้องรู้ว่าใครยังอยู่ในผัง (ตัวนับ "ผ่าน x/y" ในแถบขั้นตอนไม่นับคนที่ซ่อน) — fetchOrg จำไว้ 5 นาที
+  const needOrg = (tab === "settings" && editable) || tab === "audience" || status.length > 0;
   const org = needOrg ? await fetchOrg() : null;
+  // ถามผังไม่ได้ = null → ไม่ซ่อนใครเพราะ "ไม่อยู่ในผัง" (ไม่ซ่อนทุกคนเพราะ WorkID ล่ม) · ตัดจบที่บันทึกไว้ยังซ่อน
+  const inOrg = org?.ok ? new Set(org.people.map((p) => p.personId)) : null;
+  const shownLearners = status.filter((a) => !hiddenFromLists(a, inOrg));
+  const hiddenLearners = status.filter((a) => hiddenFromLists(a, inOrg));
+  const passedCount = shownLearners.filter((s) => s.state === "passed").length;
+  const showHidden = firstParam(sp.hidden) === "1";
 
   const steps: { key: Tab; label: string; sub: string; state: "done" | "todo" | "warn" | "info" }[] = [
     { key: "settings", label: "ตั้งค่า", sub: set.approverName ? `ผู้อนุมัติ ${set.approverName}` : "ยังไม่เลือกผู้อนุมัติ", state: set.approverName ? "done" : "warn" },
@@ -127,13 +135,16 @@ export default async function SetPage({
     },
     { key: "audience", label: "ผู้รับ", sub: rules.length ? `${rules.length} เงื่อนไข` : "ยังไม่ตั้ง", state: rules.length ? "done" : "warn" },
     ...(status.length
-      ? [{ key: "learners" as const, label: "ผู้เรียน", sub: `ผ่าน ${status.filter((s) => s.state === "passed").length}/${status.length}`, state: "info" as const }]
+      ? [{ key: "learners" as const, label: "ผู้เรียน", sub: `ผ่าน ${passedCount}/${shownLearners.length}`, state: "info" as const }]
       : []),
     { key: "history", label: "ประวัติ", sub: `${events.length} รายการ`, state: "info" },
   ];
 
   const people = org?.ok ? org.people : [];
   const labelOf = personLabelsFrom(people);
+  // คนที่ยังตรงผ่านเส้นทาง Onboarding — แก้ผู้รับแล้วไม่ถูกตัดจบ (หน้าเลือกผู้รับใช้สรุปก่อนบันทึก)
+  const pathPositions = tab === "audience" ? new Set(await onboardingPositionsOf(set.id)) : new Set<number>();
+  const pathIds = people.filter((p) => p.positionId !== null && pathPositions.has(p.positionId)).map((p) => p.personId);
   const author = people.find((p) => p.personId === set.authorPersonId);
 
   return (
@@ -402,17 +413,19 @@ export default async function SetPage({
             initialRules={rules.map((r) => ({ kind: r.kind, refId: r.refId, label: r.label }))}
             editable={audienceEditable}
             active={set.status === "active"}
-            assignedIds={status.map((s) => s.personId)}
+            assignedIds={status.filter((s) => s.endedAt === null).map((s) => s.personId)}
+            pathIds={pathIds}
           />
         ))}
 
       {tab === "learners" && (
         <Card>
           <SectionTitle className="mb-3">
-            ผู้เรียน ({status.filter((s) => s.state === "passed").length}/{status.length} ผ่านแล้ว)
+            ผู้เรียน ({passedCount}/{shownLearners.length} ผ่านแล้ว)
           </SectionTitle>
+          {org && !org.ok && <p className="mb-2 text-[12px] text-danger">ดึงผังจาก WorkID ไม่ได้ — ยังรู้ไม่ได้ว่าใครลาออก จึงแสดงทุกคนที่ยังไม่ถูกตัดจบ</p>}
           <ul className="divide-y divide-line text-[13px]">
-            {status.map((a) => (
+            {shownLearners.map((a) => (
               <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
                 <span>
                   <PersonName label={labelOf(a.personId, a.personName)} />
@@ -424,6 +437,33 @@ export default async function SetPage({
               </li>
             ))}
           </ul>
+          {/* คนลาออก · ตัดจบที่ยังไม่ผ่าน — ไม่ลบ ไม่นับ แต่ TG/ผู้สร้างกดดูย้อนหลังได้ */}
+          {hiddenLearners.length > 0 && (
+            <p className="mt-3 border-t border-line pt-3 text-[12px] text-ink-3">
+              ซ่อน {hiddenLearners.length} คนที่ไม่อยู่ในผังหรือไม่ตรงเงื่อนไขผู้รับแล้ว ·{" "}
+              <Link href={`/sets/${set.id}?tab=learners${showHidden ? "" : "&hidden=1"}`} className="underline">
+                {showHidden ? "ซ่อน" : "แสดง"}
+              </Link>
+            </p>
+          )}
+          {showHidden && hiddenLearners.length > 0 && (
+            <ul className="mt-1 divide-y divide-line text-[13px] text-ink-3">
+              {hiddenLearners.map((a) => (
+                <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
+                  <span>
+                    <PersonName label={labelOf(a.personId, a.personName)} showTeam={false} />
+                    <span className="ml-1.5 text-[11px]">
+                      · {hiddenReason(a, inOrg)}
+                      {a.endedAt ? ` · ตัดจบ ${formatBangkok(a.endedAt)}` : ""}
+                    </span>
+                  </span>
+                  <span>
+                    สอบ {a.attempts} ครั้ง · <Badge tone={STATE[a.state].tone} label={STATE[a.state].label} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       )}
 
