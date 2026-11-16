@@ -1,17 +1,20 @@
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { db } from "@/db";
 import { assignments, attempts, documents, learningSets, readingProgress, setKinds, setVersions } from "@/db/schema";
+import { hiddenFromLists } from "@/domain/assignment-end";
 import { isVideoMime, VIDEO_SEGMENT_SECONDS } from "@/domain/document";
 import { assignmentState, type AssignmentState } from "@/lib/assignment-service";
 import type { Actor } from "@/lib/auth";
 import { coverPath } from "@/lib/set-service";
+import { fetchOrg } from "@/lib/workid";
 
 /**
  * ภาพรวมชุดที่ปล่อยแล้ว (`/sets/released`) — ชุดที่อนุมัติแล้ว (ใช้อยู่ + ปิดแล้ว) ทีละการ์ด:
  * เนื้อหาของเวอร์ชันที่ผู้เรียนเห็น · ปล่อยเมื่อไร · ได้รับมอบกี่คน ผ่าน/กำลังเรียน/ยังไม่เริ่ม/เลยกำหนดเท่าไร
  *
  * การมองเห็นเดียวกับ `listManagedSets()` — ผู้สร้างเห็นชุดของตัวเอง · ผู้อนุมัติเห็นชุดที่ตัวเองอนุมัติ · TG เห็นทุกชุด
- * สถานะรายการมอบใช้ `assignmentState()` ตัวเดียวกับแท็บผู้เรียนของหน้าชุด — ตัวเลขบนการ์ดตรงกับในชุดเสมอ
+ * สถานะรายการมอบใช้ `assignmentState()` ตัวเดียวกับแท็บผู้เรียนของหน้าชุด และไม่นับคนที่แท็บนั้นซ่อน (`hiddenFromLists()` —
+ * ลาออกแล้ว · ตัดจบที่ยังไม่ผ่าน · ADR-0017) — ตัวเลขบนการ์ดตรงกับ "ผ่าน x/y" ในชุดเสมอ
  */
 
 export interface ReleasedSet {
@@ -65,10 +68,15 @@ export async function releasedSets(actor: Pick<Actor, "personId" | "role">, now:
     ? (await db().select().from(documents).where(inArray(documents.versionId, approvedIds)).orderBy(documents.sortOrder)).filter((d) => d.pageCount !== null)
     : [];
 
-  const rows = await db()
-    .select({ id: assignments.id, setId: assignments.setId, passedAt: assignments.passedAt, dueAt: assignments.dueAt })
-    .from(assignments)
-    .where(inArray(assignments.setId, setIds));
+  // ถามผังไม่ได้ = null → ไม่ซ่อนใครเพราะ "ไม่อยู่ในผัง" (แบบเดียวกับแท็บผู้เรียน) · fetchOrg จำไว้ 5 นาที
+  const org = await fetchOrg(now.getTime());
+  const inOrg = org.ok ? new Set(org.people.map((p) => p.personId)) : null;
+  const rows = (
+    await db()
+      .select({ id: assignments.id, setId: assignments.setId, personId: assignments.personId, passedAt: assignments.passedAt, dueAt: assignments.dueAt, endedAt: assignments.endedAt })
+      .from(assignments)
+      .where(inArray(assignments.setId, setIds))
+  ).filter((a) => !hiddenFromLists(a, inOrg));
   // เริ่มแล้ว = มีความคืบหน้าการอ่าน หรือเคยสอบ — join ด้วย setId แทนการส่ง id การมอบทีละตัว
   const read = await db()
     .selectDistinct({ id: readingProgress.assignmentId })

@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull, lt } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, lt } from "drizzle-orm";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
 import { approvalEvents, assignments, CHANGE_KIND_LABELS, documents, examForms, FORMS_PER_VERSION, learningSets, notifications, setVersions, type ChangeKind } from "@/db/schema";
@@ -7,7 +7,7 @@ import type { Actor } from "@/lib/auth";
 import { MAX_SEND_ATTEMPTS, sendToPerson, type SendResult } from "@/lib/deliver";
 import { checkForms, type ExamModel } from "@/lib/exam-generator";
 import { formsComplete, logFormsEvent, replaceForms, sourceDocuments } from "@/lib/exam-service";
-import { canEditVersion, currentVersion, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
+import { approverRole, canEditVersion, currentVersion, onBehalfDetail, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
 import { fetchOrg } from "@/lib/workid";
 
 /**
@@ -41,8 +41,14 @@ function isOwnerOrAdmin(actor: Pick<Actor, "personId" | "role">, set: SetRow) {
   return actor.role === "admin" || set.authorPersonId === actor.personId;
 }
 
-function isVersionApprover(actor: Pick<Actor, "personId">, set: SetRow, v: VersionRow | null): v is VersionRow {
-  return v !== null && v.submittedAt !== null && set.approverPersonId === actor.personId;
+/** ผู้อนุมัติของเวอร์ชันที่รออนุมัติ — ผู้อนุมัติที่ระบุในชุด หรือ TG กดแทน (ADR-0018) */
+function isVersionApprover(actor: Pick<Actor, "personId" | "role">, set: SetRow, v: VersionRow | null): v is VersionRow {
+  return v !== null && v.submittedAt !== null && approverRole(actor, set) !== null;
+}
+
+/** detail ของประวัติเมื่อ TG กดแทน — ชุดที่ตัวเองสร้าง = `ownSet` */
+function versionTgDetail(actor: Pick<Actor, "personId" | "role">, set: SetRow) {
+  return approverRole(actor, set) === "tg" ? onBehalfDetail(set, set.authorPersonId === actor.personId) : null;
 }
 
 function eventIdOf(results: unknown[]): number {
@@ -169,7 +175,7 @@ export async function returnVersion(input: { actor: Actor; setId: number; commen
     db().update(setVersions).set({ submittedAt: null }).where(eq(setVersions.id, v.id)),
     db()
       .insert(approvalEvents)
-      .values({ setId: set.id, versionId: v.id, action: "returned", actorPersonId: input.actor.personId, actorName: input.actor.name, comment, createdAt: now })
+      .values({ setId: set.id, versionId: v.id, action: "returned", actorPersonId: input.actor.personId, actorName: input.actor.name, comment, detail: versionTgDetail(input.actor, set), createdAt: now })
       .returning({ id: approvalEvents.id }),
   ]);
   return { ok: true, eventId: eventIdOf(results) };
@@ -195,7 +201,7 @@ export async function approveVersion(input: { actor: Actor; setId: number; now?:
     db().update(learningSets).set({ updatedAt: now }).where(eq(learningSets.id, set.id)),
     db()
       .insert(approvalEvents)
-      .values({ setId: set.id, versionId: v.id, action: "approved", actorPersonId: input.actor.personId, actorName: input.actor.name, createdAt: now })
+      .values({ setId: set.id, versionId: v.id, action: "approved", actorPersonId: input.actor.personId, actorName: input.actor.name, detail: versionTgDetail(input.actor, set), createdAt: now })
       .returning({ id: approvalEvents.id }),
   ]);
   return { ok: true, eventId: eventIdOf(results), versionId: v.id };
@@ -210,10 +216,11 @@ export async function notifyNewVersion(versionId: number): Promise<Record<SendRe
   const tally: Record<SendResult, number> = { sent: 0, failed: 0, skipped: 0, duplicate: 0 };
   const [row] = await db().select({ v: setVersions, title: learningSets.title }).from(setVersions).innerJoin(learningSets, eq(learningSets.id, setVersions.setId)).where(eq(setVersions.id, versionId));
   if (!row?.v.approvedAt || !row.v.changeKind || row.v.changeKind === "initial") return tally;
+  // ตัดจบแล้ว (ไม่ตรงเงื่อนไขผู้รับแล้ว) ไม่ต้องรู้เรื่องเวอร์ชันใหม่ — ผลผ่านเดิมยังนับ
   const passed = await db()
     .select()
     .from(assignments)
-    .where(and(eq(assignments.setId, row.v.setId), isNotNull(assignments.passedAt)));
+    .where(and(eq(assignments.setId, row.v.setId), isNotNull(assignments.passedAt), isNull(assignments.endedAt)));
   const targets = passed.filter((a) => a.passedAt! < row.v.approvedAt!);
   if (!targets.length) return tally;
   const org = await fetchOrg();
@@ -248,8 +255,10 @@ export async function retryNewVersionNotices(): Promise<Record<SendResult, numbe
     .select({ n: notifications })
     .from(notifications)
     .innerJoin(learningSets, eq(learningSets.id, notifications.setId))
+    .innerJoin(assignments, eq(assignments.id, notifications.assignmentId))
     .where(
       and(
+        isNull(assignments.endedAt),
         eq(notifications.kind, "new_version"),
         eq(notifications.status, "failed"),
         lt(notifications.attempts, MAX_SEND_ATTEMPTS),

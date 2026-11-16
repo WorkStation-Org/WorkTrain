@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 /**
  * หน้าแรก — สรุปของฉัน (ค้าง · เลยกำหนด · ผ่านแล้ว) + สิ่งที่ต้องทำต่อ + ทางลัดตาม role
  * ★ ไม่บังคับยินยอมที่หน้านี้ (ผู้สร้าง/ผู้อนุมัติต้องเข้าถึงหน้าของตัวเองได้) — บอกเป็นแถบแจ้งแทน
- * ★ พักการสแกนอยู่ (ADR-0017) ไม่ขึ้นแถบยินยอม/ลงทะเบียนใบหน้า
+ * ★ พักการสแกนอยู่ (ADR-0019) ไม่ขึ้นแถบยินยอม/ลงทะเบียนใบหน้า
  */
 export default async function Home({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const actor = await pageActor();

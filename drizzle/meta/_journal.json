@@ -110,8 +110,22 @@
     {
       "idx": 15,
       "version": "7",
-      "when": 1794834016937,
-      "tag": "0015_pause_face_scan",
+      "when": 1794830314390,
+      "tag": "0015_assignment_end",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794831761435,
+      "tag": "0016_audience_added_by",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794835056166,
+      "tag": "0017_pause_face_scan",
       "breakpoints": true
     }
   ]

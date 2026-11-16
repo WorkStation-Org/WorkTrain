@@ -1,16 +1,17 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
 import { approvalEvents, learningSets, setVersions } from "@/db/schema";
 import type { Blueprint } from "@/domain/blueprint";
 import type { Actor } from "@/lib/auth";
 import { formsComplete } from "@/lib/exam-service";
-import { canCloseSet, canDeleteDraft, canEditDraft, type Outcome, type SetRow } from "@/lib/set-service";
+import { approverRole, canCloseSet, canDeleteDraft, canEditDraft, onBehalfDetail, type Outcome, type SetRow } from "@/lib/set-service";
 
 /**
  * การอนุมัติ (spec §4 · ADR-0004) — ร่าง → รออนุมัติ → (ตีกลับ → ร่าง) → ใช้อยู่ → ปิด · ร่างลบได้ (ADR-0016)
  *
  * ★ อนุมัติแล้วยังไม่มอบให้ใคร — การมอบตามผู้รับเป็น slice ถัดไป (spec §5)
+ * ★ TG อนุมัติ/ตีกลับแทนผู้อนุมัติที่ระบุได้ทุกชุด รวมชุดที่ตัวเองสร้าง — ประวัติลง `detail.onBehalfOf` (ADR-0018)
  */
 
 async function loadSet(setId: number): Promise<SetRow | null> {
@@ -57,18 +58,33 @@ function eventIdOf(results: unknown[]): number {
   return rows[0].id;
 }
 
-function isApprover(actor: Pick<Actor, "personId">, set: SetRow): boolean {
-  return set.status === "pending_approval" && set.approverPersonId === actor.personId;
+/** อนุมัติ/ตีกลับชุดที่รออนุมัติได้ในฐานะอะไร — ผู้อนุมัติที่ระบุ หรือ TG กดแทน */
+function approverOf(actor: Pick<Actor, "personId" | "role">, set: SetRow) {
+  return set.status === "pending_approval" ? approverRole(actor, set) : null;
+}
+
+/** detail ของประวัติเมื่อ TG กดแทน — ชุดที่ตัวเองสร้าง หรือตัวเองเป็นคนกดส่ง = `ownSet` */
+async function tgDetail(actor: Pick<Actor, "personId">, set: SetRow, role: "approver" | "tg") {
+  if (role !== "tg") return null;
+  const [submitted] = await db()
+    .select({ by: approvalEvents.actorPersonId })
+    .from(approvalEvents)
+    .where(and(eq(approvalEvents.setId, set.id), eq(approvalEvents.action, "submitted")))
+    .orderBy(desc(approvalEvents.id))
+    .limit(1);
+  return onBehalfDetail(set, set.authorPersonId === actor.personId || submitted?.by === actor.personId);
 }
 
 /** ตีกลับพร้อมความเห็น — ใช้เมื่อต้นทางผิด (Pricelist/แคตตาล็อกผิด) ผู้สร้างแก้ไฟล์แล้วออกข้อสอบใหม่ */
 export async function returnToAuthor(input: { actor: Actor; setId: number; comment: string; now?: Date }): Promise<Outcome<{ eventId: number }>> {
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
-  if (!isApprover(input.actor, set)) return { ok: false, error: "ตีกลับได้เฉพาะผู้อนุมัติของชุดที่รออนุมัติ" };
+  const role = approverOf(input.actor, set);
+  if (!role) return { ok: false, error: "ตีกลับได้เฉพาะผู้อนุมัติของชุดที่รออนุมัติ (หรือ TG)" };
   const comment = input.comment.trim();
   if (!comment) return { ok: false, error: "ตีกลับต้องมีความเห็นบอกผู้สร้างว่าต้องแก้อะไร" };
   const version = await latestVersion(set.id);
+  const detail = await tgDetail(input.actor, set, role);
   const now = input.now ?? new Date();
   const results = await atomic([
     db().update(learningSets).set({ status: "draft", updatedAt: now }).where(eq(learningSets.id, set.id)),
@@ -79,6 +95,7 @@ export async function returnToAuthor(input: { actor: Actor; setId: number; comme
       actorPersonId: input.actor.personId,
       actorName: input.actor.name,
       comment,
+      detail,
       createdAt: now,
     }).returning({ id: approvalEvents.id }),
   ]);
@@ -88,13 +105,15 @@ export async function returnToAuthor(input: { actor: Actor; setId: number; comme
 export async function approve(input: { actor: Actor; setId: number; now?: Date }): Promise<Outcome<{ eventId: number }>> {
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
-  if (!isApprover(input.actor, set)) return { ok: false, error: "อนุมัติได้เฉพาะผู้อนุมัติของชุดที่รออนุมัติ" };
+  const role = approverOf(input.actor, set);
+  if (!role) return { ok: false, error: "อนุมัติได้เฉพาะผู้อนุมัติของชุดที่รออนุมัติ (หรือ TG)" };
   const version = await latestVersion(set.id);
   if (!version) return { ok: false, error: "ชุดนี้ยังไม่มีเอกสาร" };
   // ผู้อนุมัติแก้ข้อสอบได้ — ตรวจซ้ำตอนกดอนุมัติ ไม่เชื่อผลตรวจตอนส่ง
   const incomplete = await formsComplete(version.id, set.blueprint as Blueprint);
   if (incomplete) return { ok: false, error: incomplete };
 
+  const detail = await tgDetail(input.actor, set, role);
   const now = input.now ?? new Date();
   const results = await atomic([
     db().update(setVersions).set({ approvedAt: now }).where(eq(setVersions.id, version.id)),
@@ -105,6 +124,7 @@ export async function approve(input: { actor: Actor; setId: number; now?: Date }
       action: "approved",
       actorPersonId: input.actor.personId,
       actorName: input.actor.name,
+      detail,
       createdAt: now,
     }).returning({ id: approvalEvents.id }),
   ]);

@@ -12,7 +12,7 @@ import { alertTgQuietly } from "@/lib/tg-alerts";
  *
  * การสแกน (ADR-0006): `beginScanAction` → เบราว์เซอร์รัน FaceLivenessDetector ด้วย `livenessCredentialsAction`
  * → `finishScanAction` เทียบใบหน้าฝั่งเซิร์ฟเวอร์ → ได้ scanId → `startStudyWithScanAction` / `startExamWithScanAction`
- * บนเครื่อง dev ที่ไม่มี AWS ใช้ `devScanAction` แทนสองขั้นแรก · พักการสแกนอยู่ (ADR-0017) ส่ง `scanId: null` ตรงไปขั้นสุดท้าย
+ * บนเครื่อง dev ที่ไม่มี AWS ใช้ `devScanAction` แทนสองขั้นแรก · พักการสแกนอยู่ (ADR-0019) ส่ง `scanId: null` ตรงไปขั้นสุดท้าย
  */
 
 const PURPOSES: readonly ScanPurpose[] = ["study", "exam", "enroll"];

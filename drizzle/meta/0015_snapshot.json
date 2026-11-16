@@ -1,5 +1,5 @@
 {
-  "id": "ee38c305-280e-41f7-9f0a-700da142bae0",
+  "id": "fef45240-ebf8-48ac-a2cf-66b52b1170f4",
   "prevId": "d7ddf4ce-1540-464a-9e5a-25fd59794cf3",
   "version": "7",
   "dialect": "postgresql",
@@ -409,6 +409,25 @@
           "notNull": true,
           "default": 1
         },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "end_reason": {
+          "name": "end_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "assign_round": {
+          "name": "assign_round",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -477,6 +496,10 @@
         "assignments_due_after_assigned": {
           "name": "assignments_due_after_assigned",
           "value": "\"assignments\".\"due_at\" > \"assignments\".\"assigned_at\""
+        },
+        "assignments_end_pair": {
+          "name": "assignments_end_pair",
+          "value": "(\"assignments\".\"ended_at\" is null) = (\"assignments\".\"end_reason\" is null)"
         }
       },
       "isRLSEnabled": false
@@ -519,7 +542,7 @@
           "name": "scan_id",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "read_round": {
           "name": "read_round",
@@ -2340,7 +2363,7 @@
           "name": "scan_id",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "started_at": {
           "name": "started_at",

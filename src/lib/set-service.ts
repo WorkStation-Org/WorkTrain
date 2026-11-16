@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, inArray, ne, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { PDFDocument } from "pdf-lib";
 import { db } from "@/db";
 import {
@@ -60,10 +60,45 @@ function isOwnerOrAdmin(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRo
 
 /**
  * แก้ผู้รับได้ไหม — ร่าง: ผู้สร้าง/TG · ใช้อยู่: ผู้สร้าง/TG เพิ่มหรือเปลี่ยนเงื่อนไขได้ (คนที่เพิ่มได้รับมอบทันที ·
- * คนที่หลุดเงื่อนไขเก็บการมอบเดิมไว้ตาม spec §5)
+ * คนที่หลุดเงื่อนไขถูกตัดจบ — ADR-0017)
  */
-export function canEditAudience(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "authorPersonId" | "status">): boolean {
-  return (set.status === "draft" || set.status === "active") && isOwnerOrAdmin(actor, set);
+export function canEditAudience(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "authorPersonId" | "approverPersonId" | "status">): boolean {
+  return audienceMode(actor, set) === "full";
+}
+
+/**
+ * แก้ผู้รับได้แบบไหน (ADR-0018)
+ * - `full` — ผู้สร้าง/TG ตอนร่างหรือใช้อยู่ · TG ตอนรออนุมัติด้วย (อนุมัติแทนได้)
+ * - `addOnly` — ผู้อนุมัติ ตอนรออนุมัติหรือใช้อยู่: เพิ่มเงื่อนไขได้ · ลบได้เฉพาะเงื่อนไขที่ตัวเองเพิ่ม
+ * - null — แก้ไม่ได้
+ */
+export function audienceMode(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "authorPersonId" | "approverPersonId" | "status">): "full" | "addOnly" | null {
+  if ((set.status === "draft" || set.status === "active") && isOwnerOrAdmin(actor, set)) return "full";
+  if (set.status === "pending_approval" && actor.role === "admin") return "full";
+  if ((set.status === "pending_approval" || set.status === "active") && set.approverPersonId === actor.personId) return "addOnly";
+  return null;
+}
+
+/**
+ * ทำในฐานะผู้อนุมัติได้ไหม (ไม่ดูสถานะ — ผู้เรียกตรวจเอง) — ผู้อนุมัติที่ระบุในชุด หรือ TG ซึ่งอนุมัติแทนได้ทุกชุด (ADR-0018)
+ * `"tg"` = TG ที่ไม่ใช่ผู้อนุมัติที่ระบุ — ประวัติต้องบอกว่ากดแทนใคร (`onBehalfDetail`)
+ */
+export function approverRole(actor: Pick<Actor, "personId" | "role">, set: Pick<SetRow, "approverPersonId">): "approver" | "tg" | null {
+  if (set.approverPersonId === actor.personId) return "approver";
+  return actor.role === "admin" ? "tg" : null;
+}
+
+/** detail ของประวัติเมื่อ TG ทำแทน — `onBehalfOf` = ผู้อนุมัติที่ระบุไว้ · `ownSet` = ชุดที่ TG คนนั้นสร้างหรือกดส่งเอง */
+export interface OnBehalfDetail {
+  onBehalfOf: { personId: number; name: string | null } | null;
+  ownSet?: true;
+}
+
+export function onBehalfDetail(set: Pick<SetRow, "approverPersonId" | "approverName">, ownSet: boolean): OnBehalfDetail {
+  return {
+    onBehalfOf: set.approverPersonId ? { personId: set.approverPersonId, name: set.approverName } : null,
+    ...(ownSet ? { ownSet: true as const } : {}),
+  };
 }
 
 /** เห็นชุดนี้ในฐานะคนทำงานกับมัน (ไม่ใช่ผู้เรียน) — ผู้สร้าง · ผู้อนุมัติ · TG */
@@ -561,6 +596,32 @@ export function coverPath(doc: { id: number; coverKey: string | null; coverMs: n
 }
 
 // ── อ่าน ───────────────────────────────────────────────────────────────────
+
+/**
+ * งานที่รออนุมัติในรายการ — ชุดใหม่ที่รออนุมัติ (นับจากครั้งที่ส่งล่าสุด) · เวอร์ชันใหม่ที่ส่งแล้วของชุดที่ใช้อยู่
+ * หน้า `/sets` จัดไว้บนสุด "รออนุมัติ (n)" พร้อมบอกว่ารอใครมากี่วัน (ADR-0018)
+ */
+export async function pendingSince(sets: readonly Pick<SetRow, "id" | "status">[]): Promise<Map<number, { since: Date; what: "set" | "version" }>> {
+  const out = new Map<number, { since: Date; what: "set" | "version" }>();
+  const waiting = sets.filter((s) => s.status === "pending_approval").map((s) => s.id);
+  if (waiting.length) {
+    const submitted = await db()
+      .select({ setId: approvalEvents.setId, at: approvalEvents.createdAt })
+      .from(approvalEvents)
+      .where(and(inArray(approvalEvents.setId, waiting), eq(approvalEvents.action, "submitted")))
+      .orderBy(asc(approvalEvents.id));
+    for (const e of submitted) out.set(e.setId, { since: e.at, what: "set" });
+  }
+  const active = sets.filter((s) => s.status === "active").map((s) => s.id);
+  if (active.length) {
+    const versions = await db()
+      .select({ setId: setVersions.setId, at: setVersions.submittedAt })
+      .from(setVersions)
+      .where(and(inArray(setVersions.setId, active), isNotNull(setVersions.submittedAt), isNull(setVersions.approvedAt)));
+    for (const v of versions) if (v.at) out.set(v.setId, { since: v.at, what: "version" });
+  }
+  return out;
+}
 
 /** ชุดที่คนนี้ทำงานด้วย — ของตัวเอง + ที่ตัวเองเป็นผู้อนุมัติ · TG เห็นทุกชุด */
 /** ชุดที่คนนี้ทำงานด้วย — ร่างที่ลบแล้วไม่ขึ้น (ADR-0016) */

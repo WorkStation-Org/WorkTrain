@@ -18,7 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       items: [
         { href: "/", label: "หน้าแรก", icon: "home" },
         { href: "/learn", label: "ชุดที่ต้องเรียน", icon: "book" },
-        // พักการสแกนอยู่ = ไม่มีอะไรให้ทำที่หน้าใบหน้า (ADR-0017)
+        // พักการสแกนอยู่ = ไม่มีอะไรให้ทำที่หน้าใบหน้า (ADR-0019)
         ...(scanPaused() ? [] : [{ href: "/enroll", label: "ใบหน้าของฉัน", icon: "face" as const }]),
       ],
     },

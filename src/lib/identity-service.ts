@@ -126,7 +126,7 @@ function imageKey(personId: number, kind: "enroll" | "scan"): string {
 // ── การสแกน ────────────────────────────────────────────────────────────────
 
 /**
- * พักการสแกนใบหน้าไว้ชั่วคราว (ADR-0017) — ตั้ง env `FACE_SCAN_PAUSED=1` · **ลบ env นี้ = กลับมาสแกนตามเดิม**
+ * พักการสแกนใบหน้าไว้ชั่วคราว (ADR-0019) — ตั้ง env `FACE_SCAN_PAUSED=1` · **ลบ env นี้ = กลับมาสแกนตามเดิม**
  * ระหว่างพัก: เริ่มรอบเรียน/ครั้งที่สอบได้โดยไม่มีผลสแกน (`scan_id` ว่าง) · ไม่บังคับยินยอม (ความยินยอมนี้เป็นเรื่องภาพใบหน้าอย่างเดียว)
  */
 export function scanPaused(): boolean {
@@ -300,7 +300,7 @@ export async function usableScan(input: { personId: number; scanId: number; purp
 }
 
 /**
- * ด่านก่อนเริ่มรอบเรียน/ครั้งที่สอบ — ไม่มีผลสแกน (`null`) ผ่านได้เฉพาะตอนพักการสแกน (ADR-0017)
+ * ด่านก่อนเริ่มรอบเรียน/ครั้งที่สอบ — ไม่มีผลสแกน (`null`) ผ่านได้เฉพาะตอนพักการสแกน (ADR-0019)
  * มีผลสแกน = ตรวจตาม `usableScan()` เสมอ ไม่ว่าพักอยู่หรือไม่
  */
 export async function scanGate(input: { personId: number; scanId: number | null; purpose: ScanPurpose; now: Date }): Promise<string | null> {

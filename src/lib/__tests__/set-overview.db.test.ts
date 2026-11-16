@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
 import { GENERAL_BLUEPRINT } from "@/domain/blueprint";
@@ -14,6 +14,7 @@ vi.mock("@/db", async () => {
 });
 
 const { releasedSets } = await import("@/lib/set-overview");
+const { clearOrgCache } = await import("@/lib/workid");
 
 const T0 = new Date("2026-11-02T09:00:00+07:00");
 const NOW = new Date("2026-11-12T09:00:00+07:00");
@@ -77,11 +78,15 @@ async function seed() {
   await db.insert(schema.setVersions).values({ setId: closed.id, versionNo: 1, changeKind: "initial", createdByPersonId: 11, approvedAt: days(-30) });
   await makeSet({ title: "ร่าง", status: "draft" });
   await makeSet({ title: "รออนุมัติ", status: "pending_approval", approverPersonId: APPROVER });
-  return { active, closed, video };
+  return { active, closed, video, v1, assign };
 }
 
 beforeAll(setupTestDb);
 beforeEach(truncateAll);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  clearOrgCache();
+});
 
 describe("ภาพรวมชุดที่ปล่อยแล้ว", () => {
   it("TG เห็นทุกชุดที่อนุมัติแล้ว (ใช้อยู่ก่อน แล้วปิดแล้ว) · ร่าง/รออนุมัติไม่ขึ้น", async () => {
@@ -123,5 +128,17 @@ describe("ภาพรวมชุดที่ปล่อยแล้ว", () =
     const rows = await releasedSets(TG, NOW);
     const q3 = rows.find((r) => r.setId === closed.id)!;
     expect(q3).toMatchObject({ status: "closed", closedAt: days(-1), versionLabel: "เวอร์ชัน 1", newVersion: null, learners: 0 });
+  });
+
+  it("ไม่นับคนที่แท็บผู้เรียนซ่อน — ลาออกแล้ว · ตัดจบที่ยังไม่ผ่าน · ตัดจบหลังผ่านยังนับว่าผ่าน (ADR-0017)", async () => {
+    const { assign } = await seed();
+    await assign(36, { endedAt: days(6), endReason: "not_in_audience" });
+    await assign(37, { passedAt: days(2), endedAt: days(6), endReason: "not_in_audience" });
+    await assign(38);
+    // ผังปัจจุบันมี 31–37 · 38 ลาออกแล้ว
+    vi.stubEnv("WORKTRAIN_DEV_ORG", JSON.stringify([31, 32, 33, 34, 35, 36, 37].map((personId) => ({ personId, email: `p${personId}@ws.co`, fullName: `คน ${personId}` }))));
+    clearOrgCache();
+    const [f331] = await releasedSets(TG, NOW);
+    expect(f331).toMatchObject({ learners: 6, counts: { passed: 2, started: 2, not_started: 1, overdue: 1 } });
   });
 });
