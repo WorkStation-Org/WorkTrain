@@ -1,4 +1,5 @@
 import { AppShell, type NavSection } from "@/components/app-shell";
+import { scanPaused } from "@/lib/identity-service";
 import { pageActor } from "@/lib/page";
 import { callName } from "@/lib/person-name";
 
@@ -17,7 +18,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       items: [
         { href: "/", label: "หน้าแรก", icon: "home" },
         { href: "/learn", label: "ชุดที่ต้องเรียน", icon: "book" },
-        { href: "/enroll", label: "ใบหน้าของฉัน", icon: "face" },
+        // พักการสแกนอยู่ = ไม่มีอะไรให้ทำที่หน้าใบหน้า (ADR-0017)
+        ...(scanPaused() ? [] : [{ href: "/enroll", label: "ใบหน้าของฉัน", icon: "face" as const }]),
       ],
     },
     {
@@ -27,7 +29,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     {
       // ผู้อนุมัติไม่ใช่ role (spec §1) — หัวหน้าที่เป็น user ต้องเปิดชุดที่รอตัวเองอนุมัติได้ จึงเห็นทุกคน
       title: "Library",
-      items: [{ href: "/sets", label: "ชุดการเรียนรู้", icon: "layers" }],
+      items: [
+        { href: "/sets", label: "ชุดการเรียนรู้", icon: "layers" },
+        { href: "/sets/released", label: "ชุดที่ปล่อยแล้ว", icon: "grid" },
+      ],
     },
     {
       title: "TG",

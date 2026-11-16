@@ -30,7 +30,7 @@ import {
   type LayoutItem,
   type Rng,
 } from "@/domain/exam";
-import { usableScan } from "@/lib/identity-service";
+import { scanGate } from "@/lib/identity-service";
 import { isVideoMime, maxNewSegments, VIDEO_SEGMENT_SECONDS } from "@/domain/document";
 import { objectStore, VIDEO_LINK_TTL_SECONDS } from "@/lib/object-store";
 import { coverPath, type Outcome } from "@/lib/set-service";
@@ -171,10 +171,13 @@ export async function activeSession(personId: number, now: Date) {
   return open;
 }
 
-/** เริ่มรอบเรียนด้วยผลสแกนที่ผ่าน — รอบเก่าที่ค้างถูกปิดก่อน (login ใหม่ = รอบใหม่) */
-export async function startStudySession(input: { personId: number; scanId: number; now?: Date }): Promise<Outcome<{ sessionId: number }>> {
+/**
+ * เริ่มรอบเรียนด้วยผลสแกนที่ผ่าน — รอบเก่าที่ค้างถูกปิดก่อน (login ใหม่ = รอบใหม่)
+ * `scanId: null` = ไม่สแกน ได้เฉพาะตอนพักการสแกน (ADR-0017)
+ */
+export async function startStudySession(input: { personId: number; scanId: number | null; now?: Date }): Promise<Outcome<{ sessionId: number }>> {
   const now = input.now ?? new Date();
-  const bad = await usableScan({ personId: input.personId, scanId: input.scanId, purpose: "study", now });
+  const bad = await scanGate({ personId: input.personId, scanId: input.scanId, purpose: "study", now });
   if (bad) return { ok: false, error: bad };
   await db()
     .update(studySessions)
@@ -531,7 +534,8 @@ async function openAttempt(assignmentId: number, now: Date = new Date()) {
 export async function startAttempt(input: {
   personId: number;
   assignmentId: number;
-  scanId: number;
+  /** `null` = ไม่สแกน ได้เฉพาะตอนพักการสแกน (ADR-0017) */
+  scanId: number | null;
   now?: Date;
   rng?: Rng;
 }): Promise<Outcome<{ attemptId: number }>> {
@@ -554,7 +558,7 @@ export async function startAttempt(input: {
     if (!version) return { ok: false, error: "ชุดนี้ยังไม่มีข้อสอบ" };
     if (!(await readingComplete(mine.a, version.id))) return { ok: false, error: "ต้องอ่านเอกสารให้ครบทุกหน้าและดูวิดีโอครบทุกช่วงก่อนสอบ" };
   }
-  const bad = await usableScan({ personId: input.personId, scanId: input.scanId, purpose: "exam", now });
+  const bad = await scanGate({ personId: input.personId, scanId: input.scanId, purpose: "exam", now });
   if (bad) return { ok: false, error: bad };
 
   const forms = await db()

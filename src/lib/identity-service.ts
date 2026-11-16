@@ -125,10 +125,24 @@ function imageKey(personId: number, kind: "enroll" | "scan"): string {
 
 // ── การสแกน ────────────────────────────────────────────────────────────────
 
-/** สแกนแบบไหนได้บนเซิร์ฟเวอร์นี้ — AWS ตั้งครบ · เครื่อง dev (ทางลัด) · ปิด (production ที่ยังไม่มี AWS) */
-export function scanMode(): "aws" | "dev" | "off" {
+/**
+ * พักการสแกนใบหน้าไว้ชั่วคราว (ADR-0017) — ตั้ง env `FACE_SCAN_PAUSED=1` · **ลบ env นี้ = กลับมาสแกนตามเดิม**
+ * ระหว่างพัก: เริ่มรอบเรียน/ครั้งที่สอบได้โดยไม่มีผลสแกน (`scan_id` ว่าง) · ไม่บังคับยินยอม (ความยินยอมนี้เป็นเรื่องภาพใบหน้าอย่างเดียว)
+ */
+export function scanPaused(): boolean {
+  return process.env.FACE_SCAN_PAUSED === "1";
+}
+
+/** สแกนแบบไหนได้บนเซิร์ฟเวอร์นี้ — พักไว้ · AWS ตั้งครบ · เครื่อง dev (ทางลัด) · ปิด (production ที่ยังไม่มี AWS = เรียน/สอบไม่ได้) */
+export function scanMode(): "paused" | "aws" | "dev" | "off" {
+  if (scanPaused()) return "paused";
   if (rekognitionConfigured()) return "aws";
   return devShortcutAllowed() ? "dev" : "off";
+}
+
+/** ต้องพาไปหน้ายินยอมก่อนไหม — พักสแกนอยู่ = ไม่ต้อง */
+export async function consentRequired(personId: number): Promise<boolean> {
+  return !scanPaused() && !(await hasConsent(personId));
 }
 
 /** ขั้นที่ 1 — เปิด liveness session · คืนใบสแกนที่เซ็นแล้ว (ผูกคน + จุดประสงค์) ไว้ยืนยันในขั้นที่ 2 */
@@ -283,6 +297,15 @@ export async function usableScan(input: { personId: number; scanId: number; purp
   const usedByAttempt = await db().select({ id: attempts.id }).from(attempts).where(eq(attempts.scanId, scan.id));
   if (usedBySession.length || usedByAttempt.length) return "ผลสแกนนี้ถูกใช้ไปแล้ว สแกนใหม่";
   return null;
+}
+
+/**
+ * ด่านก่อนเริ่มรอบเรียน/ครั้งที่สอบ — ไม่มีผลสแกน (`null`) ผ่านได้เฉพาะตอนพักการสแกน (ADR-0017)
+ * มีผลสแกน = ตรวจตาม `usableScan()` เสมอ ไม่ว่าพักอยู่หรือไม่
+ */
+export async function scanGate(input: { personId: number; scanId: number | null; purpose: ScanPurpose; now: Date }): Promise<string | null> {
+  if (input.scanId === null) return scanPaused() ? null : "ต้องสแกนใบหน้าก่อน";
+  return usableScan({ ...input, scanId: input.scanId });
 }
 
 /** ผลสแกนที่ TG ยืนยันแล้วและยังใช้ได้ (ล่าสุด) ของจุดประสงค์นี้ — หน้าผู้เรียนใช้แทนการสแกนใหม่ */

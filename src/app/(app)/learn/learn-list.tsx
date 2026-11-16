@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { SetCover } from "@/components/set-cover";
 import { Badge, type BadgeTone } from "@/components/ui";
 
 /**
@@ -93,7 +94,7 @@ export function LearnList({ cards }: { cards: LearnCard[] }) {
                 href={c.href}
                 className="flex h-full flex-col overflow-hidden rounded-[13px] border border-line bg-raised transition-colors hover:border-line-strong focus-visible:outline-2 focus-visible:outline-fg"
               >
-                <Cover card={c} />
+                <SetCover coverUrl={c.coverUrl} hasVideo={c.hasVideo} kindName={c.kindName} videoChip={c.videoChip} />
                 <div className="flex flex-1 flex-col gap-2.5 px-4 pb-4 pt-3.5">
                   <div className="flex items-start justify-between gap-2">
                     <span className="text-[15px] font-semibold leading-snug text-fg">{c.title}</span>
@@ -116,34 +117,6 @@ export function LearnList({ cards }: { cards: LearnCard[] }) {
             </li>
           ))}
         </ul>
-      )}
-    </div>
-  );
-}
-
-function Cover({ card }: { card: LearnCard }) {
-  return (
-    <div className={`relative flex aspect-video items-center justify-center overflow-hidden ${card.hasVideo ? "bg-[#2c2e32]" : "bg-subtle"}`}>
-      {/* eslint-disable-next-line @next/next/no-img-element -- ภาพผ่าน route ที่ตรวจสิทธิ์ ไม่ผ่าน next/image */}
-      {card.coverUrl && <img src={card.coverUrl} alt="" className="absolute inset-0 size-full object-cover" />}
-      <span className={`absolute left-3 top-2.5 rounded px-1.5 text-[11px] tracking-wide ${card.hasVideo ? "bg-black/45 text-[#e7e8ea]" : "text-muted"}`}>
-        {card.kindName}
-      </span>
-      {card.hasVideo ? (
-        <>
-          <span className="relative flex size-11 items-center justify-center rounded-full bg-white/90 text-[#161719]">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          </span>
-          {card.videoChip && <span className="absolute bottom-2.5 right-2.5 rounded bg-black/60 px-1.5 text-[11px] leading-5 text-white">{card.videoChip}</span>}
-        </>
-      ) : (
-        <svg width="38" height="46" viewBox="0 0 40 48" fill="none" stroke="currentColor" strokeWidth="2" className="text-ink-4" aria-hidden>
-          <path d="M6 2h20l10 10v34H6z" />
-          <path d="M26 2v10h10" />
-          <path d="M12 24h16M12 31h16M12 38h10" />
-        </svg>
       )}
     </div>
   );

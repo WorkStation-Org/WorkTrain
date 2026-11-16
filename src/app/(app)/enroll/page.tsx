@@ -1,4 +1,4 @@
-import { Button, Card, PageHeader } from "@/components/ui";
+import { Alert, Button, Card, PageHeader } from "@/components/ui";
 import { withdrawConsentAction } from "../learn/actions";
 import { enrollmentState, scanMode } from "@/lib/identity-service";
 import { learnerActor } from "@/lib/page";
@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * ลงทะเบียนใบหน้า (spec §8) — ครั้งแรกใช้ได้ทันที · ลงทะเบียนใหม่ต้องให้ TG อนุมัติ (กันการลงทะเบียนหน้าคนอื่นแทน)
+ * พักการสแกนอยู่ (ADR-0017) = บอกตรง ๆ ไม่มีปุ่มสแกน · ถอนความยินยอมยังทำได้
  */
 export default async function EnrollPage() {
   const actor = await learnerActor();
@@ -20,24 +21,30 @@ export default async function EnrollPage() {
         title="ลงทะเบียนใบหน้า"
         subtitle="ใช้เทียบตอนเริ่มเรียนและเริ่มสอบ"
       />
-      <Card>
-        {state.state === "none" && (
-          <>
-            <p className="mb-3 text-[13px] text-ink-2">หน้าตรง แสงพอ ไม่สวมแมสก์หรือแว่นกันแดด แล้วขยับหน้าตามที่จอบอก</p>
-            <ScanFlow mode={mode} purpose="enroll" label="สแกนเพื่อลงทะเบียน" />
-          </>
-        )}
-        {state.state === "active" && !state.pending && (
-          <>
-            <p className="mb-3 text-[13px] text-success">ลงทะเบียนใบหน้าแล้ว</p>
-            <p className="mb-3 text-[13px] text-ink-3">สแกนไม่ผ่านบ่อย (เช่น เปลี่ยนทรงผม ใส่แว่น) ขอลงทะเบียนใหม่ได้ — TG ต้องอนุมัติก่อนใช้</p>
-            <ScanFlow mode={mode} purpose="enroll" label="ขอลงทะเบียนใบหน้าใหม่" />
-          </>
-        )}
-        {(state.state === "pending_only" || (state.state === "active" && state.pending)) && (
-          <p className="text-[13px] text-warning">มีคำขอลงทะเบียนใบหน้าใหม่ที่รอ TG อนุมัติ</p>
-        )}
-      </Card>
+      {mode === "paused" ? (
+        <Alert kind="info" icon="face" title="พักการสแกนใบหน้าไว้ชั่วคราว">
+          เรียนและสอบได้โดยไม่ต้องสแกน — ยังไม่ต้องลงทะเบียนใบหน้าตอนนี้
+        </Alert>
+      ) : (
+        <Card>
+          {state.state === "none" && (
+            <>
+              <p className="mb-3 text-[13px] text-ink-2">หน้าตรง แสงพอ ไม่สวมแมสก์หรือแว่นกันแดด แล้วขยับหน้าตามที่จอบอก</p>
+              <ScanFlow mode={mode} purpose="enroll" label="สแกนเพื่อลงทะเบียน" />
+            </>
+          )}
+          {state.state === "active" && !state.pending && (
+            <>
+              <p className="mb-3 text-[13px] text-success">ลงทะเบียนใบหน้าแล้ว</p>
+              <p className="mb-3 text-[13px] text-ink-3">สแกนไม่ผ่านบ่อย (เช่น เปลี่ยนทรงผม ใส่แว่น) ขอลงทะเบียนใหม่ได้ — TG ต้องอนุมัติก่อนใช้</p>
+              <ScanFlow mode={mode} purpose="enroll" label="ขอลงทะเบียนใบหน้าใหม่" />
+            </>
+          )}
+          {(state.state === "pending_only" || (state.state === "active" && state.pending)) && (
+            <p className="text-[13px] text-warning">มีคำขอลงทะเบียนใบหน้าใหม่ที่รอ TG อนุมัติ</p>
+          )}
+        </Card>
+      )}
 
       {/* ถอนความยินยอม (spec §8) — ต้องติ๊กยืนยันก่อน กันกดพลาด */}
       <Card className="mt-6">

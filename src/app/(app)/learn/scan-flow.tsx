@@ -18,10 +18,11 @@ import {
  * ปุ่มสแกนใบหน้า → ทำต่อตามจุดประสงค์ (ADR-0006)
  * - `aws`: FaceLivenessDetector (ให้ขยับหน้าตามจอ — กันรูปถ่าย) → เซิร์ฟเวอร์เทียบกับใบหน้าที่ลงทะเบียน
  * - `dev`: ปุ่มผ่านทันที (เครื่อง dev ที่ไม่มี AWS) · `off`: ปิดใช้ บอกตรง ๆ
+ * - `paused`: พักการสแกน (ADR-0017) — ปุ่มเริ่มเลยโดยไม่เปิดกล้อง · ลงทะเบียนใบหน้าไม่ได้ระหว่างพัก
  *
  * `confirmedScanId` = TG ตรวจภาพแล้วยืนยันว่าเป็นตัวจริง — เริ่มได้โดยไม่ต้องสแกนอีก (ครั้งเดียว · ภายใน 24 ชม.)
  */
-export type ScanMode = "aws" | "dev" | "off";
+export type ScanMode = "paused" | "aws" | "dev" | "off";
 
 export function ScanFlow(props: {
   mode: ScanMode;
@@ -35,8 +36,8 @@ export function ScanFlow(props: {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  /** ได้ผลสแกนที่ผ่านแล้ว → ทำต่อตามจุดประสงค์ */
-  async function proceed(scanId: number) {
+  /** ได้ผลสแกนที่ผ่านแล้ว (หรือพักการสแกนอยู่ = `null`) → ทำต่อตามจุดประสงค์ */
+  async function proceed(scanId: number | null) {
     if (props.purpose === "study") {
       const out = await startStudyWithScanAction({ scanId });
       if (!out.ok) return setMessage(out.error);
@@ -54,6 +55,7 @@ export function ScanFlow(props: {
     setBusy(true);
     setMessage(null);
     try {
+      if (props.mode === "paused") return await proceed(null);
       if (props.mode === "dev") {
         const out = await devScanAction(props.purpose);
         if (!out.ok) return setMessage(out.error);
@@ -78,6 +80,10 @@ export function ScanFlow(props: {
       return router.refresh();
     }
     await proceed(out.scanId);
+  }
+
+  if (props.mode === "paused" && props.purpose === "enroll") {
+    return <p className="text-[13px] text-ink-3">พักการสแกนใบหน้าไว้ชั่วคราว — ยังไม่ต้องลงทะเบียน เรียนและสอบได้เลย</p>;
   }
 
   if (props.mode === "off") {
@@ -111,9 +117,9 @@ export function ScanFlow(props: {
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="primary" disabled={busy} onClick={start}>
-          {busy ? "กำลังเปิดกล้อง…" : props.mode === "dev" ? `${props.label} (dev — ข้ามกล้อง)` : props.label}
+          {busy ? (props.mode === "paused" ? "กำลังเริ่ม…" : "กำลังเปิดกล้อง…") : props.mode === "dev" ? `${props.label} (dev — ข้ามกล้อง)` : props.label}
         </Button>
-        {props.confirmedScanId && (
+        {props.confirmedScanId && props.mode !== "paused" && (
           <Button type="button" disabled={busy} onClick={() => proceed(props.confirmedScanId!)}>
             TG ยืนยันตัวตนแล้ว — เริ่มโดยไม่ต้องสแกน
           </Button>

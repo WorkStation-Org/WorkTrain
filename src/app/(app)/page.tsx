@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Alert, Badge, Button, Card, EmptyState, Icon, PageHeader, SectionLabel, Stat, type IconName } from "@/components/ui";
-import { enrollmentState, hasConsent } from "@/lib/identity-service";
+import { enrollmentState, hasConsent, scanPaused } from "@/lib/identity-service";
 import { myAssignments } from "@/lib/learn-service";
 import { firstParam, pageActor } from "@/lib/page";
 import { callName } from "@/lib/person-name";
@@ -11,12 +11,14 @@ export const dynamic = "force-dynamic";
 /**
  * หน้าแรก — สรุปของฉัน (ค้าง · เลยกำหนด · ผ่านแล้ว) + สิ่งที่ต้องทำต่อ + ทางลัดตาม role
  * ★ ไม่บังคับยินยอมที่หน้านี้ (ผู้สร้าง/ผู้อนุมัติต้องเข้าถึงหน้าของตัวเองได้) — บอกเป็นแถบแจ้งแทน
+ * ★ พักการสแกนอยู่ (ADR-0017) ไม่ขึ้นแถบยินยอม/ลงทะเบียนใบหน้า
  */
 export default async function Home({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const actor = await pageActor();
   const err = firstParam((await searchParams).err);
-  const consented = await hasConsent(actor.personId);
-  const [rows, face] = consented ? await Promise.all([myAssignments(actor.personId), enrollmentState(actor.personId)]) : [[], null];
+  const paused = scanPaused();
+  const consented = paused || (await hasConsent(actor.personId));
+  const [rows, face] = consented ? await Promise.all([myAssignments(actor.personId), paused ? null : enrollmentState(actor.personId)]) : [[], null];
   const now = new Date();
   const open = rows.filter((r) => !r.a.passedAt);
   const overdue = open.filter((r) => r.a.dueAt <= now);

@@ -155,7 +155,7 @@ export function LessonWorkspace({
           <p className="text-[13px] leading-relaxed text-ink-2">{examNote}</p>
           {exam ?? (
             <p className="rounded-[10px] border border-dashed border-ink-4 bg-canvas px-3 py-3 text-center text-[13px] text-muted">
-              {remaining > 0 ? `ดู/อ่านให้ครบอีก ${remaining} รายการ แล้วจึงสแกนเริ่มสอบ` : "ครบแล้ว — กำลังบันทึก…"}
+              {remaining > 0 ? `ดู/อ่านให้ครบอีก ${remaining} รายการ แล้วจึงเริ่มสอบได้` : "ครบแล้ว — กำลังบันทึก…"}
             </p>
           )}
         </div>

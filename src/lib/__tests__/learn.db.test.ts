@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { asc, eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
@@ -15,7 +15,7 @@ vi.mock("@/db", async () => {
   return { db: () => get(), schema: s };
 });
 
-const { giveConsent, hasConsent } = await import("@/lib/identity-service");
+const { consentRequired, giveConsent, hasConsent, scanMode } = await import("@/lib/identity-service");
 const L = await import("@/lib/learn-service");
 
 const ME = 31;
@@ -145,6 +145,53 @@ describe("ความยินยอมและการสแกน", () => {
   it("สแกนของคนอื่นใช้ไม่ได้", async () => {
     const other = await recordScan({ personId: 99, purpose: "study", pass: true, now: T0 });
     expect((await L.startStudySession({ personId: ME, scanId: (other as { scanId: number }).scanId, now: T0 })).ok).toBe(false);
+  });
+});
+
+describe("พักการสแกนใบหน้า (ADR-0017)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("ไม่ได้พัก → เริ่มรอบเรียน/สอบโดยไม่มีผลสแกนไม่ได้ · ยังต้องยินยอม", async () => {
+    const { a, docs } = await seed();
+    expect(await L.startStudySession({ personId: ME, scanId: null, now: T0 })).toEqual({ ok: false, error: "ต้องสแกนใบหน้าก่อน" });
+    await startSession(T0);
+    await readAll(a.id, docs, sec(5));
+    expect(await L.startAttempt({ personId: ME, assignmentId: a.id, scanId: null, now: sec(10) })).toEqual({ ok: false, error: "ต้องสแกนใบหน้าก่อน" });
+    expect(await consentRequired(ME)).toBe(true);
+    expect(scanMode()).not.toBe("paused");
+  });
+
+  it("พักอยู่ → ไม่ต้องยินยอม · เรียนหลายรอบและสอบได้โดยไม่สแกน (scan_id ว่าง) · ผลสแกนที่ส่งมายังถูกตรวจ", async () => {
+    vi.stubEnv("FACE_SCAN_PAUSED", "1");
+    expect(scanMode()).toBe("paused");
+    expect(await consentRequired(ME)).toBe(false);
+    const { a, docs } = await seed();
+    // สองรอบที่ไม่มีผลสแกน — unique index ของ scan_id ไม่กันค่าว่าง
+    expect((await L.startStudySession({ personId: ME, scanId: null, now: T0 })).ok).toBe(true);
+    expect((await L.startStudySession({ personId: ME, scanId: null, now: sec(1) })).ok).toBe(true);
+    const sessions = await testDb().select().from(schema.studySessions);
+    expect(sessions.map((r) => r.scanId)).toEqual([null, null]);
+
+    const bad = await recordScan({ personId: ME, purpose: "study", pass: false, now: sec(2) });
+    expect(await L.startStudySession({ personId: ME, scanId: bad.scanId, now: sec(2) })).toEqual({ ok: false, error: "สแกนใบหน้าไม่ผ่าน" });
+
+    await readAll(a.id, docs, sec(5));
+    const started = await L.startAttempt({ personId: ME, assignmentId: a.id, scanId: null, now: sec(10) });
+    expect(started.ok).toBe(true);
+    const result = await answerAll((started as { attemptId: number }).attemptId, 10, sec(20));
+    expect(result?.result).toMatchObject({ percent: 100, passed: true });
+    const [t] = await testDb().select().from(schema.attempts);
+    expect(t.scanId).toBeNull();
+  });
+
+  it("ลบ env = กลับมาบังคับยินยอมและสแกนทันที", async () => {
+    vi.stubEnv("FACE_SCAN_PAUSED", "1");
+    expect(await consentRequired(ME)).toBe(false);
+    vi.unstubAllEnvs();
+    expect(await consentRequired(ME)).toBe(true);
+    expect(await L.startStudySession({ personId: ME, scanId: null, now: T0 })).toEqual({ ok: false, error: "ต้องสแกนใบหน้าก่อน" });
   });
 });
 

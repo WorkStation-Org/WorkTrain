@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { beginScan, devScan, finishScan, giveConsent, hasConsent, withdrawConsent, type ScanPurpose } from "@/lib/identity-service";
+import { beginScan, consentRequired, devScan, finishScan, giveConsent, withdrawConsent, type ScanPurpose } from "@/lib/identity-service";
 import { acknowledgeVersion, answer, documentLink, endStudySession, recordLeave, recordReading, startAttempt, startStudySession } from "@/lib/learn-service";
 import { awsFaceApi } from "@/lib/rekognition";
 import { alertTgQuietly } from "@/lib/tg-alerts";
@@ -12,14 +12,14 @@ import { alertTgQuietly } from "@/lib/tg-alerts";
  *
  * การสแกน (ADR-0006): `beginScanAction` → เบราว์เซอร์รัน FaceLivenessDetector ด้วย `livenessCredentialsAction`
  * → `finishScanAction` เทียบใบหน้าฝั่งเซิร์ฟเวอร์ → ได้ scanId → `startStudyWithScanAction` / `startExamWithScanAction`
- * บนเครื่อง dev ที่ไม่มี AWS ใช้ `devScanAction` แทนสองขั้นแรก
+ * บนเครื่อง dev ที่ไม่มี AWS ใช้ `devScanAction` แทนสองขั้นแรก · พักการสแกนอยู่ (ADR-0017) ส่ง `scanId: null` ตรงไปขั้นสุดท้าย
  */
 
 const PURPOSES: readonly ScanPurpose[] = ["study", "exam", "enroll"];
 
 async function learner() {
   const actor = await requireUser();
-  if (!(await hasConsent(actor.personId))) redirect("/consent");
+  if (await consentRequired(actor.personId)) redirect("/consent");
   return actor;
 }
 
@@ -69,12 +69,12 @@ export async function devScanAction(purpose: string) {
   return devScan({ personId: actor.personId, purpose: purposeOf(purpose) });
 }
 
-export async function startStudyWithScanAction(input: { scanId: number }) {
+export async function startStudyWithScanAction(input: { scanId: number | null }) {
   const actor = await learner();
   return startStudySession({ personId: actor.personId, scanId: input.scanId });
 }
 
-export async function startExamWithScanAction(input: { assignmentId: number; scanId: number }) {
+export async function startExamWithScanAction(input: { assignmentId: number; scanId: number | null }) {
   const actor = await learner();
   return startAttempt({ personId: actor.personId, ...input });
 }
