@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { assignments, attempts, learningSets, readingProgress } from "@/db/schema";
 import { leaderboard, personMonthStats, type LeaderRow, type PersonMonthStats, type StatAttempt } from "@/domain/stats";
 import type { Actor } from "@/lib/auth";
+import { personLabelsFrom, type PersonLabel } from "@/lib/person-name";
 import { bangkokMonthRange } from "@/lib/time";
 import { fetchOrg, fetchRolePeople, type OrgPerson } from "@/lib/workid";
 
@@ -10,7 +11,7 @@ import { fetchOrg, fetchRolePeople, type OrgPerson } from "@/lib/workid";
  * Dashboard + Leaderboard (spec §12)
  *
  * การมองเห็น: TG ทุกคน · หัวหน้าเห็นคนในทีมที่ดูแล (`managedTeamIds`) · ผู้สร้างเห็นชุดของตัวเอง · ทุกคนเห็นของตัวเอง
- * ★ Leaderboard ทุกคนเห็น — มีแค่ชื่อ คะแนนครั้งแรก ความไว ไม่มีรายละเอียดอื่นของคน
+ * ★ Leaderboard ทุกคนเห็น — มีแค่ชื่อ ชื่อเล่น ทีม คะแนนครั้งแรก ความไว ไม่มีรายละเอียดอื่นของคน
  * ★ ถามผังไม่ได้ = หัวหน้าเห็นแค่ของตัวเอง (ไม่เดาว่าใครอยู่ทีมไหน) และหน้าจอบอกตรง ๆ
  */
 
@@ -36,6 +37,8 @@ export interface StatusRow {
   setTitle: string;
   personId: number;
   personName: string;
+  /** ชื่อ · ชื่อเล่น · ทีม จากผังปัจจุบัน (หน้าจอ) — `personName` คือชื่อ ณ วันที่มอบ (CSV คอลัมน์เดิม) */
+  label: PersonLabel;
   teamName: string | null;
   assignedAt: Date;
   dueAt: Date;
@@ -44,10 +47,13 @@ export interface StatusRow {
   attempts: number;
 }
 
+/** ชื่อ · ชื่อเล่น · ทีม จากผังปัจจุบัน ต่อท้ายแถวของคน — ไม่เก็บลงฐาน (ADR-0002) · ไม่พบในผัง = ชื่อในแถว */
+export type WithOrgLabel<T> = T & { label: PersonLabel };
+
 export interface Dashboard {
   scope: "all" | "limited";
   orgOk: boolean;
-  people: PersonMonthStats[];
+  people: WithOrgLabel<PersonMonthStats>[];
   rows: StatusRow[];
   teams: { id: number; name: string }[];
   managers: { personId: number; name: string }[];
@@ -80,6 +86,7 @@ export async function dashboard(actor: Pick<Actor, "personId" | "role">, filter:
   const teamName = new Map(people.filter((p) => p.teamId !== null).map((p) => [p.teamId!, p.teamName ?? `ทีม #${p.teamId}`]));
   const me = people.find((p) => p.personId === actor.personId);
   const sees = visibleTo(actor, me, teamOf);
+  const labelOf = personLabelsFrom(people);
 
   const rowsDb = await db()
     .select({ a: assignments, title: learningSets.title, authorPersonId: learningSets.authorPersonId })
@@ -123,6 +130,7 @@ export async function dashboard(actor: Pick<Actor, "personId" | "role">, filter:
         setTitle: r.title,
         personId: r.a.personId,
         personName: r.a.personName,
+        label: labelOf(r.a.personId, r.a.personName),
         teamName: t ? (teamName.get(t) ?? null) : null,
         assignedAt: r.a.assignedAt,
         dueAt: r.a.dueAt,
@@ -137,7 +145,7 @@ export async function dashboard(actor: Pick<Actor, "personId" | "role">, filter:
     filtered.map((r) => r.a),
     tried as StatAttempt[],
     month,
-  );
+  ).map((s) => ({ ...s, label: labelOf(s.personId, s.personName) }));
 
   const setsSeen = new Map(visible.map((r) => [r.a.setId, r.title]));
   const visiblePeople = new Set(visible.map((r) => r.a.personId));
@@ -164,7 +172,7 @@ export async function dashboard(actor: Pick<Actor, "personId" | "role">, filter:
 }
 
 export interface LeaderboardView {
-  rows: LeaderRow[];
+  rows: WithOrgLabel<LeaderRow>[];
   /** ตัด TG ไม่ได้เพราะถาม WorkID ไม่ได้ — หน้าจอต้องบอก */
   tgExcluded: boolean;
 }
@@ -186,7 +194,10 @@ export async function monthLeaderboard(ym: string): Promise<LeaderboardView | nu
     .from(learningSets)
     .where(inArray(learningSets.id, setIds));
   const tg = await fetchRolePeople("admin");
-  return { rows: leaderboard(as, tried as StatAttempt[], sets, month, new Set(tg.ok ? tg.personIds : [])), tgExcluded: tg.ok };
+  const org = await fetchOrg();
+  const labelOf = personLabelsFrom(org.ok ? org.people : []);
+  const rows = leaderboard(as, tried as StatAttempt[], sets, month, new Set(tg.ok ? tg.personIds : [])).map((r) => ({ ...r, label: labelOf(r.personId, r.personName) }));
+  return { rows, tgExcluded: tg.ok };
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────

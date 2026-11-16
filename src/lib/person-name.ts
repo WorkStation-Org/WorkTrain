@@ -43,6 +43,32 @@ export function callNamesFrom(people: readonly ({ personId: number } & PersonNam
   };
 }
 
+/**
+ * ชื่อคนบนหน้าจอรายชื่อ (แท็บผู้เรียน · Dashboard) — ชื่อ-สกุล + ชื่อเล่น + ทีม จากผังปัจจุบัน
+ *
+ * ★ ไม่เก็บลงฐาน (ADR-0002) — ย้ายทีมแล้วหน้าจอเปลี่ยนตามเอง · ไม่พบในผัง = ชื่อในแถว (snapshot) ไม่มีชื่อเล่น/ทีม
+ */
+export interface PersonLabel {
+  name: string;
+  nickname: string | null;
+  team: string | null;
+}
+
+export type PersonLabels = (personId: number, snapshot: string) => PersonLabel;
+
+export function personLabelsFrom(people: readonly ({ personId: number; teamName: string | null } & PersonNames)[]): PersonLabels {
+  const byId = new Map(people.map((p) => [p.personId, p]));
+  return (personId, snapshot) => {
+    const p = byId.get(personId);
+    return p ? { name: p.name || snapshot, nickname: p.nickname?.trim() || null, team: p.teamName } : { name: snapshot, nickname: null, team: null };
+  };
+}
+
+/** "ชื่อ สกุล (ชื่อเล่น)" — ไม่มีชื่อเล่น = ชื่อ-สกุลล้วน */
+export function withNickname(p: { name: string; nickname: string | null }): string {
+  return p.nickname ? `${p.name} (${p.nickname})` : p.name;
+}
+
 /** ถามผังครั้งเดียวต่อรอบงาน (`fetchOrg` จำไว้ 5 นาทีอยู่แล้ว) · ถามไม่ได้ = ใช้คำแรกของชื่อในแถว ไม่ทำให้ส่งไม่ได้ */
 export async function lineCallNames(): Promise<CallNames> {
   const org = await fetchOrg();

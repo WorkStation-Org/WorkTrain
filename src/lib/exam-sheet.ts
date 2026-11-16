@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import type { FormKind, Level, Topic } from "@/db/schema";
 import { LEVEL_LABELS, slots, topicLabel, type Blueprint } from "@/domain/blueprint";
+import { displayFileName } from "@/domain/document";
 import { sourceDocIndex } from "@/domain/spread";
 import { checkForms, type GeneratedQuestion } from "@/lib/exam-generator";
 
@@ -172,8 +173,10 @@ export function parseSheet(rows: readonly SheetRow[], blueprint: Blueprint, form
     });
     if (opts.some((o) => BANNED_CHOICE.test(o))) problems.push('ห้ามใช้ตัวเลือก "ถูกทุกข้อ" หรือ "ไม่มีข้อใดถูก"');
     if (correct === null || correct < 1 || correct > 4) problems.push("ข้อที่ถูกต้องเป็น 1–4");
+    // Template ที่โหลดไว้ก่อนตัดนามสกุลชื่อไฟล์ (migration 0014) ยัง import ได้ — เทียบชื่อแบบไม่สนนามสกุล
+    const known = fileNames.includes(file) ? file : fileNames.find((f) => displayFileName(f) === displayFileName(file));
     if (!file) problems.push("ยังไม่ได้เลือกไฟล์ที่มา");
-    else if (!fileNames.includes(file)) problems.push(`ไม่มีไฟล์ "${file}" ในเอกสารของชุดนี้`);
+    else if (!known) problems.push(`ไม่มีไฟล์ "${file}" ในเอกสารของชุดนี้`);
     if (!location) problems.push("ยังไม่ได้กรอกตำแหน่ง (เช่น หน้า 5 หรือ นาที 2:15)");
     if (text) {
       const prevRow = texts.get(norm(text));
@@ -188,7 +191,7 @@ export function parseSheet(rows: readonly SheetRow[], blueprint: Blueprint, form
     }
     byKey.set(key, {
       row,
-      q: { topic: slot.topic, level: slot.level, text, choices: opts, correctIndex: (correct as number) - 1, sourceRef: joinSourceRef(file, location) },
+      q: { topic: slot.topic, level: slot.level, text, choices: opts, correctIndex: (correct as number) - 1, sourceRef: joinSourceRef(known ?? file, location) },
     });
   }
 
