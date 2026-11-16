@@ -1,0 +1,1 @@
+ALTER TABLE "audience_rules" ADD COLUMN "added_by_person_id" integer;

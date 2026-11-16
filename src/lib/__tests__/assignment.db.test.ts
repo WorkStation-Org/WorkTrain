@@ -90,7 +90,7 @@ describe("ผู้รับ", () => {
           { kind: "position", refId: 41, label: "ซ้ำ" },
         ],
       }),
-    ).toEqual({ ok: true, assigned: 0, ended: 0, reopened: 0 });
+    ).toEqual({ ok: true, assigned: 0, ended: 0, reopened: 0, eventId: null });
     const preview = await previewAudience(set.id);
     expect(preview.ok && preview.people.map((p) => p.personId)).toEqual([20, 31, 32]);
   });
@@ -113,7 +113,7 @@ describe("ผู้รับ", () => {
       ],
       now: MON,
     });
-    expect(out).toEqual({ ok: true, assigned: 1, ended: 1, reopened: 0 });
+    expect(out).toMatchObject({ ok: true, assigned: 1, ended: 1, reopened: 0, eventId: expect.any(Number) });
     // ไม่ลบแถว — เซลหนึ่ง (31) ถูกตัดจบเพราะยังอยู่ในผังแต่ไม่ตรงเงื่อนไข
     expect((await assignmentRows()).map((a) => [a.personId, a.endReason])).toEqual([
       [31, "not_in_audience"],
@@ -458,5 +458,100 @@ describe("ตัดจบ · เปิดใหม่ · ด่านกัน�
     expect(pushes[0].text).toContain("⏰ ยังไม่ได้เริ่มเรียน 2 ชุด");
     pushes = [];
     expect((await runReminders({ now: day(1) })).day3).toMatchObject({ sent: 0 });
+  });
+});
+
+describe("ผู้อนุมัติเพิ่มผู้รับ · TG อนุมัติแทน (ADR-0018)", () => {
+  const mgr: Actor = { personId: 20, email: "mgr@ws.co", name: "ผจก.", role: "user" };
+  async function withApprover(status: "pending_approval" | "active") {
+    const set = await activeSet();
+    await setAudience({ actor: pd, setId: set.id, rules: [{ kind: "position", refId: 41, label: "Sales" }] });
+    await testDb()
+      .update(schema.learningSets)
+      .set({ status, approverPersonId: 20, approverName: "ผจก.", ...(status === "active" ? { approvedAt: MON } : {}) })
+      .where(eq(schema.learningSets.id, set.id));
+    return set;
+  }
+  const rulesOf = async (setId: number) =>
+    (await testDb().select().from(schema.audienceRules).where(eq(schema.audienceRules.setId, setId))).map((r) => [r.label, r.addedByPersonId]).sort();
+
+  it("รออนุมัติ: ผู้อนุมัติเพิ่มได้ · ลงประวัติ · แจ้งผู้สร้าง · เอาของผู้สร้างออกไม่ได้ · ลบของตัวเองได้", async () => {
+    const set = await withApprover("pending_approval");
+    const rules = [
+      { kind: "position", refId: 41, label: "Sales" },
+      { kind: "team", refId: 8, label: "ทีม QC" },
+    ];
+    const out = await setAudience({ actor: mgr, setId: set.id, rules });
+    if (!out.ok) throw new Error(out.error);
+    expect(out).toMatchObject({ assigned: 0, eventId: expect.any(Number) });
+    expect(await rulesOf(set.id)).toEqual([
+      ["Sales", null],
+      ["ทีม QC", 20],
+    ]);
+    const [ev] = await testDb().select().from(schema.approvalEvents).where(eq(schema.approvalEvents.id, out.eventId!));
+    expect(ev).toMatchObject({ action: "audience_changed", actorPersonId: 20, comment: "เพิ่ม ทีม QC (+1 คน)", detail: { by: "approver", added: ["ทีม QC"], gained: 1 } });
+
+    pushes = [];
+    expect(await notifyApprovalEvent(out.eventId!)).toBe("sent");
+    expect(pushes[0].text).toContain("ถึง พีดี");
+    expect(pushes[0].text).toContain("➕ ผจก. (ผู้อนุมัติ) เพิ่มผู้รับในชุด F331 Signature: ทีม QC (+1 คน)");
+
+    expect(await setAudience({ actor: mgr, setId: set.id, rules: [rules[1]] })).toEqual({ ok: false, error: "ผู้อนุมัติเอาเงื่อนไขที่ผู้สร้างตั้งไว้ออกไม่ได้: Sales" });
+    expect((await setAudience({ actor: mgr, setId: set.id, rules: [rules[0]] })).ok).toBe(true);
+    expect(await rulesOf(set.id)).toEqual([["Sales", null]]);
+  });
+
+  it("ชุดที่ใช้อยู่: ผู้อนุมัติเพิ่มแล้วมอบทันที · ผู้สร้างแก้ต่อแล้วเงื่อนไขของผู้อนุมัติยังจำว่าใครเพิ่ม · คนอื่นแก้ไม่ได้", async () => {
+    const set = await withApprover("active");
+    const out = await setAudience({
+      actor: mgr,
+      setId: set.id,
+      rules: [
+        { kind: "position", refId: 41, label: "Sales" },
+        { kind: "team", refId: 8, label: "ทีม QC" },
+      ],
+      now: MON,
+    });
+    expect(out).toMatchObject({ ok: true, assigned: 3 });
+    expect((await assignmentRows()).map((a) => a.personId)).toEqual([31, 32, 40]);
+    await setAudience({
+      actor: pd,
+      setId: set.id,
+      rules: [
+        { kind: "position", refId: 41, label: "Sales" },
+        { kind: "team", refId: 8, label: "ทีม QC" },
+        { kind: "person", refId: 20, label: "ผจก." },
+      ],
+      now: MON,
+    });
+    expect(await rulesOf(set.id)).toEqual([
+      ["Sales", null],
+      ["ทีม QC", 20],
+      ["ผจก.", null],
+    ]);
+    const qc: Actor = { personId: 40, email: "qc@ws.co", name: "คิวซี", role: "user" };
+    expect((await setAudience({ actor: qc, setId: set.id, rules: [] })).ok).toBe(false);
+  });
+
+  it("TG อนุมัติแทน → ผู้สร้างได้ '(TG) อนุมัติแทน …' · ผู้อนุมัติตัวจริงได้ 'อนุมัติแทนคุณแล้ว' · ไม่แจ้งคนที่กดเอง", async () => {
+    const set = await withApprover("active");
+    const [ev] = await testDb()
+      .insert(schema.approvalEvents)
+      .values({ setId: set.id, action: "approved", actorPersonId: 99, actorName: "ทีจี", detail: { onBehalfOf: { personId: 20, name: "ผจก." } } })
+      .returning();
+    pushes = [];
+    expect(await notifyApprovalEvent(ev.id)).toBe("sent");
+    expect(pushes.map((p) => p.text)).toEqual([
+      expect.stringContaining("✅ ทีจี (TG) อนุมัติแทน ผจก.: F331 Signature"),
+      expect.stringContaining("ℹ️ ทีจี (TG) อนุมัติแทนคุณแล้ว: F331 Signature"),
+    ]);
+    // TG อนุมัติชุดที่ตัวเองสร้าง — ไม่ส่งหาตัวเอง
+    const [own] = await testDb()
+      .insert(schema.approvalEvents)
+      .values({ setId: set.id, action: "approved", actorPersonId: 10, actorName: "พีดี", detail: { onBehalfOf: { personId: 20, name: "ผจก." }, ownSet: true } })
+      .returning();
+    pushes = [];
+    expect(await notifyApprovalEvent(own.id)).toBeNull();
+    expect(pushes.map((p) => p.text)).toEqual([expect.stringContaining("ℹ️ พีดี (TG) อนุมัติแทนคุณแล้ว")]);
   });
 });

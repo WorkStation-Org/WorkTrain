@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
 import { slots, type Blueprint } from "@/domain/blueprint";
@@ -173,6 +173,18 @@ describe("อ่านเพื่อรับทราบ", () => {
 
     const [anyQ] = await testDb().select().from(schema.questions).limit(1);
     expect((await editQuestion({ actor: mgr, questionId: anyQ.id, edit: { text: "x", sourceRef: "y", choices: ["1", "2", "3", "4"], correctIndex: 0 } })).ok).toBe(false);
+  });
+
+  it("TG เลือกชนิดการเปลี่ยนและอนุมัติเวอร์ชันแทนผู้อนุมัติได้ — ประวัติลงว่าแทนใคร (ADR-0018)", async () => {
+    const tg: Actor = { personId: 99, email: "tg@ws.co", name: "ทีจี", role: "admin" };
+    const { setId } = await activeSetWithPassedLearner();
+    await draftV2(setId);
+    await V.submitVersion({ actor: pd, setId });
+    expect((await V.setChangeKind({ actor: other, setId, kind: "small" })).ok).toBe(false);
+    expect(await V.setChangeKind({ actor: tg, setId, kind: "small" })).toEqual({ ok: true });
+    expect((await V.approveVersion({ actor: tg, setId, now: T_V2 })).ok).toBe(true);
+    const [ev] = await testDb().select().from(schema.approvalEvents).where(eq(schema.approvalEvents.action, "approved")).orderBy(desc(schema.approvalEvents.id)).limit(1);
+    expect(ev).toMatchObject({ actorPersonId: 99, detail: { onBehalfOf: { personId: mgr.personId } } });
   });
 
   it("ผ่านหลังเวอร์ชันใหม่อนุมัติ = ไม่มีอะไรค้าง", async () => {

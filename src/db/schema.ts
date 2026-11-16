@@ -343,6 +343,11 @@ export const audienceRules = pgTable(
     refId: integer("ref_id").notNull(),
     /** ชื่อ ณ ตอนตั้ง (ตำแหน่ง · ทีม · กลุ่ม · คน) — แสดงเมื่อของจริงหายไปแล้ว */
     label: text("label").notNull(),
+    /**
+     * คนที่เพิ่มเงื่อนไขนี้ ถ้าไม่ใช่ผู้สร้าง (ผู้อนุมัติ · TG) · null = ผู้สร้าง (หรือแถวก่อน migration 0016)
+     * ★ ผู้อนุมัติเพิ่มได้อย่างเดียว ลบได้เฉพาะแถวที่ตัวเองเพิ่ม (ADR-0018)
+     */
+    addedByPersonId: integer("added_by_person_id"),
   },
   (t) => [primaryKey({ columns: [t.setId, t.kind, t.refId] })],
 );

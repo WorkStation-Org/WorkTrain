@@ -19,7 +19,7 @@ import type { Actor } from "@/lib/auth";
 import { checkForms, checkQuestion, type ExamModel, type GeneratedQuestion, type SourceDocument } from "@/lib/exam-generator";
 import { buildTemplate, parseSheet, readSheet, type ExistingQuestion, type RowError } from "@/lib/exam-sheet";
 import { objectStore } from "@/lib/object-store";
-import { canEditVersion, canManage, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
+import { approverRole, canEditVersion, canManage, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
 
 /**
  * ข้อสอบของชุดการเรียนรู้ — ให้ AI ออก 5 ชุด · แก้ทีละข้อ · ออกใหม่ทีละข้อ (spec §3 · §4)
@@ -47,7 +47,8 @@ export function examEditor(
   version: Pick<VersionRow, "versionNo" | "approvedAt" | "submittedAt"> | null,
 ): "author" | "approver" | null {
   if (version?.approvedAt) return null;
-  if (set.approverPersonId === actor.personId) {
+  // ผู้อนุมัติที่ระบุ หรือ TG ที่อนุมัติแทน (ADR-0018) — แก้/ให้ AI ออกข้อใหม่ได้เหมือนกันตอนรออนุมัติ
+  if (approverRole(actor, set)) {
     if (set.status === "pending_approval") return "approver";
     if (set.status === "active" && version && version.versionNo > 1 && version.submittedAt) return "approver";
   }
@@ -327,7 +328,7 @@ async function sheetTarget(actor: Pick<Actor, "personId" | "role">, setId: numbe
     if (!canEditVersion(actor, set, version)) return { ok: false as const, error: "Import ข้อสอบได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
   } else {
     const pending = set.status === "active" && version.versionNo > 1 && !version.approvedAt && version.submittedAt;
-    if (!pending || set.approverPersonId !== actor.personId) return { ok: false as const, error: "Import ข้อสอบส่วนที่เปลี่ยนได้เฉพาะผู้อนุมัติของเวอร์ชันที่รออนุมัติ" };
+    if (!pending || !approverRole(actor, set)) return { ok: false as const, error: "Import ข้อสอบส่วนที่เปลี่ยนได้เฉพาะผู้อนุมัติของเวอร์ชันที่รออนุมัติ" };
     if (version.changeKind !== "large") return { ok: false as const, error: 'เลือก "เรียนรู้และทดสอบ" ก่อน' };
   }
   const docs = await db().select({ fileName: documents.fileName }).from(documents).where(eq(documents.versionId, version.id)).orderBy(asc(documents.sortOrder));

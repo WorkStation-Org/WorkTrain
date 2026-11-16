@@ -11,7 +11,7 @@ import { assignmentStatus, audienceRulesOf, onboardingPositionsOf, type Assignme
 import { examEditor, reviewedQuestionIds } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
 import { personLabelsFrom } from "@/lib/person-name";
-import { canCloseSet, canDeleteDraft, canEditAudience, canEditDraft, canEditVersion, canManage, coverPath, getSetDetail } from "@/lib/set-service";
+import { approverRole, audienceMode, canCloseSet, canDeleteDraft, canEditDraft, canEditVersion, canManage, coverPath, getSetDetail } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { fetchOrg } from "@/lib/workid";
 import {
@@ -82,9 +82,12 @@ export default async function SetPage({
   const editor = examEditor(actor, set, version);
   const newVersion = set.status === "active" && version && version.versionNo > 1 && !version.approvedAt ? version : null;
   const isOwner = actor.role === "admin" || actor.personId === set.authorPersonId;
-  const isVersionApprover = Boolean(newVersion?.submittedAt) && set.approverPersonId === actor.personId;
-  const isApprover = set.status === "pending_approval" && set.approverPersonId === actor.personId;
-  const audienceEditable = canEditAudience(actor, set);
+  // ผู้อนุมัติที่ระบุ หรือ TG ที่อนุมัติแทน (ADR-0018) — `actingTg` = TG ที่ไม่ใช่ผู้อนุมัติที่ระบุ (หน้าจอบอกว่ากำลังทำแทนใคร)
+  const role = approverRole(actor, set);
+  const actingTg = role === "tg";
+  const isVersionApprover = Boolean(newVersion?.submittedAt) && role !== null;
+  const isApprover = set.status === "pending_approval" && role !== null;
+  const audience = audienceMode(actor, set);
   const rules = await audienceRulesOf(set.id);
   const status = set.status === "active" || set.status === "closed" ? await assignmentStatus(set.id) : [];
   const fullForms = forms.filter((f) => f.kind === "full");
@@ -267,6 +270,7 @@ export default async function SetPage({
               newVersion={newVersion}
               isOwner={isOwner}
               isVersionApprover={isVersionApprover}
+              actingTg={actingTg}
               docsEditable={docsEditable}
               approverName={set.approverName}
               hasDelta={forms.some((f) => f.kind === "delta")}
@@ -364,6 +368,7 @@ export default async function SetPage({
           {isApprover && (
             <Card>
               <SectionTitle className="mb-3">การอนุมัติ</SectionTitle>
+              {actingTg && <OnBehalfNote approverName={set.approverName} />}
               <div className="space-y-4">
                 <form action={approveAction}>
                   <input type="hidden" name="setId" value={set.id} />
@@ -410,8 +415,10 @@ export default async function SetPage({
               teamId: p.teamId,
               managedTeamIds: p.managedTeamIds,
             }))}
-            initialRules={rules.map((r) => ({ kind: r.kind, refId: r.refId, label: r.label }))}
-            editable={audienceEditable}
+            initialRules={rules.map((r) => ({ kind: r.kind, refId: r.refId, label: r.label, addedByPersonId: r.addedByPersonId }))}
+            editable={audience !== null}
+            mode={audience ?? "full"}
+            actorId={actor.personId}
             active={set.status === "active"}
             assignedIds={status.filter((s) => s.endedAt === null).map((s) => s.personId)}
             pathIds={pathIds}
@@ -491,12 +498,27 @@ export default async function SetPage({
   );
 }
 
-/** ข้อสอบทั้งชุดมาจากไหน — ส่วนที่เปลี่ยน · ชื่อไฟล์ที่ Import */
+/** TG กำลังตรวจแทนผู้อนุมัติที่ระบุ — บอกก่อนกดว่าประวัติจะลงว่ากดแทนใคร (ADR-0018) */
+function OnBehalfNote({ approverName }: { approverName: string | null }) {
+  return (
+    <p className="mb-3 rounded-[10px] bg-warn-soft px-3 py-2 text-[13px] text-warn">
+      คุณกำลังตรวจแทน {approverName ?? "ผู้อนุมัติ"} (ผู้อนุมัติของชุดนี้) — ประวัติจะบันทึกว่า TG อนุมัติ/ตีกลับแทน และแจ้ง {approverName ?? "ผู้อนุมัติ"} ทาง LINE
+    </p>
+  );
+}
+
+/** ส่วนขยายของประวัติ — ข้อสอบมาจากไหน · TG กดแทนใคร · ผู้อนุมัติเพิ่มผู้รับ */
 function eventNote(action: string, detail: unknown): string | null {
-  if (action !== "exams_generated" && action !== "exams_imported") return null;
-  const d = (detail ?? {}) as { kind?: string; fileName?: string };
-  const parts = [d.kind === "delta" && "(ส่วนที่เปลี่ยน)", d.fileName && `จากไฟล์ ${d.fileName}`].filter(Boolean);
-  return parts.length ? parts.join(" ") : null;
+  const d = (detail ?? {}) as { kind?: string; fileName?: string; onBehalfOf?: { name: string | null } | null; ownSet?: boolean; by?: string };
+  if (action === "exams_generated" || action === "exams_imported") {
+    const parts = [d.kind === "delta" && "(ส่วนที่เปลี่ยน)", d.fileName && `จากไฟล์ ${d.fileName}`].filter(Boolean);
+    return parts.length ? parts.join(" ") : null;
+  }
+  if ((action === "approved" || action === "returned") && d.onBehalfOf !== undefined) {
+    return `(TG${d.onBehalfOf ? ` แทน ${d.onBehalfOf.name ?? "ผู้อนุมัติ"}` : ""}${d.ownSet ? " · ชุดที่ตัวเองสร้าง/ส่ง" : ""})`;
+  }
+  if (action === "audience_changed" && d.by === "approver") return "(ผู้อนุมัติ)";
+  return null;
 }
 
 function Item({ label, value }: { label: string; value: string }) {
@@ -517,6 +539,7 @@ function VersionCard({
   newVersion,
   isOwner,
   isVersionApprover,
+  actingTg,
   docsEditable,
   approverName,
   hasDelta,
@@ -526,6 +549,8 @@ function VersionCard({
   newVersion: VersionRow;
   isOwner: boolean;
   isVersionApprover: boolean;
+  /** TG ที่อนุมัติแทนผู้อนุมัติที่ระบุ (ADR-0018) */
+  actingTg: boolean;
   docsEditable: boolean;
   approverName: string | null;
   hasDelta: boolean;
@@ -595,6 +620,7 @@ function VersionCard({
           )}
           {isVersionApprover && (
             <div className="space-y-4">
+              {actingTg && <OnBehalfNote approverName={approverName} />}
               <form action={setChangeKindAction} className="space-y-1">
                 <input type="hidden" name="setId" value={setId} />
                 {tab}

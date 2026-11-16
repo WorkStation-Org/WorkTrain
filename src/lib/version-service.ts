@@ -7,7 +7,7 @@ import type { Actor } from "@/lib/auth";
 import { MAX_SEND_ATTEMPTS, sendToPerson, type SendResult } from "@/lib/deliver";
 import { checkForms, type ExamModel } from "@/lib/exam-generator";
 import { formsComplete, logFormsEvent, replaceForms, sourceDocuments } from "@/lib/exam-service";
-import { canEditVersion, currentVersion, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
+import { approverRole, canEditVersion, currentVersion, onBehalfDetail, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
 import { fetchOrg } from "@/lib/workid";
 
 /**
@@ -41,8 +41,14 @@ function isOwnerOrAdmin(actor: Pick<Actor, "personId" | "role">, set: SetRow) {
   return actor.role === "admin" || set.authorPersonId === actor.personId;
 }
 
-function isVersionApprover(actor: Pick<Actor, "personId">, set: SetRow, v: VersionRow | null): v is VersionRow {
-  return v !== null && v.submittedAt !== null && set.approverPersonId === actor.personId;
+/** ผู้อนุมัติของเวอร์ชันที่รออนุมัติ — ผู้อนุมัติที่ระบุในชุด หรือ TG กดแทน (ADR-0018) */
+function isVersionApprover(actor: Pick<Actor, "personId" | "role">, set: SetRow, v: VersionRow | null): v is VersionRow {
+  return v !== null && v.submittedAt !== null && approverRole(actor, set) !== null;
+}
+
+/** detail ของประวัติเมื่อ TG กดแทน — ชุดที่ตัวเองสร้าง = `ownSet` */
+function versionTgDetail(actor: Pick<Actor, "personId" | "role">, set: SetRow) {
+  return approverRole(actor, set) === "tg" ? onBehalfDetail(set, set.authorPersonId === actor.personId) : null;
 }
 
 function eventIdOf(results: unknown[]): number {
@@ -169,7 +175,7 @@ export async function returnVersion(input: { actor: Actor; setId: number; commen
     db().update(setVersions).set({ submittedAt: null }).where(eq(setVersions.id, v.id)),
     db()
       .insert(approvalEvents)
-      .values({ setId: set.id, versionId: v.id, action: "returned", actorPersonId: input.actor.personId, actorName: input.actor.name, comment, createdAt: now })
+      .values({ setId: set.id, versionId: v.id, action: "returned", actorPersonId: input.actor.personId, actorName: input.actor.name, comment, detail: versionTgDetail(input.actor, set), createdAt: now })
       .returning({ id: approvalEvents.id }),
   ]);
   return { ok: true, eventId: eventIdOf(results) };
@@ -195,7 +201,7 @@ export async function approveVersion(input: { actor: Actor; setId: number; now?:
     db().update(learningSets).set({ updatedAt: now }).where(eq(learningSets.id, set.id)),
     db()
       .insert(approvalEvents)
-      .values({ setId: set.id, versionId: v.id, action: "approved", actorPersonId: input.actor.personId, actorName: input.actor.name, createdAt: now })
+      .values({ setId: set.id, versionId: v.id, action: "approved", actorPersonId: input.actor.personId, actorName: input.actor.name, detail: versionTgDetail(input.actor, set), createdAt: now })
       .returning({ id: approvalEvents.id }),
   ]);
   return { ok: true, eventId: eventIdOf(results), versionId: v.id };
