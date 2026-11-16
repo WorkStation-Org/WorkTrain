@@ -33,6 +33,7 @@ const {
   authorVideoLink,
   previewLink,
   previewPricelistPdf,
+  pendingSince,
   removeDocument,
   updateDocument,
   moveDocument,
@@ -582,5 +583,37 @@ describe("ชื่อไฟล์ · เปิดดูในแท็บเอ
     expect(await previewPricelistPdf({ actor: pdMgr, setId: setId + 1, documentId: doc.id })).toEqual({ ok: false, error: "ไม่พบเอกสารนี้" });
     expect(await previewPricelistPdf({ actor: sales, setId, documentId: doc.id })).toEqual({ ok: false, error: "ไม่พบเอกสารนี้" });
     expect((await testDb().select().from(schema.documentViews)).map((v) => v.personId)).toEqual([pdMgr.personId]);
+  });
+});
+
+describe("TG อนุมัติแทน (ADR-0018)", () => {
+  const tg: Actor = { personId: 99, email: "tg@ws.co", name: "ทีจี", role: "admin" };
+
+  it("TG อนุมัติแทนผู้อนุมัติที่ระบุ — ประวัติลงว่าแทนใคร · คนอื่นยังอนุมัติไม่ได้ · รายการรออนุมัติ", async () => {
+    const setId = await readySet();
+    expect(await submitForApproval({ actor: pd, setId })).toMatchObject({ ok: true });
+    const [set] = await testDb().select().from(schema.learningSets).where(eq(schema.learningSets.id, setId));
+    expect((await pendingSince([set])).get(setId)).toMatchObject({ what: "set" });
+    expect((await approve({ actor: sales, setId })).ok).toBe(false);
+    expect(await approve({ actor: tg, setId })).toMatchObject({ ok: true });
+    const ev = (await events(setId)).find((e) => e.action === "approved")!;
+    expect(ev).toMatchObject({ actorPersonId: 99, detail: { onBehalfOf: { personId: pdMgr.personId, name: "ผจก. พีดี" } } });
+    expect((ev.detail as { ownSet?: boolean }).ownSet).toBeUndefined();
+  });
+
+  it("TG ตีกลับแทนได้ · TG ที่กดส่งเองแล้วอนุมัติเอง = ประวัติบอก ownSet · ผู้อนุมัติที่ระบุอนุมัติตามปกติไม่มี detail", async () => {
+    const setId = await readySet();
+    await submitForApproval({ actor: pd, setId });
+    expect(await returnToAuthor({ actor: tg, setId, comment: "แก้ราคาหน้า 5" })).toMatchObject({ ok: true });
+    expect((await events(setId)).find((e) => e.action === "returned")).toMatchObject({ detail: { onBehalfOf: { personId: pdMgr.personId } } });
+
+    expect(await submitForApproval({ actor: tg, setId })).toMatchObject({ ok: true });
+    expect(await approve({ actor: tg, setId })).toMatchObject({ ok: true });
+    expect((await events(setId)).filter((e) => e.action === "approved").at(-1)).toMatchObject({ detail: { ownSet: true } });
+
+    const other = await readySet();
+    await submitForApproval({ actor: pd, setId: other });
+    await approve({ actor: pdMgr, setId: other });
+    expect((await events(other)).find((e) => e.action === "approved")?.detail).toBeNull();
   });
 });

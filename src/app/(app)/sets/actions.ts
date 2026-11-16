@@ -320,9 +320,12 @@ export async function setSpreadModeAction(input: { setId: number; mode: string }
 }
 
 /** บันทึกผู้รับจากตัวเลือกใหม่ — ชุดที่ใช้อยู่ได้รับมอบทันที */
+/** บันทึกผู้รับ — ผู้สร้าง/TG แก้ได้ทุกเงื่อนไข · ผู้อนุมัติ (ไม่ต้องมี role author) เพิ่มได้ (`setAudience` ตรวจสิทธิ์ · ADR-0018) */
 export async function saveAudienceAction(input: { setId: number; rules: { kind: string; refId: number; label: string }[] }) {
-  const actor = await requireAuthor();
+  const actor = await requireUser();
   const out = await setAudience({ actor, setId: input.setId, rules: input.rules });
+  // ผู้อนุมัติเพิ่มผู้รับ → แจ้งผู้สร้าง · ส่งไม่ได้ไม่ทำให้บันทึกล้ม (cron เช้าส่งซ้ำให้)
+  if (out.ok && out.eventId) await notifyApprovalEvent(out.eventId).catch(() => null);
   revalidatePath(`/sets/${input.setId}`);
   return out;
 }

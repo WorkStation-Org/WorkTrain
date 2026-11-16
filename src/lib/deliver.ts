@@ -35,6 +35,7 @@ export type NotificationKind =
   | "approval_requested"
   | "approval_returned"
   | "approval_approved"
+  | "audience_added"
   | "assigned"
   | "reassigned"
   | "assignment_ended"

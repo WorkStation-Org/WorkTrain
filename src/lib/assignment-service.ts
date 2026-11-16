@@ -20,7 +20,7 @@ import { endGuardTripped, planEnds } from "@/domain/assignment-end";
 import { resolveAudience, type AudienceRule } from "@/domain/audience";
 import type { Actor } from "@/lib/auth";
 import { markCoveredBy, markSkippedBy, MAX_SEND_ATTEMPTS, sendToGroup, sendToPerson, type NotificationKind, type SendResult } from "@/lib/deliver";
-import { canEditAudience, type Outcome } from "@/lib/set-service";
+import { audienceMode, type Outcome } from "@/lib/set-service";
 import { ageInDays, bangkokDate, bangkokParts, formatBangkok } from "@/lib/time";
 import { fetchOrg, fetchRolePeople, type OrgPerson } from "@/lib/workid";
 
@@ -53,14 +53,22 @@ export interface AudienceInput {
 }
 
 /**
- * แทนเงื่อนไขผู้รับทั้งชุด — ร่าง หรือชุดที่ใช้อยู่ (ผู้สร้าง/TG)
- * ชุดที่ใช้อยู่: มอบให้คนที่ตรงเงื่อนไขใหม่ทันที (แจ้ง LINE เหมือนตอนอนุมัติ) · คนที่หลุดเงื่อนไขถูกตัดจบทันที (ADR-0017) ·
- * ลงประวัติว่าใครเปลี่ยนเมื่อไร
+ * แทนเงื่อนไขผู้รับทั้งชุด (`audienceMode`)
+ * - ผู้สร้าง/TG: ร่าง · ใช้อยู่ (TG รออนุมัติได้ด้วย) — แก้ได้ทุกเงื่อนไข
+ * - ผู้อนุมัติ: รออนุมัติ · ใช้อยู่ — เพิ่มได้ · ลบได้เฉพาะที่ตัวเองเพิ่ม (ADR-0018)
+ * ชุดที่ใช้อยู่: มอบให้คนที่ตรงเงื่อนไขใหม่ทันที · คนที่หลุดเงื่อนไขถูกตัดจบทันที (ADR-0017)
+ * ลงประวัติเมื่อชุดใช้อยู่ หรือผู้อนุมัติแก้ (ทุกสถานะ) · `eventId` ให้ผู้เรียกส่งต่อ `notifyApprovalEvent` (ผู้อนุมัติแก้ = แจ้งผู้สร้าง)
  */
-export async function setAudience(input: { actor: Actor; setId: number; rules: AudienceInput[]; now?: Date }): Promise<Outcome<{ assigned: number; ended: number; reopened: number }>> {
+export async function setAudience(input: {
+  actor: Actor;
+  setId: number;
+  rules: AudienceInput[];
+  now?: Date;
+}): Promise<Outcome<{ assigned: number; ended: number; reopened: number; eventId: number | null }>> {
   const [set] = await db().select().from(learningSets).where(eq(learningSets.id, input.setId));
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
-  if (!canEditAudience(input.actor, set)) return { ok: false, error: "แก้ผู้รับได้เฉพาะชุดร่างหรือชุดที่ใช้อยู่ของตัวเอง" };
+  const mode = audienceMode(input.actor, set);
+  if (!mode) return { ok: false, error: "แก้ผู้รับได้เฉพาะผู้สร้าง/TG (ร่าง · ชุดที่ใช้อยู่) หรือผู้อนุมัติ (รออนุมัติ · ชุดที่ใช้อยู่)" };
   const seen = new Set<string>();
   const rows: (typeof audienceRules.$inferInsert)[] = [];
   for (const r of input.rules) {
@@ -71,23 +79,60 @@ export async function setAudience(input: { actor: Actor; setId: number; rules: A
     seen.add(key);
     rows.push({ setId: set.id, kind: r.kind as AudienceKind, refId: r.refId, label: r.label.trim().slice(0, 200) || key });
   }
+  const ruleKey = (r: { kind: string; refId: number }) => `${r.kind}:${r.refId}`;
+  const existing = await db().select().from(audienceRules).where(eq(audienceRules.setId, set.id));
+  const before = new Map(existing.map((r) => [ruleKey(r), r]));
+  const wanted = new Set(rows.map(ruleKey));
+  if (mode === "addOnly") {
+    const locked = existing.filter((r) => r.addedByPersonId !== input.actor.personId && !wanted.has(ruleKey(r)));
+    if (locked.length) return { ok: false, error: `ผู้อนุมัติเอาเงื่อนไขที่ผู้สร้างตั้งไว้ออกไม่ได้: ${locked.map((r) => r.label).join(" · ")}` };
+  }
+  // ใครเพิ่มเงื่อนไขนี้ — แถวเดิมคงค่าเดิม · แถวใหม่ = คนกด ถ้าไม่ใช่ผู้สร้าง (ผู้อนุมัติลบได้เฉพาะของตัวเอง)
+  // ★ ใช้ `has` ไม่ใช่ `??` — แถวเดิมของผู้สร้างเก็บ null ไว้ และต้องคงเป็น null
+  for (const r of rows) {
+    const prev = before.get(ruleKey(r));
+    r.addedByPersonId = prev ? prev.addedByPersonId : input.actor.personId === set.authorPersonId ? null : input.actor.personId;
+  }
+  const added = rows.filter((r) => !before.has(ruleKey(r)));
+  const removed = existing.filter((r) => !wanted.has(ruleKey(r)));
   await atomic([
     db().delete(audienceRules).where(eq(audienceRules.setId, set.id)),
     ...(rows.length ? [db().insert(audienceRules).values(rows)] : []),
   ]);
-  if (set.status !== "active") return { ok: true, assigned: 0, ended: 0, reopened: 0 };
 
-  await db().insert(approvalEvents).values({
-    setId: set.id,
-    action: "audience_changed",
-    actorPersonId: input.actor.personId,
-    actorName: input.actor.name,
-    comment: rows.map((r) => r.label).join(" · ") || "ไม่มีเงื่อนไข",
-    createdAt: input.now ?? new Date(),
-  });
+  const now = input.now ?? new Date();
+  const byApprover = mode === "addOnly";
+  let eventId: number | null = null;
+  if ((added.length || removed.length) && (set.status === "active" || byApprover)) {
+    const gained = byApprover ? await gainedPeople(existing, rows) : null;
+    const change = [added.length && `เพิ่ม ${added.map((r) => r.label).join(" · ")}`, removed.length && `เอาออก ${removed.map((r) => r.label).join(" · ")}`].filter(Boolean).join(" · ");
+    const [ev] = await db()
+      .insert(approvalEvents)
+      .values({
+        setId: set.id,
+        action: "audience_changed",
+        actorPersonId: input.actor.personId,
+        actorName: input.actor.name,
+        comment: byApprover ? `${change}${gained ? ` (+${gained} คน)` : ""}` : rows.map((r) => r.label).join(" · ") || "ไม่มีเงื่อนไข",
+        detail: byApprover ? { by: "approver", added: added.map((r) => r.label), removed: removed.map((r) => r.label), gained } : null,
+        createdAt: now,
+      })
+      .returning({ id: approvalEvents.id });
+    eventId = ev.id;
+  }
+  if (set.status !== "active") return { ok: true, assigned: 0, ended: 0, reopened: 0, eventId };
   // คนกดเห็นจำนวนที่จะตัดจบแล้วยืนยัน (หน้าเลือกผู้รับ) — ไม่ผ่านด่านกันผังเพี้ยนของรอบอัตโนมัติ
-  const sync = await syncAssignments({ setId: set.id, now: input.now, guard: false });
-  return { ok: true, assigned: sync.assigned, ended: sync.ended, reopened: sync.reopened };
+  const sync = await syncAssignments({ setId: set.id, now, guard: false });
+  return { ok: true, assigned: sync.assigned, ended: sync.ended, reopened: sync.reopened, eventId };
+}
+
+/** คนที่ตรงเงื่อนไขเพิ่มขึ้นจากการแก้ผู้รับ (ข้อความแจ้งผู้สร้าง "+8 คน") · ถามผังไม่ได้ = null */
+async function gainedPeople(beforeRules: readonly AudienceRule[], afterRules: readonly AudienceRule[]): Promise<number | null> {
+  const org = await fetchOrg();
+  if (!org.ok) return null;
+  const adhoc = await adhocMembersOf([...beforeRules, ...afterRules]);
+  const had = new Set(resolveAudience(org.people, beforeRules, adhoc).map((p) => p.personId));
+  return resolveAudience(org.people, afterRules, adhoc).filter((p) => !had.has(p.personId)).length;
 }
 
 async function adhocMembersOf(rules: readonly AudienceRule[]): Promise<Map<number, Set<number>>> {
@@ -509,7 +554,8 @@ export async function runReminders(input: { now?: Date } = {}): Promise<Reminder
 // ── แจ้งเรื่องการอนุมัติ ────────────────────────────────────────────────────
 
 /**
- * แจ้งคนที่ต้องทำต่อหลังเหตุการณ์อนุมัติ — ส่ง → ผู้อนุมัติ · ตีกลับ/อนุมัติ → ผู้สร้าง
+ * แจ้งคนที่ต้องทำต่อหลังเหตุการณ์อนุมัติ — ส่ง → ผู้อนุมัติ · ตีกลับ/อนุมัติ → ผู้สร้าง · ผู้อนุมัติเพิ่มผู้รับ → ผู้สร้าง
+ * ★ TG กดแทน (ADR-0018): ข้อความบอกว่า "(TG) … แทน คุณ…" และแจ้งผู้อนุมัติตัวจริงด้วย · ไม่แจ้งคนที่กดเอง
  * ส่งไม่ได้ไม่ทำให้การอนุมัติล้ม (บันทึกผลไว้ใน `notifications` แล้ว)
  */
 export async function notifyApprovalEvent(eventId: number): Promise<SendResult | null> {
@@ -521,20 +567,44 @@ export async function notifyApprovalEvent(eventId: number): Promise<SendResult |
   if (!row) return null;
   const { e, set } = row;
   const link = appUrl(`/sets/${set.id}`);
+  const d = (e.detail ?? {}) as { onBehalfOf?: { personId: number; name: string | null } | null; by?: string; added?: string[]; gained?: number | null };
+  const byTg = d.onBehalfOf !== undefined;
+  const who = byTg ? `${e.actorName} (TG)` : e.actorName;
+  const instead = byTg && d.onBehalfOf ? `แทน ${d.onBehalfOf.name ?? "ผู้อนุมัติ"}` : "";
   const plan =
     e.action === "submitted" && set.approverPersonId
       ? { kind: "approval_requested" as const, to: set.approverPersonId, text: `📝 ${set.authorName} ส่งข้อสอบให้ตรวจ: ${set.title}\n${link}` }
       : e.action === "returned"
-        ? { kind: "approval_returned" as const, to: set.authorPersonId, text: `↩️ ${e.actorName} ตีกลับ: ${set.title}\n${e.comment ?? ""}\n${link}` }
+        ? { kind: "approval_returned" as const, to: set.authorPersonId, text: `↩️ ${who} ตีกลับ${instead}: ${set.title}\n${e.comment ?? ""}\n${link}` }
         : e.action === "approved"
-          ? { kind: "approval_approved" as const, to: set.authorPersonId, text: `✅ ${e.actorName} อนุมัติแล้ว: ${set.title}\n${link}` }
-          : null;
+          ? { kind: "approval_approved" as const, to: set.authorPersonId, text: `✅ ${who} อนุมัติ${instead || "แล้ว"}: ${set.title}\n${link}` }
+          : e.action === "audience_changed" && d.by === "approver"
+            ? {
+                kind: "audience_added" as const,
+                to: set.authorPersonId,
+                text: `➕ ${e.actorName} (ผู้อนุมัติ) เพิ่มผู้รับในชุด ${set.title}: ${(d.added ?? []).join(" · ")}${d.gained ? ` (+${d.gained} คน)` : ""}\n${link}`,
+              }
+            : null;
   if (!plan) return null;
   const org = await fetchOrg();
-  return sendToPerson(
-    { dedupeKey: `approval:${e.id}`, kind: plan.kind, personId: plan.to, setId: set.id, text: plan.text },
-    org.ok ? org.people : null,
-  );
+  const people = org.ok ? org.people : null;
+  // ไม่แจ้งคนที่กดเอง — TG อนุมัติชุดที่ตัวเองสร้าง
+  const main =
+    plan.to === e.actorPersonId ? null : await sendToPerson({ dedupeKey: `approval:${e.id}`, kind: plan.kind, personId: plan.to, setId: set.id, text: plan.text }, people);
+  // TG กดแทน → บอกผู้อนุมัติตัวจริงด้วย จะได้ไม่เข้าไปหางานที่เสร็จไปแล้ว
+  if (byTg && d.onBehalfOf && (e.action === "approved" || e.action === "returned") && d.onBehalfOf.personId !== e.actorPersonId) {
+    await sendToPerson(
+      {
+        dedupeKey: `approval:${e.id}:approver`,
+        kind: plan.kind,
+        personId: d.onBehalfOf.personId,
+        setId: set.id,
+        text: `ℹ️ ${who} ${e.action === "approved" ? "อนุมัติ" : "ตีกลับ"}แทนคุณแล้ว: ${set.title}\n${link}`,
+      },
+      people,
+    );
+  }
+  return main;
 }
 
 /**
@@ -547,14 +617,15 @@ export async function retryApprovalNotices(): Promise<Record<SendResult, number>
     .from(notifications)
     .where(
       and(
-        inArray(notifications.kind, ["approval_requested", "approval_returned", "approval_approved"]),
+        inArray(notifications.kind, ["approval_requested", "approval_returned", "approval_approved", "audience_added"]),
         eq(notifications.status, "failed"),
         lt(notifications.attempts, MAX_SEND_ATTEMPTS),
       ),
     );
   const results: SendResult[] = [];
   for (const r of rows) {
-    const eventId = Number(/^approval:(\d+)$/.exec(r.key)?.[1]);
+    // `approval:12` ถึงผู้สร้าง/ผู้อนุมัติ · `approval:12:approver` ถึงผู้อนุมัติตัวจริงเมื่อ TG กดแทน — ส่งใหม่ทั้งคู่ (ที่ส่งแล้ว claim ไม่ให้ซ้ำ)
+    const eventId = Number(/^approval:(\d+)(?::approver)?$/.exec(r.key)?.[1]);
     if (!Number.isInteger(eventId)) continue;
     const out = await notifyApprovalEvent(eventId);
     if (out) results.push(out);
