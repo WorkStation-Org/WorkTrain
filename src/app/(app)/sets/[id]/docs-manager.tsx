@@ -17,10 +17,11 @@ import {
 } from "@/domain/document";
 import { confirmUploadAction, moveDocumentAction, removeDocumentAction, requestUploadAction, updateDocumentAction } from "../actions";
 import { captureCoverFromFile, CoverEditor, saveCover } from "./cover-picker";
+import { PdfPreview, VideoPreview } from "./doc-preview";
 
 /**
  * เอกสารต้นทาง — ลากวางได้ทีละหลายไฟล์ (ดูชนิดไฟล์ให้เอง) · รายการตามลำดับที่ผู้เรียนเห็นพร้อมป้าย "ใช้ทำอะไร" ·
- * คลิกไฟล์แล้วแก้ในแผงด้านขวา (ชื่อที่ผู้เรียนเห็น · ใช้ทำอะไร · น้ำหนัก · ปกคลิป · ลบ)
+ * คลิกไฟล์แล้วแก้ในแผงด้านขวา (ชื่อที่ผู้เรียนเห็น · ใช้ทำอะไร · น้ำหนัก · ปกคลิป · ลบ) · เล่นวิดีโอ/เปิดอ่าน PDF ได้ทุกคนที่ทำงานกับชุด
  *
  * ★ อัปทางเดิม: ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยัน · วิดีโอได้ปกอัตโนมัติจากเฟรมที่ 10% ของไฟล์ในเครื่อง (ไม่ต้องพึ่ง CORS)
  */
@@ -338,12 +339,19 @@ function DocPanel({
 
   return (
     <aside aria-label="รายละเอียดไฟล์ที่เลือก" className="min-w-0 flex-[1_1_340px] overflow-hidden rounded-[13px] border border-line bg-raised">
-      <div className={`relative flex aspect-video items-center justify-center ${video ? "bg-[#2c2e32]" : "bg-canvas"}`}>
+      <div className={`relative flex aspect-video flex-col items-center justify-center gap-3 ${video ? "bg-[#2c2e32]" : "bg-canvas"}`}>
         {/* eslint-disable-next-line @next/next/no-img-element -- ภาพผ่าน route ที่ตรวจสิทธิ์ */}
         {doc.coverUrl && <img src={doc.coverUrl} alt={`ปกของ ${doc.fileName}`} className="absolute inset-0 size-full object-cover" />}
-        {!doc.coverUrl && (
-          <span className={`text-[13px] ${video ? "text-[#c9cbcf]" : "text-muted"}`}>{video ? "ยังไม่มีปก" : metaOf(doc)}</span>
-        )}
+        {!doc.coverUrl &&
+          (video ? (
+            // มุมล่าง — กลางกรอบเป็นปุ่มเล่น
+            <span className="absolute bottom-2 left-3 text-[12px] text-[#c9cbcf]">ยังไม่มีปก</span>
+          ) : (
+            <span className="text-[13px] text-muted">{metaOf(doc)}</span>
+          ))}
+        {/* เปิดดูได้ทุกคนที่ทำงานกับชุด — ผู้อนุมัติตรวจเนื้อหาก่อนกดอนุมัติ (ไม่นับเป็นการเรียน) */}
+        {video && <VideoPreview key={doc.id} documentId={doc.id} fileName={doc.fileName} />}
+        {doc.mimeType === "application/pdf" && <PdfPreview documentId={doc.id} fileName={doc.fileName} confidential={doc.kind === "pricelist"} />}
       </div>
       <div className="space-y-4 p-4">
         <label className="block space-y-1.5">

@@ -73,6 +73,13 @@ describe("parseSheet", () => {
     expect(out.forms[0][0]).toMatchObject({ text: "คำถามที่ 1", correctIndex: 1, sourceRef: "แนะนำสินค้า.mp4 หน้า 1" });
   });
 
+  it("Template ที่โหลดไว้ก่อนตัดนามสกุลชื่อไฟล์ยัง import ได้ — ที่มาใช้ชื่อปัจจุบัน", () => {
+    const stripped = ["คู่มือการขาย-v3", "แนะนำสินค้า"];
+    const out = parseSheet(filled(PRODUCT_BLUEPRINT), PRODUCT_BLUEPRINT, 5, stripped);
+    if (!out.ok) throw new Error(JSON.stringify(out.errors));
+    expect(out.forms[0][0].sourceRef).toBe("แนะนำสินค้า หน้า 1");
+  });
+
   it("เรียงแถวใหม่ได้ — จับคู่ด้วยชุดที่/ข้อ · แถวว่างข้ามไป", () => {
     const rows = filled(GENERAL_BLUEPRINT).reverse();
     rows.push({ row: 99, cells: Array(12).fill("") });

@@ -7,6 +7,7 @@ import {
   assignments,
   choices,
   documents,
+  documentViews,
   examForms,
   learningSets,
   questions,
@@ -22,6 +23,7 @@ import {
   MAX_COVER_BYTES,
   MAX_VIDEO_SECONDS,
   coverKey,
+  displayFileName,
   documentKey,
   formatBytesLimit,
   isDocumentMime,
@@ -35,6 +37,8 @@ import { mp4DurationSeconds } from "@/domain/mp4";
 import type { Actor } from "@/lib/auth";
 import { objectStore, VIDEO_LINK_TTL_SECONDS } from "@/lib/object-store";
 import { openBlob, signBlob } from "@/lib/session";
+import { formatBangkok } from "@/lib/time";
+import { watermarkPdf } from "@/lib/watermark";
 import { fetchOrg } from "@/lib/workid";
 
 /**
@@ -265,7 +269,8 @@ export async function requestUpload(input: {
     versionId: version.id,
     docKind: input.docKind,
     key,
-    fileName: input.fileName.slice(0, 200),
+    // ชื่อที่ผู้เรียนเห็น — ไม่ติดนามสกุลไฟล์ (".mp4" · ".pdf") · ชนิดไฟล์ดูจาก mime ที่เก็บแยกไว้
+    fileName: displayFileName(input.fileName).slice(0, 200),
     mime: input.mime,
     size: input.size,
     personId: input.actor.personId,
@@ -400,7 +405,7 @@ export async function updateDocument(input: {
   const { doc, set } = found;
   const patch: Partial<typeof documents.$inferInsert> = {};
   if (input.fileName !== undefined) {
-    const name = input.fileName.trim();
+    const name = displayFileName(input.fileName);
     if (!name || name.length > 200) return { ok: false, error: "ชื่อต้องมี 1–200 ตัวอักษร" };
     patch.fileName = name;
   }
@@ -492,6 +497,47 @@ export async function authorVideoLink(input: { actor: Actor; documentId: number 
   if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
   const url = await store.presignGet({ key: found.doc.objectKey, contentType: found.doc.mimeType, disposition: "inline", expiresIn: VIDEO_LINK_TTL_SECONDS });
   return { ok: true, url };
+}
+
+/**
+ * เปิดดูเอกสารในแท็บเอกสาร — คนที่ทำงานกับชุด (`canManage`: ผู้สร้าง · ผู้อนุมัติ · TG) ตรวจก่อนอนุมัติ
+ * ★ ไม่นับเป็นการเรียน (ไม่แตะรอบเรียน/ความคืบหน้า) · Pricelist ไปทาง route ที่ประทับลายน้ำของคนเปิด (ไม่ส่งไฟล์ต้นฉบับ)
+ * ★ Excel เปิดดูในหน้านี้ไม่ได้ — ตัวอ่านรองรับ PDF กับวิดีโอเท่านั้น
+ */
+export async function previewLink(input: { actor: Actor; documentId: number }): Promise<Outcome<{ url: string; type: "video" | "pdf" }>> {
+  const found = await documentWithSet(input.documentId);
+  if (!found || found.set.status === "deleted" || !canManage(input.actor, found.set)) return { ok: false, error: "ไม่พบเอกสารนี้" };
+  const { doc, set } = found;
+  const video = isVideoMime(doc.mimeType);
+  if (!video && doc.mimeType !== "application/pdf") return { ok: false, error: "Excel เปิดดูในหน้านี้ไม่ได้" };
+  if (doc.kind === "pricelist") return { ok: true, url: `/sets/${set.id}/doc/${doc.id}`, type: "pdf" };
+  const store = objectStore();
+  if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
+  const url = await store.presignGet({
+    key: doc.objectKey,
+    contentType: doc.mimeType,
+    disposition: "inline",
+    ...(video ? { expiresIn: VIDEO_LINK_TTL_SECONDS } : {}),
+  });
+  return { ok: true, url, type: video ? "video" : "pdf" };
+}
+
+/**
+ * Pricelist ที่ประทับลายน้ำของคนเปิด สำหรับแท็บเอกสาร (spec §13) — สิทธิ์เดียวกับ `previewLink`
+ * ★ บันทึกการเปิดทุกครั้งเหมือนฝั่งผู้เรียน ("ระบบบันทึกการเปิดทุกครั้ง") · `document_views` ไม่ใช่ความคืบหน้าการเรียน
+ */
+export async function previewPricelistPdf(input: { actor: Actor; setId: number; documentId: number; now?: Date }): Promise<Outcome<{ bytes: Uint8Array }>> {
+  const now = input.now ?? new Date();
+  const found = await documentWithSet(input.documentId);
+  if (!found || found.set.id !== input.setId || found.set.status === "deleted" || !canManage(input.actor, found.set)) return { ok: false, error: "ไม่พบเอกสารนี้" };
+  if (found.doc.kind !== "pricelist" || found.doc.mimeType !== "application/pdf") return { ok: false, error: "ไม่พบเอกสารนี้" };
+  const store = objectStore();
+  if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
+  const raw = await store.get(found.doc.objectKey);
+  if (!raw) return { ok: false, error: "อ่านไฟล์จากที่เก็บไม่ได้" };
+  const bytes = await watermarkPdf(raw, [`WorkTrain · ${input.actor.email}`, `ID ${input.actor.personId} · ${formatBangkok(now)}`, "CONFIDENTIAL · Work Station"]);
+  await db().insert(documentViews).values({ documentId: found.doc.id, personId: input.actor.personId, viewedAt: now });
+  return { ok: true, bytes };
 }
 
 /** ภาพปก — คนที่ทำงานกับชุด หรือผู้เรียนที่ได้รับมอบชุดนี้ · `null` = ไม่มีปกหรือไม่มีสิทธิ์ */

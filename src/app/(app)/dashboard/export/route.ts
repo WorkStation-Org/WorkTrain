@@ -9,6 +9,7 @@ export const dynamic = "force-dynamic";
 /**
  * Export ของ Dashboard (spec §12) — CSV แบบ UTF-8 + BOM ที่ Excel เปิดได้ตรง ๆ · สิทธิ์เดียวกับหน้า Dashboard
  * `?kind=people` สถิติรายคน · `?kind=status` สถานะรายชุด · ตัวกรองเดียวกับหน้า
+ * ★ คอลัมน์ใหม่ต่อท้ายเสมอ (ชื่อเล่น · ทีม) — สูตร Excel ที่อ้างคอลัมน์เดิมไม่พัง
  */
 export async function GET(req: Request) {
   const actor = await currentActor();
@@ -26,12 +27,12 @@ export async function GET(req: Request) {
   const csv =
     kind === "people"
       ? toCsv(
-          ["ชื่อ", "ได้รับมอบ", "ผ่าน", "คะแนนครั้งแรก", "คะแนนเฉลี่ย", "ครั้งที่สอบ", "ความไว (ชม.)", "ความไว", "ออกจากหน้าสอบ"],
-          data.people.map((p) => [p.personName, p.assigned, p.passed, p.firstScore, p.avgScore, p.attempts, p.speedHours, formatSpeed(p.speedHours), p.leaves]),
+          ["ชื่อ", "ได้รับมอบ", "ผ่าน", "คะแนนครั้งแรก", "คะแนนเฉลี่ย", "ครั้งที่สอบ", "ความไว (ชม.)", "ความไว", "ออกจากหน้าสอบ", "ชื่อเล่น", "ทีม"],
+          data.people.map((p) => [p.personName, p.assigned, p.passed, p.firstScore, p.avgScore, p.attempts, p.speedHours, formatSpeed(p.speedHours), p.leaves, p.label.nickname, p.label.team]),
         )
       : toCsv(
-          ["ชุด", "ชื่อ", "ทีม", "ได้รับมอบ", "กำหนดส่ง", "ผ่านเมื่อ", "สถานะ", "ครั้งที่สอบ"],
-          data.rows.map((r) => [r.setTitle, r.personName, r.teamName, formatBangkok(r.assignedAt), formatBangkok(r.dueAt), r.passedAt ? formatBangkok(r.passedAt) : null, PROGRESS_LABEL[r.progress], r.attempts]),
+          ["ชุด", "ชื่อ", "ทีม", "ได้รับมอบ", "กำหนดส่ง", "ผ่านเมื่อ", "สถานะ", "ครั้งที่สอบ", "ชื่อเล่น"],
+          data.rows.map((r) => [r.setTitle, r.personName, r.teamName, formatBangkok(r.assignedAt), formatBangkok(r.dueAt), r.passedAt ? formatBangkok(r.passedAt) : null, PROGRESS_LABEL[r.progress], r.attempts, r.label.nickname]),
         );
   return new Response(csv, {
     headers: {

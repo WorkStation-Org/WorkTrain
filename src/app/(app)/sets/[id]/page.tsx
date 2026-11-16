@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { PersonName } from "@/components/person-name";
 import { Badge, Button, Card, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle } from "@/components/ui";
 import { LEVEL_LABELS, slots, topicLabel, topicsOf, type Blueprint } from "@/domain/blueprint";
 import { aiReadable, isVideoMime } from "@/domain/document";
@@ -8,6 +9,7 @@ import { FORMS_PER_VERSION, type Level } from "@/db/schema";
 import { assignmentStatus, audienceRulesOf, type AssignmentState } from "@/lib/assignment-service";
 import { examEditor, reviewedQuestionIds } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
+import { personLabelsFrom } from "@/lib/person-name";
 import { canCloseSet, canDeleteDraft, canEditAudience, canEditDraft, canEditVersion, canManage, coverPath, getSetDetail } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { fetchOrg } from "@/lib/workid";
@@ -106,7 +108,7 @@ export default async function SetPage({
               ? "audience"
               : "exam";
   const tab: Tab = requested && TABS.includes(requested) && (requested !== "learners" || status.length > 0) ? requested : fallback;
-  const needOrg = (tab === "settings" && editable) || tab === "audience";
+  const needOrg = (tab === "settings" && editable) || tab === "audience" || tab === "learners";
   const org = needOrg ? await fetchOrg() : null;
 
   const steps: { key: Tab; label: string; sub: string; state: "done" | "todo" | "warn" | "info" }[] = [
@@ -131,6 +133,7 @@ export default async function SetPage({
   ];
 
   const people = org?.ok ? org.people : [];
+  const labelOf = personLabelsFrom(people);
   const author = people.find((p) => p.personId === set.authorPersonId);
 
   return (
@@ -412,7 +415,7 @@ export default async function SetPage({
             {status.map((a) => (
               <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
                 <span>
-                  {a.personName}
+                  <PersonName label={labelOf(a.personId, a.personName)} />
                   {a.source === "onboarding" && <span className="ml-1 text-[11px] text-ink-3">(Onboarding)</span>}
                 </span>
                 <span className="text-ink-3">

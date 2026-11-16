@@ -31,6 +31,8 @@ const {
   coverImage,
   coverPath,
   authorVideoLink,
+  previewLink,
+  previewPricelistPdf,
   removeDocument,
   updateDocument,
   moveDocument,
@@ -493,8 +495,8 @@ describe("จัดเอกสาร · เฉลี่ยข้อสอบ ·
     expect(await moveDocument({ actor: pd, documentId: b.id, direction: -1 })).toEqual({ ok: true });
     const after = (await getSetDetail(pd, setId))!.documents;
     expect(after.map((d) => [d.fileName, d.kind, d.examWeight])).toEqual([
-      ["ระเบียบ.pdf", "catalog", 1],
-      ["สวัสดิการ.pdf", "other", 3],
+      ["ระเบียบ", "catalog", 1],
+      ["สวัสดิการ", "other", 3],
     ]);
   });
 
@@ -546,5 +548,39 @@ describe("จัดเอกสาร · เฉลี่ยข้อสอบ ·
 
     await setQuestionReviewed({ actor: pd, questionId: q2.id, reviewed: false });
     expect((await reviewedQuestionIds(versionId, pd.personId)).size).toBe(0);
+  });
+});
+
+describe("ชื่อไฟล์ · เปิดดูในแท็บเอกสาร", () => {
+  const tg: Actor = { personId: 99, email: "tg@ws.co", name: "ทีจี", role: "admin" };
+
+  it("ชื่อที่ผู้เรียนเห็นตัดนามสกุลไฟล์ — ตอนอัปและตอนแก้ชื่อ", async () => {
+    const setId = await readySet();
+    const [doc] = (await getSetDetail(pd, setId))!.documents;
+    expect(doc.fileName).toBe("Signature V.1");
+    expect(await updateDocument({ actor: pd, documentId: doc.id, fileName: "แคตตาล็อก V.2.PDF" })).toEqual({ ok: true });
+    expect((await getSetDetail(pd, setId))!.documents[0].fileName).toBe("แคตตาล็อก V.2");
+  });
+
+  it("ผู้สร้าง · ผู้อนุมัติ · TG เปิดดู PDF ได้ · คนอื่นไม่ได้ · ไม่นับเป็นการเปิดของผู้เรียน", async () => {
+    const setId = await readySet();
+    const [doc] = (await getSetDetail(pd, setId))!.documents;
+    for (const who of [pd, pdMgr, tg]) expect(await previewLink({ actor: who, documentId: doc.id })).toMatchObject({ ok: true, type: "pdf" });
+    expect(await previewLink({ actor: sales, documentId: doc.id })).toEqual({ ok: false, error: "ไม่พบเอกสารนี้" });
+    expect(await testDb().select().from(schema.documentViews)).toHaveLength(0);
+  });
+
+  it("Pricelist เปิดผ่าน route ที่ประทับลายน้ำ · บันทึกการเปิด · อ้างชุดอื่นไม่ได้", async () => {
+    const setId = await readySet();
+    const [doc] = (await getSetDetail(pd, setId))!.documents;
+    expect(await updateDocument({ actor: pd, documentId: doc.id, kind: "pricelist" })).toEqual({ ok: true });
+    expect(await previewLink({ actor: pdMgr, documentId: doc.id })).toEqual({ ok: true, type: "pdf", url: `/sets/${setId}/doc/${doc.id}` });
+
+    const out = await previewPricelistPdf({ actor: pdMgr, setId, documentId: doc.id });
+    if (!out.ok) throw new Error(out.error);
+    expect(out.bytes.byteLength).toBeGreaterThan(PDF.byteLength);
+    expect(await previewPricelistPdf({ actor: pdMgr, setId: setId + 1, documentId: doc.id })).toEqual({ ok: false, error: "ไม่พบเอกสารนี้" });
+    expect(await previewPricelistPdf({ actor: sales, setId, documentId: doc.id })).toEqual({ ok: false, error: "ไม่พบเอกสารนี้" });
+    expect((await testDb().select().from(schema.documentViews)).map((v) => v.personId)).toEqual([pdMgr.personId]);
   });
 });

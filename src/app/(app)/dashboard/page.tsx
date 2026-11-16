@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PersonName } from "@/components/person-name";
 import { Badge, buttonClass, Card, EmptyState, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle, SELECT_CLASS, Table, TBody, TD, TH, THead, TR, type BadgeTone } from "@/components/ui";
 import { formatSpeed } from "@/domain/stats";
 import { firstParam, pageActor } from "@/lib/page";
@@ -101,7 +102,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             {board.rows.map((r) => (
               <li key={r.personId} className={`flex items-center gap-3 py-2 text-[13px] ${r.personId === actor.personId ? "font-semibold" : ""}`}>
                 <span className="w-6 text-right text-ink-3">{r.rank}</span>
-                <span className="flex-1">{r.personName}</span>
+                <span className="flex-1">
+                  <PersonName label={r.label} />
+                </span>
                 <span className="w-16 text-right">{r.firstScore}%</span>
                 <span className="w-28 text-right text-ink-3">{formatSpeed(r.speedHours)}</span>
               </li>
@@ -133,7 +136,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             <TBody>
               {data.people.map((p) => (
                 <TR key={p.personId}>
-                  <TD>{p.personName}</TD>
+                  <TD>
+                    <PersonName label={p.label} />
+                  </TD>
                   <TD align="right">{p.assigned}</TD>
                   <TD align="right">{p.passed}</TD>
                   <TD align="right">{p.firstScore ?? "—"}</TD>
@@ -171,7 +176,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               {data.rows.map((r) => (
                 <TR key={r.assignmentId}>
                   <TD>{r.setTitle}</TD>
-                  <TD>{r.personName}</TD>
+                  <TD>
+                    <PersonName label={r.label} showTeam={false} />
+                  </TD>
                   <TD>{r.teamName ?? "—"}</TD>
                   <TD>{formatBangkok(r.assignedAt)}</TD>
                   <TD>{formatBangkok(r.dueAt)}</TD>

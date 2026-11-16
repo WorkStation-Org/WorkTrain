@@ -10,6 +10,7 @@ import { editQuestion, generateExams, importExams, regenerateQuestion, setQuesti
 import { MAX_EXAM_SHEET_BYTES } from "@/domain/document";
 import {
   authorVideoLink,
+  previewLink,
   confirmUpload,
   createSet,
   moveDocument,
@@ -136,6 +137,12 @@ export async function setCoverAction(form: FormData) {
 export async function authorVideoLinkAction(input: { documentId: number }) {
   const actor = await requireUser();
   return authorVideoLink({ actor, documentId: input.documentId });
+}
+
+/** ลิงก์เปิดดูเอกสารในแท็บเอกสาร — ผู้สร้าง · ผู้อนุมัติ · TG (`previewLink` ตรวจสิทธิ์เอง) */
+export async function previewLinkAction(input: { documentId: number }) {
+  const actor = await requireUser();
+  return previewLink({ actor, documentId: input.documentId });
 }
 
 export async function removeDocumentAction(form: FormData) {

@@ -18,6 +18,18 @@ export function isDocumentMime(mime: string | null | undefined): mime is Documen
   return typeof mime === "string" && Object.hasOwn(DOCUMENT_MIMES, mime);
 }
 
+const ACCEPTED_EXTENSION = new RegExp(`\\.(${Object.values(DOCUMENT_MIMES).join("|")})$`, "i");
+
+/**
+ * ชื่อที่ผู้เรียนเห็น — ตัดนามสกุลของชนิดที่ระบบรับ (.pdf · .xlsx · .mp4) ออก
+ * "EP1 7 ขั้นการขาย.mp4" → "EP1 7 ขั้นการขาย" · "ราคา v1.2" ไม่แตะ · ตัดแล้วว่าง = ชื่อเดิม
+ * ★ migration 0014 ตัดไฟล์ที่อัปไว้ก่อนแล้วด้วยกติกาเดียวกัน
+ */
+export function displayFileName(fileName: string): string {
+  const name = fileName.trim();
+  return name.replace(ACCEPTED_EXTENSION, "").trim() || name;
+}
+
 /**
  * ไฟล์ละไม่เกิน 30 MB — แคตตาล็อกจริงใหญ่สุด 20 MB (Progetto V.3)
  * และคำขอหนึ่งครั้งของ Claude รับรวมได้ 32 MB · ใหญ่กว่านี้ต้องแยกส่งทีละไฟล์อยู่แล้ว

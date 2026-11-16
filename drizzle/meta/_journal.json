@@ -99,6 +99,13 @@
       "when": 1794478488762,
       "tag": "0013_set_page_steps",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794829305978,
+      "tag": "0014_strip_file_extension",
+      "breakpoints": true
     }
   ]
 }

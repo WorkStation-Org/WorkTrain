@@ -34,11 +34,13 @@ const ORG = [
   { personId: 40, email: "o@ws.co", fullName: "คนอื่น" },
 ];
 
-const VIDEO = "แนะนำสินค้า.mp4";
+const VIDEO_FILE = "แนะนำสินค้า.mp4";
+/** ชื่อที่ผู้เรียนเห็นหลังอัป — ตัดนามสกุลไฟล์แล้ว (displayFileName) */
+const VIDEO = "แนะนำสินค้า";
 
 async function uploadVideo(setId: number) {
   const bytes = fakeMp4({ seconds: 60 });
-  const req = await requestUpload({ actor: pd, setId, docKind: "other", fileName: VIDEO, mime: "video/mp4", size: bytes.byteLength });
+  const req = await requestUpload({ actor: pd, setId, docKind: "other", fileName: VIDEO_FILE, mime: "video/mp4", size: bytes.byteLength });
   if (!req.ok) throw new Error(req.error);
   const key = decodeURIComponent(new URL(req.uploadUrl, "http://x").pathname.replace("/api/dev-store/", ""));
   devStoreObjects().set(key, bytes);
