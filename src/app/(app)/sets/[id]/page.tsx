@@ -54,6 +54,7 @@ const EVENT_LABELS: Record<string, string> = {
   audience_changed: "เปลี่ยนผู้รับ",
   deleted: "ลบร่าง",
   closed: "ปิดชุด",
+  document_visibility: "ซ่อน/แสดงไฟล์",
 };
 
 type Tab = "settings" | "docs" | "exam" | "audience" | "learners" | "history";
@@ -95,8 +96,10 @@ export default async function SetPage({
   const reviewed = version ? await reviewedQuestionIds(version.id, actor.personId) : new Set<number>();
   const reviewedCount = allQuestions.filter((q) => reviewed.has(q.id)).length;
   const canReview = canManage(actor, set);
-  const videos = documents.filter((d) => isVideoMime(d.mimeType));
-  const aiDocs = documents.filter((d) => aiReadable(d.mimeType));
+  // นับเฉพาะที่แสดงให้ผู้เรียน — ไฟล์ที่ซ่อนไว้ไม่อยู่ในแถบขั้นตอนและไม่อยู่ในแผนเฉลี่ยข้อสอบ (AI ไม่ใช้)
+  const shownDocs = documents.filter((d) => !d.hidden);
+  const videos = shownDocs.filter((d) => isVideoMime(d.mimeType));
+  const aiDocs = shownDocs.filter((d) => aiReadable(d.mimeType));
 
   const requested = firstParam(sp.tab) as Tab | undefined;
   const fallback: Tab =
@@ -127,7 +130,15 @@ export default async function SetPage({
     {
       key: "docs",
       label: "เอกสาร",
-      sub: documents.length ? [videos.length && `${videos.length} วิดีโอ`, documents.length - videos.length && `${documents.length - videos.length} เอกสาร`].filter(Boolean).join(" · ") : "ยังไม่มี",
+      sub: documents.length
+        ? [
+            videos.length && `${videos.length} วิดีโอ`,
+            shownDocs.length - videos.length && `${shownDocs.length - videos.length} เอกสาร`,
+            documents.length > shownDocs.length && `ซ่อน ${documents.length - shownDocs.length}`,
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        : "ยังไม่มี",
       state: documents.length ? "done" : "warn",
     },
     {
@@ -289,9 +300,11 @@ export default async function SetPage({
               durationSeconds: d.durationSeconds,
               coverUrl: coverPath(d),
               examWeight: d.examWeight,
+              hidden: d.hidden,
             }))}
             editable={docsEditable}
             canSetCover={isOwner}
+            canToggleHidden={isOwner && set.status !== "closed" && set.status !== "deleted"}
             allowPricelist={detail.kind.allowPricelist}
             customWeights={set.spreadMode === "custom"}
           />
@@ -509,7 +522,8 @@ function OnBehalfNote({ approverName }: { approverName: string | null }) {
 
 /** ส่วนขยายของประวัติ — ข้อสอบมาจากไหน · TG กดแทนใคร · ผู้อนุมัติเพิ่มผู้รับ */
 function eventNote(action: string, detail: unknown): string | null {
-  const d = (detail ?? {}) as { kind?: string; fileName?: string; onBehalfOf?: { name: string | null } | null; ownSet?: boolean; by?: string };
+  const d = (detail ?? {}) as { kind?: string; fileName?: string; onBehalfOf?: { name: string | null } | null; ownSet?: boolean; by?: string; hidden?: boolean };
+  if (action === "document_visibility") return `${d.hidden ? "ซ่อน" : "แสดง"} ${d.fileName ?? "ไฟล์"}`;
   if (action === "exams_generated" || action === "exams_imported") {
     const parts = [d.kind === "delta" && "(ส่วนที่เปลี่ยน)", d.fileName && `จากไฟล์ ${d.fileName}`].filter(Boolean);
     return parts.length ? parts.join(" ") : null;

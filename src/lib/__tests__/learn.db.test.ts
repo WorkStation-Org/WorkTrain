@@ -229,6 +229,49 @@ describe("หน้ารายการชุดที่ต้องเรี�
   });
 });
 
+describe("ซ่อนคลิป/เอกสารจากชุด", () => {
+  const AUTHOR = { personId: 10, email: "pd@x", name: "พีดี", role: "author" as const };
+
+  it("ซ่อนแล้วผู้เรียนไม่เห็น ไม่นับ เปิดไม่ได้ · ที่เหลือครบ = สอบได้ · ลงประวัติ · แสดงกลับได้", async () => {
+    const S = await import("@/lib/set-service");
+    const { set, a, docs } = await seed();
+    await startSession(T0);
+    await readAll(a.id, docs.slice(0, 2), sec(5));
+    expect((await L.learnView(ME, a.id, sec(6)))!.state).not.toBe("ready");
+
+    expect(await S.setDocumentHidden({ actor: AUTHOR, documentId: docs[2].id, hidden: true, now: sec(7) })).toEqual({ ok: true });
+    const view = (await L.learnView(ME, a.id, sec(8)))!;
+    expect(view.documents.map((d) => d.id)).toEqual([docs[0].id, docs[1].id]);
+    expect(view.state).toBe("ready");
+    expect((await L.myLearningList(ME, sec(8)))[0]).toMatchObject({ docsTotal: 2, docsDone: 2, status: "ready" });
+    // ไฟล์ที่ซ่อนส่งความคืบหน้า/ขอลิงก์ไม่ได้
+    expect(await L.recordReading({ personId: ME, assignmentId: a.id, documentId: docs[2].id, pages: [1], activeSeconds: 5, now: sec(9) })).toEqual({ ok: false, error: "ไม่พบเอกสารนี้" });
+
+    const events = await testDb().select().from(schema.approvalEvents).where(eq(schema.approvalEvents.setId, set.id));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ action: "document_visibility", actorPersonId: 10, detail: { documentId: docs[2].id, fileName: "p.pdf", hidden: true } });
+
+    expect(await S.setDocumentHidden({ actor: AUTHOR, documentId: docs[2].id, hidden: false, now: sec(10) })).toEqual({ ok: true });
+    expect((await L.learnView(ME, a.id, sec(11)))!.documents).toHaveLength(3);
+  });
+
+  it("ต้องเหลืออย่างน้อย 1 รายการ · คนอื่นที่ไม่ใช่ผู้สร้าง/TG ซ่อนไม่ได้ · ชุดที่ปิดแล้วซ่อนไม่ได้", async () => {
+    const S = await import("@/lib/set-service");
+    const { set, docs } = await seed();
+    await S.setDocumentHidden({ actor: AUTHOR, documentId: docs[0].id, hidden: true });
+    await S.setDocumentHidden({ actor: AUTHOR, documentId: docs[1].id, hidden: true });
+    expect(await S.setDocumentHidden({ actor: AUTHOR, documentId: docs[2].id, hidden: true })).toEqual({ ok: false, error: "ต้องเหลือคลิปหรือเอกสารให้ผู้เรียนอย่างน้อย 1 รายการ" });
+
+    const stranger = { personId: 99, email: "s@x", name: "คนอื่น", role: "author" as const };
+    expect((await S.setDocumentHidden({ actor: stranger, documentId: docs[0].id, hidden: false })).ok).toBe(false);
+    const tg = { personId: 1, email: "tg@x", name: "ทีจี", role: "admin" as const };
+    expect(await S.setDocumentHidden({ actor: tg, documentId: docs[0].id, hidden: false })).toEqual({ ok: true });
+
+    await testDb().update(schema.learningSets).set({ status: "closed" }).where(eq(schema.learningSets.id, set.id));
+    expect(await S.setDocumentHidden({ actor: AUTHOR, documentId: docs[0].id, hidden: true })).toEqual({ ok: false, error: "ชุดนี้ปิดแล้ว — ซ่อน/แสดงไม่ได้" });
+  });
+});
+
 describe("การอ่าน (spec §9)", () => {
   it("ต้องมีรอบเรียน · นิ่งเกิน 2 นาที = จบรอบ ต้องสแกนใหม่ · ความคืบหน้ายังอยู่", async () => {
     const { a, docs } = await seed();

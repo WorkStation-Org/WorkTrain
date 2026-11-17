@@ -1,0 +1,1 @@
+ALTER TABLE "documents" ADD COLUMN "hidden" boolean DEFAULT false NOT NULL;

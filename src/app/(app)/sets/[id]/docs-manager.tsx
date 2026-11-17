@@ -15,7 +15,7 @@ import {
   kindAllowsMime,
   maxBytesFor,
 } from "@/domain/document";
-import { confirmUploadAction, moveDocumentAction, removeDocumentAction, requestUploadAction, updateDocumentAction } from "../actions";
+import { confirmUploadAction, moveDocumentAction, removeDocumentAction, requestUploadAction, setDocumentHiddenAction, updateDocumentAction } from "../actions";
 import { captureCoverFromFile, CoverEditor, saveCover } from "./cover-picker";
 import { PdfPreview, VideoPreview } from "./doc-preview";
 
@@ -36,6 +36,8 @@ export interface DocItem {
   durationSeconds: number | null;
   coverUrl: string | null;
   examWeight: number;
+  /** ซ่อนจากผู้เรียน — ไม่นับความคืบหน้า · AI ไม่ใช้ */
+  hidden: boolean;
 }
 
 interface QueueItem {
@@ -66,6 +68,7 @@ export function DocsManager({
   docs,
   editable,
   canSetCover,
+  canToggleHidden,
   allowPricelist,
   customWeights,
 }: {
@@ -73,6 +76,8 @@ export function DocsManager({
   docs: DocItem[];
   editable: boolean;
   canSetCover: boolean;
+  /** ผู้สร้าง/TG ซ่อน/แสดงไฟล์ได้ทุกสถานะ (ไม่ต้องเป็นร่าง) ยกเว้นชุดที่ปิดแล้ว */
+  canToggleHidden: boolean;
   allowPricelist: boolean;
   /** ชุดนี้เฉลี่ยข้อสอบแบบกำหนดเอง — แสดงช่องน้ำหนัก */
   customWeights: boolean;
@@ -81,15 +86,31 @@ export function DocsManager({
   const [selected, setSelected] = useState<number | null>(docs[0]?.id ?? null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [toggling, setToggling] = useState<number | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const sel = docs.find((d) => d.id === selected) ?? docs[0];
 
-  const videos = docs.filter((d) => isVideoMime(d.mimeType));
-  const pdfs = docs.filter((d) => aiReadable(d.mimeType));
+  // ตัวเลขทั้งหมดนับเฉพาะที่แสดงให้ผู้เรียน — แบบเดียวกับหน้าเรียน
+  const shown = docs.filter((d) => !d.hidden);
+  const videos = shown.filter((d) => isVideoMime(d.mimeType));
+  const pdfs = shown.filter((d) => aiReadable(d.mimeType));
   const noCover = videos.filter((d) => !d.coverUrl).length;
   const minutes = Math.round(
-    (videos.reduce((n, d) => n + (d.durationSeconds ?? 0), 0) + docs.filter((d) => !isVideoMime(d.mimeType)).reduce((n, d) => n + (d.pageCount ?? 0) * 60, 0)) / 60,
+    (videos.reduce((n, d) => n + (d.durationSeconds ?? 0), 0) + shown.filter((d) => !isVideoMime(d.mimeType)).reduce((n, d) => n + (d.pageCount ?? 0) * 60, 0)) / 60,
   );
+  // เลขตอน EP นับเฉพาะคลิปที่แสดง ตามลำดับ — ตรงกับที่ผู้เรียนเห็น
+  let clip = 0;
+  const epOf = new Map(videos.map((d) => [d.id, ++clip]));
+
+  async function toggleHidden(d: DocItem) {
+    setToggling(d.id);
+    setToggleError(null);
+    const out = await setDocumentHiddenAction({ setId, documentId: d.id, hidden: !d.hidden }).catch(() => ({ ok: false as const, error: "บันทึกไม่สำเร็จ ลองอีกครั้ง" }));
+    if (!out.ok) setToggleError(`${d.fileName}: ${out.error}`);
+    setToggling(null);
+    router.refresh();
+  }
 
   function patchQueue(key: string, patch: Partial<QueueItem>) {
     setQueue((q) => q.map((x) => (x.key === key ? { ...x, ...patch } : x)));
@@ -203,10 +224,16 @@ export function DocsManager({
               <span className="text-[14px] font-semibold text-fg">ลำดับที่ผู้เรียนเห็น</span>
               <span className="text-[12px] text-muted">
                 {videos.length ? `${videos.length} วิดีโอ · ${formatDuration(videos.reduce((n, d) => n + (d.durationSeconds ?? 0), 0))}` : ""}
-                {videos.length && docs.length > videos.length ? " · " : ""}
-                {docs.length > videos.length ? `${docs.length - videos.length} เอกสาร` : ""}
+                {videos.length && shown.length > videos.length ? " · " : ""}
+                {shown.length > videos.length ? `${shown.length - videos.length} เอกสาร` : ""}
+                {docs.length > shown.length ? ` · ซ่อนอยู่ ${docs.length - shown.length}` : ""}
               </span>
             </div>
+            {toggleError && (
+              <p role="alert" className="border-b border-line bg-danger-soft px-4 py-2.5 text-[13px] text-danger">
+                {toggleError}
+              </p>
+            )}
             {docs.length === 0 ? (
               <p className="px-4 py-8 text-center text-[13px] text-muted">ยังไม่มีเอกสาร{editable ? " — ลากไฟล์มาวางด้านบน" : ""}</p>
             ) : (
@@ -215,8 +242,9 @@ export function DocsManager({
                   const role = roleOf(d);
                   const video = isVideoMime(d.mimeType);
                   const current = sel?.id === d.id;
+                  const ep = epOf.get(d.id);
                   return (
-                    <li key={d.id} className={`flex items-center gap-2 rounded-[10px] ${current ? "bg-subtle ring-1 ring-fg" : ""}`}>
+                    <li key={d.id} className={`flex items-center gap-2 rounded-[10px] ${current ? "bg-subtle ring-1 ring-fg" : ""} ${d.hidden ? "bg-canvas" : ""}`}>
                       {editable && (
                         <span className="flex shrink-0 flex-col pl-1">
                           <button
@@ -260,13 +288,32 @@ export function DocsManager({
                             <span className="text-[10px] font-bold">{DOCUMENT_MIMES[d.mimeType as keyof typeof DOCUMENT_MIMES]?.toUpperCase() ?? "FILE"}</span>
                           )}
                         </span>
-                        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <span className="truncate text-[14px] font-semibold text-fg">{d.fileName}</span>
-                          <span className="text-[12px] text-muted">{metaOf(d)}</span>
+                        <span className={`flex min-w-0 flex-1 flex-col gap-0.5 ${d.hidden ? "opacity-60" : ""}`}>
+                          <span className="truncate text-[14px] font-semibold text-fg">
+                            {ep && <span className="mr-1.5 text-muted">EP.{ep}</span>}
+                            {d.fileName}
+                          </span>
+                          <span className="text-[12px] text-muted">{d.hidden ? "ซ่อนอยู่ — ผู้เรียนไม่เห็น · ไม่นับความคืบหน้า · AI ไม่ใช้" : metaOf(d)}</span>
                         </span>
-                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${role.tone}`}>{role.label}</span>
-                        {video && !d.coverUrl && <span className="shrink-0 rounded-full bg-warn-soft px-2 py-0.5 text-[11px] font-semibold text-warn">ยังไม่มีปก</span>}
+                        {!d.hidden && <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${role.tone}`}>{role.label}</span>}
+                        {!d.hidden && video && !d.coverUrl && <span className="shrink-0 rounded-full bg-warn-soft px-2 py-0.5 text-[11px] font-semibold text-warn">ยังไม่มีปก</span>}
                       </button>
+                      {canToggleHidden && (
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={!d.hidden}
+                          aria-label={`แสดง ${d.fileName} ให้ผู้เรียน`}
+                          disabled={toggling !== null}
+                          onClick={() => void toggleHidden(d)}
+                          className="flex min-h-11 shrink-0 items-center gap-2 rounded-lg px-2.5 text-[12px] text-ink-2 hover:bg-subtle disabled:opacity-50"
+                        >
+                          <span className="w-7 text-right">{d.hidden ? "ซ่อน" : "แสดง"}</span>
+                          <span aria-hidden className={`relative h-6 w-10 rounded-full transition-colors ${d.hidden ? "bg-line-strong" : "bg-fg"}`}>
+                            <span className={`absolute top-[3px] size-[18px] rounded-full bg-raised transition-[left] ${d.hidden ? "left-[3px]" : "left-[19px]"}`} />
+                          </span>
+                        </button>
+                      )}
                     </li>
                   );
                 })}

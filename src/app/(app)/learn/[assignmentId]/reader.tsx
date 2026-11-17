@@ -20,6 +20,8 @@ const BEAT_MS = 15_000;
 const ACTIVE_WINDOW_MS = 30_000;
 /** ลิงก์ที่ขอใหม่ภายในเวลานี้แล้วยังเล่นไม่ได้ = ไฟล์มีปัญหา ไม่ใช่ลิงก์หมดอายุ */
 const RELINK_GUARD_MS = 10_000;
+/** เนื้อหาเกินจำนวนนี้ถึงแสดงช่องค้นหาในรายการ */
+const SEARCH_FROM = 5;
 
 export interface LessonDoc {
   id: number;
@@ -73,6 +75,24 @@ export function LessonWorkspace({
     .join(" · ");
   let clip = 0;
   const clipNo = new Map(videos.map((d) => [d.id, ++clip]));
+  /** ชื่อที่แสดงในรายการ — คลิปขึ้นต้นด้วยเลขตอน `EP.1` ตามลำดับที่ผู้สร้างจัดไว้ */
+  const titleOf = (d: LessonDoc) => (clipNo.has(d.id) ? `EP.${clipNo.get(d.id)} ${d.fileName}` : d.fileName);
+  const [q, setQ] = useState("");
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? documents.filter((d) => titleOf(d).toLowerCase().includes(needle)) : documents;
+  // รายการยาว (เกิน SEARCH_FROM รายการ) ถึงมีช่องค้นหา — ชุดสั้นไม่ต้องเห็นช่องที่ไม่จำเป็น
+  const searchable = documents.length > SEARCH_FROM;
+  const listRef = useRef<HTMLOListElement>(null);
+  const currentRef = useRef<HTMLLIElement>(null);
+  // เลื่อนเฉพาะในกรอบรายการให้เห็นรายการที่เปิดอยู่ — ไม่ใช้ scrollIntoView เพราะจะพาทั้งหน้าเลื่อนตามบนมือถือ
+  useEffect(() => {
+    const list = listRef.current;
+    const item = currentRef.current;
+    if (!list || !item) return;
+    const top = item.offsetTop - list.offsetTop;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (top + item.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + item.offsetHeight - list.clientHeight;
+  }, [openId]);
 
   return (
     <div className="flex flex-wrap items-start gap-5">
@@ -83,7 +103,7 @@ export function LessonWorkspace({
               key={open.id}
               assignmentId={assignmentId}
               doc={open}
-              label={`คลิป ${clipNo.get(open.id)} / ${videos.length}`}
+              label={`EP.${clipNo.get(open.id)} จาก ${videos.length} คลิป`}
               onSeen={onSeen(open.id)}
             />
           ) : (
@@ -94,7 +114,8 @@ export function LessonWorkspace({
         )}
       </section>
 
-      <aside aria-label="เนื้อหาในชุด" className="flex min-w-0 flex-[1_1_320px] flex-col gap-4">
+      {/* จอกว้าง: แผงขวาเกาะใต้แถบบน · รายการเลื่อนในกรอบของตัวเอง — ตัวเล่นทางซ้ายไม่หลุดจอตอนไล่หาคลิป */}
+      <aside aria-label="เนื้อหาในชุด" className="flex min-w-0 flex-[1_1_320px] flex-col gap-4 xl:sticky xl:top-[92px]">
         <div className="overflow-hidden rounded-[13px] border border-line bg-raised">
           <div className="space-y-2 border-b border-line px-4 pb-3 pt-4">
             <div className="flex items-baseline justify-between gap-2">
@@ -105,15 +126,32 @@ export function LessonWorkspace({
             </div>
             <ProgressLine percent={documents.length ? (doneCount / documents.length) * 100 : 0} done={remaining === 0} />
             <p className="text-[12px] text-muted">{summary}</p>
+            {searchable && (
+              <label className="flex h-11 items-center gap-2 rounded-[10px] border border-line-strong bg-canvas px-3">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted" aria-hidden>
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="m20 20-3.5-3.5" />
+                </svg>
+                <span className="sr-only">ค้นหาชื่อคลิปหรือเอกสาร</span>
+                <input
+                  type="search"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="ค้นหาชื่อคลิป หรือ EP.3"
+                  className="min-w-0 flex-1 bg-transparent text-[14px] text-fg outline-none placeholder:text-muted"
+                />
+              </label>
+            )}
           </div>
-          <ol className="p-1.5">
-            {documents.map((d) => {
+          <ol ref={listRef} aria-label="รายการเนื้อหา" className="thin-scroll max-h-[min(62dvh,560px)] overflow-y-auto overscroll-contain p-1.5">
+            {shown.length === 0 && <li className="px-3 py-8 text-center text-[13px] text-muted">ไม่พบคลิปหรือเอกสารที่ชื่อมี “{q.trim()}”</li>}
+            {shown.map((d) => {
               const video = isVideoMime(d.mimeType);
               const seen = Math.min(seenCount[d.id] ?? 0, d.pageCount);
               const done = isDone(d);
               const current = active && d.id === openId;
               return (
-                <li key={d.id}>
+                <li key={d.id} ref={current ? currentRef : undefined}>
                   <button
                     type="button"
                     onClick={() => setOpenId(d.id)}
@@ -123,7 +161,10 @@ export function LessonWorkspace({
                   >
                     <Thumb video={video} cover={d.coverUrl} length={video ? formatDuration(d.durationSeconds ?? d.pageCount * VIDEO_SEGMENT_SECONDS) : null} />
                     <span className="flex min-w-0 flex-1 flex-col gap-1">
-                      <span className="break-words text-[14px] font-semibold leading-snug text-fg">{d.fileName}</span>
+                      <span className="break-words text-[14px] font-semibold leading-snug text-fg">
+                        {video && <span className="mr-1.5 font-semibold text-muted">EP.{clipNo.get(d.id)}</span>}
+                        {d.fileName}
+                      </span>
                       <span className="text-[12px] text-muted">
                         {video
                           ? done
