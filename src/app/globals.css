@@ -4,13 +4,15 @@
  * หน้าตาของ WorkTrain ยกมาจาก WorkPass (`apps/web/src/app/globals.css`) — โทนขาว-ดำ-เงิน มีโหมดมืด
  *
  * ฟอนต์ (ไฟล์อยู่ใน src/app/fonts · โหลดด้วย next/font/local ใน layout.tsx — build ไม่ต้องต่อเน็ต)
- *   font-sans     ตัวหนังสือทั่วไป: ละตินเป็น Old Standard TT · ไทยเป็น Noto Sans Thai (Old Standard ไม่มีอักษรไทย เบราว์เซอร์ข้ามไปเอง)
+ *   font-sans     ตัวหนังสือทั่วไป: Noto Sans Thai · ละติน/ตัวเลขใช้ sans ของเครื่อง (ไฟล์ Noto ชุดนี้มีแต่อักษรไทย)
+ *                 ★ เดิมใส่ Old Standard TT (ตัวมีเชิง) ก่อน — ตัวเลข วันที่ รหัสสินค้า EP.3 กลายเป็นตัวมีเชิงกลางประโยคไทย อ่านสะดุด
+ *                   ตัวมีเชิงเหลือเฉพาะ font-display (wordmark · หัวข้อภาษาอังกฤษที่ตั้งใจ)
  *   font-display  หัวข้อภาษาอังกฤษ / wordmark (Old Standard TT)
  *   font-ui       ช่องกรอก ตัวเลข และข้อความที่ต้องอ่านเร็ว (Noto Sans Thai ทั้งไทยและละติน)
  * breakpoint nav (720px): ต่ำกว่านี้เมนูซ้ายเป็น drawer
  */
 @theme {
-  --font-sans: var(--font-latin), var(--font-thai), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-thai), ui-sans-serif, system-ui, "Segoe UI", sans-serif;
   --font-display: var(--font-latin), var(--font-thai), ui-serif, Georgia, serif;
   --font-ui: var(--font-thai), ui-sans-serif, system-ui, sans-serif;
   --breakpoint-nav: 45rem;

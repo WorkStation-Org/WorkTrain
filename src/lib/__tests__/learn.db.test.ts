@@ -286,7 +286,29 @@ describe("การอ่าน (spec §9)", () => {
     expect(s.endReason).toBe("idle");
     await startSession(sec(200));
     const r = await L.recordReading({ personId: ME, assignmentId: a.id, documentId: docs[0].id, pages: [3], activeSeconds: 10, now: sec(205) });
-    expect(r).toEqual({ ok: true, completed: true });
+    expect(r).toEqual({ ok: true, completed: true, seen: [1, 2, 3] });
+  });
+
+  it("ช่วงวิดีโอที่เกินเพดานต่อครั้งไม่อยู่ใน seen — ส่งซ้ำแล้วทยอยนับจนครบ (จอไม่ขึ้นครบทั้งที่ฐานไม่ครบ)", async () => {
+    const { a, docs } = await seed();
+    const [video] = await testDb()
+      .insert(schema.documents)
+      .values({ versionId: docs[0].versionId, kind: "other", objectKey: "v", fileName: "v.mp4", mimeType: "video/mp4", sizeBytes: 1, pageCount: 4, durationSeconds: 40, sortOrder: 3 })
+      .returning();
+    await startSession(T0);
+    const all = [1, 2, 3, 4];
+    const first = await L.recordReading({ personId: ME, assignmentId: a.id, documentId: video.id, pages: all, activeSeconds: 0, now: sec(5) });
+    expect(first).toEqual({ ok: true, completed: false, seen: [1] });
+    // เบราว์เซอร์ส่งช่วงที่ยังไม่อยู่ใน seen ซ้ำ — แม้ไม่มีเวลาดูเพิ่ม ก็ได้ทีละ 1 ช่วง
+    let seen = (first as { seen: number[] }).seen;
+    let completed = false;
+    for (let i = 1; i <= 3; i++) {
+      const out = await L.recordReading({ personId: ME, assignmentId: a.id, documentId: video.id, pages: all.filter((p) => !seen.includes(p)), activeSeconds: 0, now: sec(5 + i * 15) });
+      seen = (out as { seen: number[] }).seen;
+      completed = (out as { completed: boolean }).completed;
+    }
+    expect(seen).toEqual(all);
+    expect(completed).toBe(true);
   });
 
   it("หน้านอกช่วงไม่นับ · เวลาอ่านต่อครั้งถูกจำกัด 30 วินาที", async () => {
@@ -336,7 +358,7 @@ describe("การอ่าน (spec §9)", () => {
     await startSession(T0);
 
     // 15 วินาทีที่ 2 เท่าเล่นได้ 30 วินาที = 3 ช่วง (+1 ช่วงที่ค้าง) — ที่เหลือไม่นับ
-    expect(await L.recordReading({ personId: ME, assignmentId: a.id, documentId: video.id, pages: all, activeSeconds: 15, now: sec(15) })).toEqual({ ok: true, completed: false });
+    expect(await L.recordReading({ personId: ME, assignmentId: a.id, documentId: video.id, pages: all, activeSeconds: 15, now: sec(15) })).toMatchObject({ ok: true, completed: false, seen: [1, 2, 3, 4] });
     const progress = async () => (await testDb().select().from(schema.readingProgress).where(eq(schema.readingProgress.documentId, video.id)))[0];
     expect((await progress()).pagesSeen).toEqual([1, 2, 3, 4]);
     // ไม่มีเวลาดู = ได้แค่ 1 ช่วง
