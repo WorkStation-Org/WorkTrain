@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   ageInDays,
+  formatThaiDay,
+  relativeDue,
   bangkokDate,
   bangkokDayEnd,
   bangkokDayStart,
@@ -115,5 +117,24 @@ describe("ขอบช่วงวันที่ของตัวกรอง"
     expect(bangkokDayStart("")).toBeNull();
     expect(bangkokDayEnd("2026-9-1")).toBeNull();
     expect(bangkokDayStart("2026-13-45")).toBeNull();
+  });
+});
+
+describe("วันที่บนหน้าผู้เรียน", () => {
+  const NOW = new Date("2026-11-17T08:00:00+07:00");
+
+  it("formatThaiDay: วันในสัปดาห์ + วัน + เดือนย่อ · ปีอื่นต่อ พ.ศ. สองหลัก · ตามปฏิทินไทย", () => {
+    expect(formatThaiDay(new Date("2026-11-20T19:52:00+07:00"), NOW)).toBe("ศ. 20 พ.ย.");
+    // 00:30 ไทย = ยังเป็นวันก่อนหน้าใน UTC — ต้องได้วันไทย
+    expect(formatThaiDay(new Date("2026-11-21T00:30:00+07:00"), NOW)).toBe("ส. 21 พ.ย.");
+    expect(formatThaiDay(new Date("2027-01-05T10:00:00+07:00"), NOW)).toBe("อ. 5 ม.ค. 70");
+  });
+
+  it("relativeDue: วันนี้ · พรุ่งนี้ · อีก n วัน · เลยกำหนด", () => {
+    expect(relativeDue(new Date("2026-11-17T23:59:00+07:00"), NOW)).toBe("วันนี้");
+    expect(relativeDue(new Date("2026-11-18T09:00:00+07:00"), NOW)).toBe("พรุ่งนี้");
+    expect(relativeDue(new Date("2026-11-20T19:52:00+07:00"), NOW)).toBe("อีก 3 วัน");
+    expect(relativeDue(new Date("2026-11-17T07:00:00+07:00"), NOW)).toBe("เลยกำหนดวันนี้");
+    expect(relativeDue(new Date("2026-11-15T19:00:00+07:00"), NOW)).toBe("เลยมา 2 วัน");
   });
 });

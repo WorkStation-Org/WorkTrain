@@ -127,6 +127,35 @@ export function addWorkingDays(from: Date, n: number): Date {
   return d;
 }
 
+const THAI_DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
+const THAI_MONTH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+
+/**
+ * วันที่แบบที่คนไทยอ่านทันที — `ศ. 20 พ.ย.` (ปีนี้) · `ศ. 20 พ.ย. 70` (ปีอื่น · พ.ศ. สองหลัก)
+ * ใช้บนหน้าผู้เรียน แทน `2026-11-20` / `20/11/2026` ที่ต้องแปลในหัวว่าวันไหน
+ */
+export function formatThaiDay(d: Date, now: Date = new Date()): string {
+  const p = bangkokParts(d);
+  const dow = new Date(`${bangkokDate(d)}T00:00:00Z`).getUTCDay();
+  const year = p.year === bangkokParts(now).year ? "" : ` ${String(p.year + 543).slice(-2)}`;
+  return `${THAI_DOW[dow]} ${p.day} ${THAI_MONTH[p.month - 1]}${year}`;
+}
+
+/**
+ * นับถอยหลังถึงกำหนดตามปฏิทินไทย — `วันนี้` · `พรุ่งนี้` · `อีก 3 วัน` · `เลยมา 2 วัน`
+ * (ครบกำหนด 23:59 วันนี้ แต่ตอนนี้ 08:00 = "วันนี้" ไม่ใช่ "อีก 0 วัน")
+ */
+export function relativeDue(due: Date, now: Date = new Date()): string {
+  const days = ageInDays(now, due);
+  if (due <= now) {
+    const late = ageInDays(due, now);
+    return late <= 0 ? "เลยกำหนดวันนี้" : `เลยมา ${late} วัน`;
+  }
+  if (days <= 0) return "วันนี้";
+  if (days === 1) return "พรุ่งนี้";
+  return `อีก ${days} วัน`;
+}
+
 /** `YYYY-MM-DD` ของวันที่ ถูกต้องตามปฏิทินจริงไหม (กัน 2026-02-30) */
 export function isValidYmd(ymd: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return false;

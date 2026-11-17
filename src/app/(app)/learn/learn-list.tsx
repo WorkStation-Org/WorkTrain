@@ -25,15 +25,19 @@ export interface LearnCard {
   percent: number;
   progressLabel: string;
   barTone: "fg" | "success" | "danger";
+  /** `ต้องสอบผ่านภายใน ศ. 20 พ.ย. · อีก 3 วัน` · `เลยมา 2 วัน (…)` · `ผ่านเมื่อ …` */
   dateLabel: string;
+  dateTone: "fg" | "danger" | "muted";
   groups: CardFilter[];
 }
+
+const DATE_TONE: Record<LearnCard["dateTone"], string> = { fg: "text-ink-2", danger: "font-semibold text-danger", muted: "text-muted" };
 
 const TABS: { key: "all" | CardFilter; label: string }[] = [
   { key: "all", label: "ทั้งหมด" },
   { key: "open", label: "ยังไม่ผ่าน" },
   { key: "late", label: "เลยกำหนด" },
-  { key: "video", label: "มีวิดีโอ" },
+  { key: "video", label: "มีคลิป" },
   { key: "passed", label: "ผ่านแล้ว" },
 ];
 
@@ -102,15 +106,13 @@ export function LearnList({ cards }: { cards: LearnCard[] }) {
                       <Badge tone={c.badge.tone} label={c.badge.label} />
                     </span>
                   </div>
-                  <span className="text-[12px] text-muted">{c.contents}</span>
+                  <span className="text-[13px] text-muted">{c.contents}</span>
                   <div className="mt-auto space-y-1.5">
                     <span className="block h-1.5 overflow-hidden rounded-full bg-subtle">
                       <span className={`block h-full rounded-full ${BAR[c.barTone]}`} style={{ width: `${c.percent}%` }} />
                     </span>
-                    <span className="flex justify-between gap-2 text-[12px] text-muted">
-                      <span>{c.progressLabel}</span>
-                      <span>{c.dateLabel}</span>
-                    </span>
+                    <span className="block text-[13px] text-fg">{c.progressLabel}</span>
+                    <span className={`block text-[13px] ${DATE_TONE[c.dateTone]}`}>{c.dateLabel}</span>
                   </div>
                 </div>
               </Link>

@@ -2,11 +2,11 @@ import { notFound } from "next/navigation";
 import { Badge, Button, Card, Icon, PageHeader } from "@/components/ui";
 import { attemptView } from "@/lib/learn-service";
 import { learnerActor } from "@/lib/page";
+import { END_REASON } from "../../../end-reason";
 import { ExamQuestion } from "./question";
 
 export const dynamic = "force-dynamic";
 
-const REASON: Record<string, string> = { submitted: "ตอบครบ", timeout: "หมดเวลา", left_page: "ออกจากหน้าสอบครบ 5 ครั้ง" };
 
 /** หน้าสอบ — ทีละข้อ ย้อนกลับไม่ได้ · จบแล้วแสดงคะแนนและข้อที่ผิด ไม่เฉลย (spec §10 · ADR-0009) */
 export default async function ExamPage({ params }: { params: Promise<{ assignmentId: string; attemptId: string }> }) {
@@ -20,7 +20,7 @@ export default async function ExamPage({ params }: { params: Promise<{ assignmen
     const r = view.result;
     return (
       <main className="mx-auto w-full max-w-2xl space-y-4">
-        <PageHeader kicker="Exam result" title={view.setTitle} subtitle={`จบการสอบ · ${REASON[r.reason] ?? r.reason}`} />
+        <PageHeader title={view.setTitle} subtitle={`จบการสอบ · ${END_REASON[r.reason] ?? r.reason}`} />
         <Card className="flex flex-col items-center gap-4 py-10 text-center">
           <span className={`flex size-16 items-center justify-center rounded-[20px] border ${r.passed ? "border-success/30 bg-success-soft text-success" : "border-danger/30 bg-danger-soft text-danger"}`}>
             <Icon name={r.passed ? "check" : "x"} size={28} />

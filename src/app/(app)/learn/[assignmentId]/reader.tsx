@@ -47,7 +47,7 @@ export function LessonWorkspace({
   active,
   start,
   exam,
-  examNote,
+  examRules,
 }: {
   assignmentId: number;
   documents: LessonDoc[];
@@ -55,7 +55,8 @@ export function LessonWorkspace({
   active: boolean;
   start?: ReactNode;
   exam?: ReactNode;
-  examNote: string;
+  /** กติกาการสอบ — แสดงเป็นรายการก่อนปุ่มเริ่มสอบ */
+  examRules: string[];
 }) {
   const [openId, setOpenId] = useState<number | null>(documents.find((d) => !d.completed)?.id ?? documents[0]?.id ?? null);
   const [seenCount, setSeenCount] = useState<Record<number, number>>(() => Object.fromEntries(documents.map((d) => [d.id, d.pagesSeen.length])));
@@ -125,7 +126,7 @@ export function LessonWorkspace({
               </span>
             </div>
             <ProgressLine percent={documents.length ? (doneCount / documents.length) * 100 : 0} done={remaining === 0} />
-            <p className="text-[12px] text-muted">{summary}</p>
+            <p className="text-[13px] text-muted">{summary}</p>
             {searchable && (
               <label className="flex h-11 items-center gap-2 rounded-[10px] border border-line-strong bg-canvas px-3">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted" aria-hidden>
@@ -165,11 +166,11 @@ export function LessonWorkspace({
                         {video && <span className="mr-1.5 font-semibold text-muted">EP.{clipNo.get(d.id)}</span>}
                         {d.fileName}
                       </span>
-                      <span className="text-[12px] text-muted">
+                      <span className="text-[13px] text-muted">
                         {video
                           ? done
                             ? "ดูครบแล้ว"
-                            : `ดูแล้ว ${seen}/${d.pageCount} ช่วง`
+                            : `ดูแล้ว ${watchedLabel(d, seen)}`
                           : done
                             ? `อ่านครบ ${d.pageCount} หน้า`
                             : `อ่านแล้ว ${seen}/${d.pageCount} หน้า`}
@@ -182,7 +183,7 @@ export function LessonWorkspace({
                         ✓
                       </span>
                     ) : current ? (
-                      <span className="shrink-0 text-[12px] font-semibold text-ink-2">{video ? "กำลังดู" : "กำลังอ่าน"}</span>
+                      <span className="shrink-0 text-[13px] font-semibold text-ink-2">{video ? "กำลังดู" : "กำลังอ่าน"}</span>
                     ) : null}
                   </button>
                 </li>
@@ -192,17 +193,30 @@ export function LessonWorkspace({
         </div>
 
         <div className="space-y-2.5 rounded-[13px] border border-line bg-raised p-4">
-          <h2 className="text-[15px] font-semibold text-fg">สอบ</h2>
-          <p className="text-[13px] leading-relaxed text-ink-2">{examNote}</p>
+          <h2 className="text-[15px] font-semibold text-fg">ก่อนเริ่มสอบ</h2>
+          <ul className="list-disc space-y-1 pl-5 text-[14px] leading-relaxed text-ink-2">
+            {examRules.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
           {exam ?? (
             <p className="rounded-[10px] border border-dashed border-ink-4 bg-canvas px-3 py-3 text-center text-[13px] text-muted">
-              {remaining > 0 ? `ดู/อ่านให้ครบอีก ${remaining} รายการ แล้วจึงเริ่มสอบได้` : "ครบแล้ว — กำลังบันทึก…"}
+              {remaining > 0
+                ? `เริ่มสอบได้เมื่อดู/อ่านครบ — เหลืออีก ${remaining} รายการ`
+                : "ดู/อ่านครบแล้ว กำลังบันทึกความคืบหน้า — ปุ่มเริ่มสอบจะขึ้นเองในไม่กี่วินาที อย่าเพิ่งปิดหน้านี้"}
             </p>
           )}
         </div>
       </aside>
     </div>
   );
+}
+
+/** เวลาที่ดูแล้วของคลิป — `0:20 จาก 0:42 · เหลือ 0:22` (นับจากช่วงละ 10 วินาทีที่ระบบนับแล้ว) */
+function watchedLabel(d: Pick<LessonDoc, "durationSeconds" | "pageCount">, segments: number): string {
+  const length = d.durationSeconds ?? d.pageCount * VIDEO_SEGMENT_SECONDS;
+  const watched = Math.min(length, segments * VIDEO_SEGMENT_SECONDS);
+  return `${formatDuration(watched)} จาก ${formatDuration(length)} · เหลือ ${formatDuration(length - watched)}`;
 }
 
 function ProgressLine({ percent, done, thin = false }: { percent: number; done: boolean; thin?: boolean }) {
@@ -271,9 +285,19 @@ function useProgressBeat(assignmentId: number, documentId: number, busy: () => b
       if (!pages.length && !secs) return;
       pending.current.clear();
       activeSeconds.current = 0;
-      const out = await readingBeatAction({ assignmentId, documentId, pages, activeSeconds: secs });
-      if (!out.ok && out.error === "session_ended") router.refresh();
-      else if (out.ok && out.completed) router.refresh();
+      // ส่งไม่ถึง (เน็ตหลุด) = คืนเข้าคิวทั้งหมด ส่งใหม่รอบหน้า
+      const out = await readingBeatAction({ assignmentId, documentId, pages, activeSeconds: secs }).catch(() => null);
+      if (!out) {
+        for (const p of pages) pending.current.add(p);
+        activeSeconds.current += secs;
+        return;
+      }
+      if (!out.ok && out.error === "session_ended") return router.refresh();
+      if (!out.ok) return;
+      // ช่วงวิดีโอที่เกินเพดานต่อครั้งเซิร์ฟเวอร์ยังไม่นับ — ส่งซ้ำรอบหน้า (เพดาน +1 ช่วงทุกครั้ง แม้นิ่ง จึงทยอยครบเอง)
+      const saved = new Set(out.seen);
+      for (const p of pages) if (!saved.has(p)) pending.current.add(p);
+      if (out.completed) router.refresh();
     };
     const beat = setInterval(flush, BEAT_MS);
     const onHide = () => document.visibilityState === "hidden" && void flush();
@@ -398,9 +422,9 @@ function VideoDoc({ assignmentId, doc, label, onSeen }: { assignmentId: number; 
     <div className="space-y-3">
       <div className="overflow-hidden rounded-[13px] bg-[#161719]">
         <div className="flex items-baseline gap-3 px-4 pb-2 pt-3 text-white">
-          <span className="shrink-0 text-[12px] tracking-wide text-[#a4a7ad]">{label}</span>
+          <span className="shrink-0 text-[13px] tracking-wide text-[#a4a7ad]">{label}</span>
           <span className="min-w-0 truncate text-[14px] font-semibold">{doc.fileName}</span>
-          <span className="ml-auto shrink-0 text-[12px] text-[#c9cbcf]">ยาว {formatDuration(duration)}</span>
+          <span className="ml-auto shrink-0 text-[13px] text-[#c9cbcf]">ยาว {formatDuration(duration)}</span>
         </div>
         <video
           ref={video}
@@ -426,11 +450,11 @@ function VideoDoc({ assignmentId, doc, label, onSeen }: { assignmentId: number; 
       <div className="space-y-2.5 rounded-[13px] border border-line bg-raised px-4 py-3.5">
         <div className="flex flex-wrap justify-between gap-2 text-[13px]">
           <span className="font-semibold text-fg">
-            ดูแล้ว {seen.size}/{doc.pageCount} ช่วง <span className="font-normal text-muted">(ช่วงละ {VIDEO_SEGMENT_SECONDS} วินาที)</span>
+            ดูแล้ว {watchedLabel(doc, seen.size)}
           </span>
-          <span className="text-muted">กรอข้ามได้ แต่ช่วงที่ข้ามไม่นับ · เร็วสุด {MAX_VIDEO_PLAYBACK_RATE} เท่า</span>
+          <span className="text-muted">กรอข้ามได้ แต่ส่วนที่ข้ามยังไม่นับ · เร่งได้ถึง {MAX_VIDEO_PLAYBACK_RATE} เท่า</span>
         </div>
-        <div className="flex h-3.5 gap-px" role="img" aria-label={`ดูแล้ว ${seen.size} จาก ${doc.pageCount} ช่วง`}>
+        <div className="flex h-3.5 gap-px" role="img" aria-label={`ดูแล้ว ${watchedLabel(doc, seen.size)}`}>
           {Array.from({ length: doc.pageCount }, (_, i) => {
             const n = i + 1;
             const cls = seen.has(n)
@@ -443,7 +467,7 @@ function VideoDoc({ assignmentId, doc, label, onSeen }: { assignmentId: number; 
             return <span key={n} className={`min-w-0 flex-1 rounded-[2px] ${cls}`} />;
           })}
         </div>
-        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-2">
+        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-ink-2">
           <li className="flex items-center gap-1.5">
             <span className="size-3 rounded-[3px] bg-success" aria-hidden />
             ดูแล้ว
@@ -454,7 +478,7 @@ function VideoDoc({ assignmentId, doc, label, onSeen }: { assignmentId: number; 
           </li>
           <li className="flex items-center gap-1.5">
             <span className="size-3 rounded-[3px] border border-dashed border-ink-4 bg-line" aria-hidden />
-            กรอข้าม — ยังไม่นับ
+            ข้ามไป — ยังไม่นับ
           </li>
           <li className="flex items-center gap-1.5">
             <span className="size-3 rounded-[3px] bg-subtle" aria-hidden />
@@ -542,11 +566,11 @@ function PdfDoc({ assignmentId, doc, viewer, onSeen }: { assignmentId: number; d
     <div className="rounded-[13px] border border-line bg-raised p-4">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <span className="min-w-0 truncate text-[14px] font-semibold text-fg">{doc.fileName}</span>
-        <span className="text-[12px] text-muted">
-          เลื่อนผ่านแล้ว {seen.size}/{doc.pageCount} หน้า — ต้องครบทุกหน้าก่อนสอบ
+        <span className="text-[13px] text-muted">
+          อ่านแล้ว {seen.size} จาก {doc.pageCount} หน้า — เลื่อนให้ครบทุกหน้าก่อนสอบ
         </span>
       </div>
-      {confidential && <p className="mb-2 text-[12px] text-danger">Pricelist — ดูในระบบเท่านั้น · ทุกหน้ามีชื่อของคุณและเวลาที่เปิด · ระบบบันทึกการเปิดทุกครั้ง</p>}
+      {confidential && <p className="mb-2 text-[13px] text-danger">Pricelist — ดูในระบบเท่านั้น · ทุกหน้ามีชื่อของคุณและเวลาที่เปิด · ระบบบันทึกการเปิดทุกครั้ง</p>}
       {error && <p className="mb-2 text-[13px] text-danger">{error}</p>}
       {/* Pricelist: ซ้อนชื่อภาษาไทยบนหน้าจออีกชั้น (ในไฟล์ประทับอีเมล/รหัสไว้แล้วฝั่งเซิร์ฟเวอร์) · ปิดเมนูคลิกขวา */}
       <div className="relative" onContextMenu={confidential ? (e) => e.preventDefault() : undefined}>

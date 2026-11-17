@@ -218,6 +218,8 @@ export async function endStudySession(personId: number, now: Date = new Date()):
 /**
  * heartbeat ระหว่างอ่าน — หน้าที่เห็น + เวลาที่แท็บอยู่หน้าและมีการขยับ (เบราว์เซอร์ส่งทุก ~15 วินาที)
  * ไม่มีรอบเรียนที่เปิดอยู่ = ไม่นับ และบอกให้สแกนใหม่
+ * ★ คืน `seen` = หน้า/ช่วงที่เซิร์ฟเวอร์นับแล้วทั้งหมด — ช่วงวิดีโอที่เกินเพดานต่อครั้งถูกตัด เบราว์เซอร์ต้องส่งช่วงที่ไม่อยู่ใน `seen`
+ *   ซ้ำในครั้งถัดไป (เดิมเบราว์เซอร์ถือว่านับแล้ว จอขึ้นครบแต่ฐานไม่ครบ ปุ่มสอบไม่มา)
  */
 export async function recordReading(input: {
   personId: number;
@@ -226,7 +228,7 @@ export async function recordReading(input: {
   pages: number[];
   activeSeconds: number;
   now?: Date;
-}): Promise<Outcome<{ completed: boolean }>> {
+}): Promise<Outcome<{ completed: boolean; seen: number[] }>> {
   const now = input.now ?? new Date();
   const session = await activeSession(input.personId, now);
   if (!session) return { ok: false, error: "session_ended" };
@@ -271,7 +273,7 @@ export async function recordReading(input: {
   if (completed && mine.a.relearnRequiredAt && (await readingComplete(mine.a, version!.id))) {
     await db().update(assignments).set({ relearnRequiredAt: null }).where(eq(assignments.id, mine.a.id));
   }
-  return { ok: true, completed };
+  return { ok: true, completed, seen };
 }
 
 async function readingComplete(a: Pick<AssignmentRow, "id" | "readRound">, versionId: number): Promise<boolean> {
@@ -368,6 +370,8 @@ export interface LearningListItem {
   dueAt: Date;
   passedAt: Date | null;
   status: ListStatus;
+  /** สถานะ `update` — ต้องอ่านรับทราบ (`small`) หรือสอบส่วนที่เปลี่ยน (`large`) */
+  updateKind: "small" | "large" | null;
   late: boolean;
   videos: number;
   videoSeconds: number;
@@ -381,7 +385,7 @@ export interface LearningListItem {
   /** ปกของคลิปแรกที่มีปก */
   coverUrl: string | null;
   /** เนื้อหาที่ขยับล่าสุดแต่ยังไม่ครบ — ใช้ทำ "ทำต่อจากที่ค้างไว้" */
-  resume: { fileName: string; isVideo: boolean; seen: number; total: number; durationSeconds: number | null; coverUrl: string | null; at: Date } | null;
+  resume: { fileName: string; isVideo: boolean; /** เลขตอนของคลิป (EP) · เอกสาร = null */ ep: number | null; seen: number; total: number; durationSeconds: number | null; coverUrl: string | null; at: Date } | null;
 }
 
 /**
@@ -438,6 +442,7 @@ export async function myLearningList(personId: number, now: Date = new Date()): 
       dueAt: a.dueAt,
       passedAt: a.passedAt,
       status,
+      updateKind: update?.kind ?? null,
       late: !a.passedAt && a.dueAt <= now,
       videos: videoDocs.length,
       videoSeconds: videoDocs.reduce((n, d) => n + (d.durationSeconds ?? (d.pageCount ?? 0) * VIDEO_SEGMENT_SECONDS), 0),
@@ -453,6 +458,7 @@ export async function myLearningList(personId: number, now: Date = new Date()): 
           ? {
               fileName: touched.fileName,
               isVideo: isVideoMime(touched.mimeType),
+              ep: isVideoMime(touched.mimeType) ? videoDocs.indexOf(touched) + 1 : null,
               seen: seenOf(touched),
               total: touched.pageCount ?? 0,
               durationSeconds: touched.durationSeconds,
