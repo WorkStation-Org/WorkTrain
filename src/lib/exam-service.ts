@@ -60,8 +60,12 @@ export async function sourceDocuments(versionId: number): Promise<Outcome<{ docs
   const store = objectStore();
   if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
   const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder));
-  const readable = rows.filter((d) => aiReadable(d.mimeType));
-  if (!readable.length) return { ok: false, error: "ต้องมีเอกสาร PDF อย่างน้อย 1 ไฟล์ก่อนออกข้อสอบ" };
+  // ไฟล์ที่ซ่อนไว้ผู้เรียนไม่ได้อ่าน — ไม่ให้ AI ออกข้อสอบจากไฟล์นั้น
+  const readable = rows.filter((d) => aiReadable(d.mimeType) && !d.hidden);
+  if (!readable.length) {
+    const hiddenPdf = rows.some((d) => aiReadable(d.mimeType) && d.hidden);
+    return { ok: false, error: hiddenPdf ? "PDF ทุกไฟล์ถูกซ่อนอยู่ — แสดงอย่างน้อย 1 ไฟล์ก่อนออกข้อสอบ" : "ต้องมีเอกสาร PDF อย่างน้อย 1 ไฟล์ก่อนออกข้อสอบ" };
+  }
   const docs: SourceDocument[] = [];
   for (const d of readable) {
     const bytes = await store.get(d.objectKey);
@@ -331,8 +335,10 @@ async function sheetTarget(actor: Pick<Actor, "personId" | "role">, setId: numbe
     if (!pending || !approverRole(actor, set)) return { ok: false as const, error: "Import ข้อสอบส่วนที่เปลี่ยนได้เฉพาะผู้อนุมัติของเวอร์ชันที่รออนุมัติ" };
     if (version.changeKind !== "large") return { ok: false as const, error: 'เลือก "เรียนรู้และทดสอบ" ก่อน' };
   }
-  const docs = await db().select({ fileName: documents.fileName }).from(documents).where(eq(documents.versionId, version.id)).orderBy(asc(documents.sortOrder));
-  if (!docs.length) return { ok: false as const, error: "ชุดนี้ยังไม่มีเอกสาร" };
+  const all = await db().select({ fileName: documents.fileName, hidden: documents.hidden }).from(documents).where(eq(documents.versionId, version.id)).orderBy(asc(documents.sortOrder));
+  if (!all.length) return { ok: false as const, error: "ชุดนี้ยังไม่มีเอกสาร" };
+  const docs = all.filter((d) => !d.hidden);
+  if (!docs.length) return { ok: false as const, error: "ทุกไฟล์ในชุดนี้ถูกซ่อนอยู่ — แสดงอย่างน้อย 1 ไฟล์ก่อน" };
   const blueprint = kind === "delta" ? DELTA_BLUEPRINT : (set.blueprint as Blueprint);
   return { ok: true as const, set, version, blueprint, fileNames: docs.map((d) => d.fileName) };
 }

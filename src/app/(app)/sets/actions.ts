@@ -16,6 +16,7 @@ import {
   moveDocument,
   removeDocument,
   requestUpload,
+  setDocumentHidden,
   setSpreadMode,
   setVideoCover,
   updateDocument,
@@ -302,6 +303,15 @@ export async function updateDocumentAction(input: { setId: number; documentId: n
   const actor = await requireAuthor();
   const out = await updateDocument({ actor, ...input });
   revalidatePath(`/sets/${input.setId}`);
+  return out;
+}
+
+/** ซ่อน/แสดงคลิปหรือเอกสาร — ผู้สร้างหรือ TG (`setDocumentHidden` ตรวจสิทธิ์เอง) · ชุดที่ใช้อยู่ก็ทำได้ ผู้เรียนเห็นผลทันที */
+export async function setDocumentHiddenAction(input: { setId: number; documentId: number; hidden: boolean }) {
+  const actor = await requireUser();
+  const out = await setDocumentHidden({ actor, documentId: input.documentId, hidden: input.hidden === true });
+  revalidatePath(`/sets/${input.setId}`);
+  revalidatePath("/learn", "layout");
   return out;
 }
 

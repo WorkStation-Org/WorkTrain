@@ -81,10 +81,13 @@ async function approvedVersion(setId: number) {
   return rows.find((v) => v.approvedAt !== null) ?? null;
 }
 
-/** เอกสารที่ผู้เรียนต้องอ่าน/ดู — PDF ทุกชนิด (Pricelist แสดงแบบมีลายน้ำ) · วิดีโอ (นับเป็นช่วง) · Excel ยังแสดงทีละหน้าไม่ได้ */
+/**
+ * เอกสารที่ผู้เรียนต้องอ่าน/ดู — PDF ทุกชนิด (Pricelist แสดงแบบมีลายน้ำ) · วิดีโอ (นับเป็นช่วง) · Excel ยังแสดงทีละหน้าไม่ได้
+ * ★ ที่ผู้สร้างซ่อนไว้ไม่อยู่ในนี้ — ไม่แสดง ไม่นับความคืบหน้า และเปิดไม่ได้ (ทุกทางที่เปิดเอกสารผ่านฟังก์ชันนี้)
+ */
 async function requiredDocuments(versionId: number) {
-  const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder));
-  return rows.filter((d) => d.pageCount !== null);
+  const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder), asc(documents.id));
+  return rows.filter((d) => d.pageCount !== null && !d.hidden);
 }
 
 // ── เวอร์ชันใหม่ (spec §7 · ADR-0008) ───────────────────────────────────────

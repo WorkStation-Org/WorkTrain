@@ -65,7 +65,7 @@ export async function releasedSets(actor: Pick<Actor, "personId" | "role">, now:
   const approvedIds = [...approvedOf.values()].map((v) => v.id);
   // เอกสารที่ผู้เรียนต้องดู/อ่าน (มีจำนวนหน้า/ช่วง) — แบบเดียวกับหน้ารายการของผู้เรียน · Excel ไม่นับ
   const docs = approvedIds.length
-    ? (await db().select().from(documents).where(inArray(documents.versionId, approvedIds)).orderBy(documents.sortOrder)).filter((d) => d.pageCount !== null)
+    ? (await db().select().from(documents).where(inArray(documents.versionId, approvedIds)).orderBy(documents.sortOrder)).filter((d) => d.pageCount !== null && !d.hidden)
     : [];
 
   // ถามผังไม่ได้ = null → ไม่ซ่อนใครเพราะ "ไม่อยู่ในผัง" (แบบเดียวกับแท็บผู้เรียน) · fetchOrg จำไว้ 5 นาที

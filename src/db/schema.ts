@@ -179,6 +179,11 @@ export const documents = pgTable(
     /** น้ำหนักตอนเฉลี่ยข้อสอบแบบกำหนดเอง (0 = ไม่ออกจากไฟล์นี้) */
     examWeight: smallint("exam_weight").notNull().default(1),
     sortOrder: smallint("sort_order").notNull().default(0),
+    /**
+     * ซ่อนจากชุด — ผู้เรียนไม่เห็น ไม่นับความคืบหน้า · AI ไม่ใช้ออกข้อสอบ · ไฟล์และความคืบหน้าเดิมยังอยู่ กดแสดงกลับได้
+     * ผู้สร้าง/TG สลับได้ทุกสถานะของชุด (ไม่ใช่การแก้เนื้อหา จึงไม่ต้องเริ่มเวอร์ชันใหม่) · ลงประวัติทุกครั้ง
+     */
+    hidden: boolean("hidden").notNull().default(false),
     createdAt: ts("created_at").notNull().defaultNow(),
   },
   (t) => [
@@ -295,6 +300,8 @@ export const APPROVAL_ACTIONS = [
   "deleted",
   /** ผู้สร้าง/TG ปิดชุดที่ใช้อยู่ (ADR-0016) */
   "closed",
+  /** ซ่อน/แสดงคลิปหรือเอกสารในชุด · detail `{ documentId, fileName, hidden }` */
+  "document_visibility",
 ] as const;
 export type ApprovalAction = (typeof APPROVAL_ACTIONS)[number];
 

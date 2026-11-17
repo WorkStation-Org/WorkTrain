@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { PDFDocument } from "pdf-lib";
 import { db } from "@/db";
+import { atomic } from "@/db/atomic";
 import {
   approvalEvents,
   assignments,
@@ -477,6 +478,41 @@ export async function moveDocument(input: { actor: Actor; documentId: number; di
   if (i < 0 || j < 0 || j >= ids.length) return { ok: true };
   [ids[i], ids[j]] = [ids[j], ids[i]];
   for (const [order, id] of ids.entries()) await db().update(documents).set({ sortOrder: order }).where(eq(documents.id, id));
+  return { ok: true };
+}
+
+/**
+ * ซ่อน/แสดงคลิปหรือเอกสารในชุด — ผู้สร้าง/TG ทำได้ทุกสถานะ (ชุดที่ใช้อยู่ด้วย) ยกเว้นชุดที่ปิด/ลบแล้ว · ลงประวัติทุกครั้ง
+ * ซ่อน = ผู้เรียนไม่เห็น ไม่นับความคืบหน้า (ซ่อนรายการที่ค้างอยู่ คนที่เหลือครบแล้วสอบได้ทันที) · AI ไม่ใช้ออกข้อสอบครั้งถัดไป
+ * ★ ต้องเหลือเนื้อหาที่ผู้เรียนดู/อ่านได้อย่างน้อย 1 รายการ — ไม่อย่างนั้นไม่มีใครอ่านครบจนสอบได้
+ */
+export async function setDocumentHidden(input: { actor: Actor; documentId: number; hidden: boolean; now?: Date }): Promise<Outcome> {
+  const found = await documentWithSet(input.documentId);
+  if (!found || !isOwnerOrAdmin(input.actor, found.set)) return { ok: false, error: "ไม่พบไฟล์นี้ หรือไม่มีสิทธิ์ซ่อน/แสดง" };
+  const { doc, set } = found;
+  if (set.status === "closed" || set.status === "deleted") return { ok: false, error: "ชุดนี้ปิดแล้ว — ซ่อน/แสดงไม่ได้" };
+  if (doc.hidden === input.hidden) return { ok: true };
+  if (input.hidden && doc.pageCount !== null) {
+    const siblings = await db().select().from(documents).where(eq(documents.versionId, doc.versionId));
+    const left = siblings.filter((d) => d.id !== doc.id && !d.hidden && d.pageCount !== null);
+    if (!left.length) return { ok: false, error: "ต้องเหลือคลิปหรือเอกสารให้ผู้เรียนอย่างน้อย 1 รายการ" };
+  }
+  const now = input.now ?? new Date();
+  await atomic([
+    db().update(documents).set({ hidden: input.hidden }).where(eq(documents.id, doc.id)),
+    db().update(learningSets).set({ updatedAt: now }).where(eq(learningSets.id, set.id)),
+    db()
+      .insert(approvalEvents)
+      .values({
+        setId: set.id,
+        versionId: doc.versionId,
+        action: "document_visibility",
+        actorPersonId: input.actor.personId,
+        actorName: input.actor.name,
+        detail: { documentId: doc.id, fileName: doc.fileName, hidden: input.hidden },
+        createdAt: now,
+      }),
+  ]);
   return { ok: true };
 }
 
