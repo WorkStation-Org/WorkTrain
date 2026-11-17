@@ -142,3 +142,33 @@ describe("ภาพรวมชุดที่ปล่อยแล้ว", () =
     expect(f331).toMatchObject({ learners: 6, counts: { passed: 2, started: 2, not_started: 1, overdue: 1 } });
   });
 });
+
+describe("หน้าชุดการเรียนรู้หน้าเดียว (setsOverview)", () => {
+  it("ขึ้นทุกสถานะ (ลบแล้วไม่ขึ้น) — รออนุมัติ · ร่าง · ใช้อยู่ · ปิดแล้ว · ยังไม่ปล่อยไม่มีวันปล่อยและไม่มีผู้เรียน", async () => {
+    const { setsOverview } = await import("@/lib/set-overview");
+    await seed();
+    await makeSet({ title: "ลบไปแล้ว", status: "deleted" });
+    const rows = await setsOverview(TG, NOW);
+    expect(rows.map((r) => [r.title, r.status])).toEqual([
+      ["รออนุมัติ", "pending_approval"],
+      ["ร่าง", "draft"],
+      ["F331 Signature", "active"],
+      ["Pricelist Q3", "closed"],
+    ]);
+    const draft = rows.find((r) => r.title === "ร่าง")!;
+    expect(draft).toMatchObject({ releasedAt: null, learners: 0, newVersion: null, authorPersonId: AUTHOR });
+    expect(rows.find((r) => r.title === "F331 Signature")).toMatchObject({ learners: 5, newVersion: "submitted" });
+  });
+
+  it("ชุดที่ยังไม่ปล่อยนับเนื้อหาจากเวอร์ชันล่าสุด · การมองเห็นเดียวกับรายการชุด", async () => {
+    const { setsOverview } = await import("@/lib/set-overview");
+    const draft = await makeSet({ title: "ร่างมีคลิป", status: "draft" });
+    const [v] = await testDb().insert(schema.setVersions).values({ setId: draft.id, versionNo: 1, changeKind: "initial", createdByPersonId: AUTHOR }).returning();
+    await testDb()
+      .insert(schema.documents)
+      .values({ versionId: v.id, kind: "other", objectKey: "dv", fileName: "คลิป", mimeType: "video/mp4", sizeBytes: 1, pageCount: 6, durationSeconds: 60, sortOrder: 0 });
+    const [row] = await setsOverview({ personId: AUTHOR, role: "author" }, NOW);
+    expect(row).toMatchObject({ title: "ร่างมีคลิป", videos: 1, videoSeconds: 60 });
+    expect(await setsOverview({ personId: 99, role: "user" }, NOW)).toEqual([]);
+  });
+});

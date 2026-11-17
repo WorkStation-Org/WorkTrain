@@ -30,8 +30,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       // ผู้อนุมัติไม่ใช่ role (spec §1) — หัวหน้าที่เป็น user ต้องเปิดชุดที่รอตัวเองอนุมัติได้ จึงเห็นทุกคน
       title: "Library",
       items: [
+        // หน้าเดียวทั้งร่าง · รออนุมัติ · ใช้อยู่ · ปิดแล้ว (การ์ด/ตาราง) — /sets/released เดิม redirect มาที่นี่
         { href: "/sets", label: "ชุดการเรียนรู้", icon: "layers" },
-        { href: "/sets/released", label: "ชุดที่ปล่อยแล้ว", icon: "grid" },
       ],
     },
     {
