@@ -87,6 +87,28 @@ export function maxNewSegments(activeSeconds: number): number {
   return Math.ceil((Math.max(0, activeSeconds) * MAX_VIDEO_PLAYBACK_RATE) / VIDEO_SEGMENT_SECONDS) + 1;
 }
 
+/**
+ * ดูคลิปได้ทีละคลิป (ADR-0020) — heartbeat ของคลิปที่นับอยู่ต่ออายุทุก ~15 วินาที · เงียบเกินนี้ = คลิปอื่นนับแทนได้
+ * ปิดคลิป/อีกแท็บเริ่มเล่น = ปล่อยทันที ไม่ต้องรอ
+ */
+export const VIDEO_HOLD_MS = 30_000;
+/** เวลาจริงที่หนึ่งช่วงใช้ — ช่วง 10 วินาทีที่ 2 เท่า = 5 วินาที */
+export const VIDEO_SEGMENT_COST_MS = (VIDEO_SEGMENT_SECONDS / MAX_VIDEO_PLAYBACK_RATE) * 1000;
+/** งบที่สะสมได้สูงสุด (12 ช่วง) — พอให้ heartbeat ที่มาช้า/ช่วงที่ค้างทยอยเข้า แต่เก็บไว้ใช้พร้อมกันหลายแท็บไม่ได้ */
+export const VIDEO_BANK_MS = 60_000;
+
+/**
+ * งบช่วงวิดีโอของทั้งรอบเรียน — ทุกคลิป ทุกแท็บ ทุกเครื่อง รวมกันได้ไม่เกินช่วงละ 5 วินาทีจริง (เท่ากับดูทีละคลิปที่ 2 เท่า)
+ * `creditUntil` = ใช้งบถึงเวลานี้แล้ว · ว่าง = งบเต็ม · คืนจำนวนที่ให้ได้ และเวลาที่ใช้ถึงหลังให้แล้ว
+ * ★ ไม่มีงบนี้ เปิดหลายแท็บแต่ละแท็บได้เพดานต่อครั้งของตัวเอง (`maxNewSegments`) — เปิด 3 แท็บก็เร็ว 3 เท่า
+ */
+export function videoCredit(creditUntil: Date | null, now: Date, wanted: number): { granted: number; creditUntil: Date } {
+  const start = Math.max(creditUntil?.getTime() ?? -Infinity, now.getTime() - VIDEO_BANK_MS);
+  const available = Math.max(0, Math.floor((now.getTime() - start) / VIDEO_SEGMENT_COST_MS));
+  const granted = Math.min(Math.max(0, Math.floor(wanted)), available);
+  return { granted, creditUntil: new Date(start + granted * VIDEO_SEGMENT_COST_MS) };
+}
+
 /** ไฟล์ Template ข้อสอบที่ Import (ADR-0015) — server action รับได้ไม่เกิน 1 MB (ค่าตั้งต้นของ Next) · 50 ข้อจริงไม่ถึง 100 KB */
 export const MAX_EXAM_SHEET_BYTES = 900 * 1024;
 

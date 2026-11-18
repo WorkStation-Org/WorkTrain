@@ -551,6 +551,14 @@ export const studySessions = pgTable(
     lastActiveAt: ts("last_active_at").notNull().defaultNow(),
     endedAt: ts("ended_at"),
     endReason: text("end_reason", { enum: SESSION_END_REASONS }),
+    /**
+     * ดูคลิปได้ทีละคลิป (ADR-0020) — คลิปที่นับอยู่ตอนนี้ + heartbeat ล่าสุดที่นับ · คลิปอื่นส่งมาภายใน 30 วินาที = ไม่นับ
+     * `videoHeldAt` ว่าง = ปล่อยแล้ว (ปิดคลิป/อีกแท็บเริ่มเล่น)
+     */
+    videoDocumentId: integer("video_document_id"),
+    videoHeldAt: ts("video_held_at"),
+    /** งบช่วงวิดีโอของทั้งรอบเรียน — นับถึงเวลานี้แล้ว (ช่วงละ 5 วินาทีจริง = 2 เท่า) · ว่าง = ยังไม่เคยนับ */
+    videoCreditUntil: ts("video_credit_until"),
   },
   (t) => [
     check("study_sessions_end_pair", sql`(${t.endedAt} is null) = (${t.endReason} is null)`),
