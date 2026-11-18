@@ -379,6 +379,99 @@ describe("การอ่าน (spec §9)", () => {
     expect(await testDb().select().from(schema.documentViews).where(eq(schema.documentViews.documentId, video.id))).toHaveLength(1);
   });
 
+  describe("ดูได้ทีละคลิป (ADR-0020)", () => {
+    async function twoVideos() {
+      const s = await seed();
+      const rows = await testDb()
+        .insert(schema.documents)
+        .values(
+          ["v1", "v2"].map((k, i) => ({
+            versionId: s.docs[0].versionId,
+            kind: "other" as const,
+            objectKey: k,
+            fileName: `${k}.mp4`,
+            mimeType: "video/mp4",
+            sizeBytes: 1,
+            pageCount: 30,
+            durationSeconds: 300,
+            sortOrder: 3 + i,
+          })),
+        )
+        .returning();
+      return { ...s, v1: rows[0], v2: rows[1] };
+    }
+    const beat = (aId: number, documentId: number, pages: number[], at: Date, extra: { activeSeconds?: number; release?: boolean } = {}) =>
+      L.recordReading({ personId: ME, assignmentId: aId, documentId, pages, activeSeconds: extra.activeSeconds ?? 15, release: extra.release, now: at });
+    const seenOf = async (documentId: number) =>
+      (await testDb().select().from(schema.readingProgress).where(eq(schema.readingProgress.documentId, documentId)))[0]?.pagesSeen ?? [];
+
+    it("อีกแท็บเล่นอีกคลิปพร้อมกัน = ไม่นับเลย · ปิดคลิปแรก (release) หรือเงียบเกิน 30 วินาที = คลิปใหม่นับได้", async () => {
+      const { a, v1, v2 } = await twoVideos();
+      await startSession(T0);
+      expect(await beat(a.id, v1.id, [1, 2, 3], sec(15))).toMatchObject({ ok: true, seen: [1, 2, 3] });
+      // แท็บที่สองเล่น EP.2 ระหว่างที่ EP.1 ยังนับอยู่
+      expect(await beat(a.id, v2.id, [1, 2, 3], sec(20))).toEqual({ ok: false, error: "video_elsewhere" });
+      expect(await seenOf(v2.id)).toEqual([]);
+      // EP.1 ยังนับต่อได้
+      expect(await beat(a.id, v1.id, [4, 5, 6], sec(30))).toMatchObject({ ok: true, seen: [1, 2, 3, 4, 5, 6] });
+      expect(await beat(a.id, v2.id, [1], sec(55))).toEqual({ ok: false, error: "video_elsewhere" });
+      // เงียบเกิน 30 วินาที = EP.2 นับแทนได้ · แล้ว EP.1 กลับมาไม่ได้จนกว่า EP.2 จะเงียบ/ปล่อย
+      expect(await beat(a.id, v2.id, [1, 2], sec(61))).toMatchObject({ ok: true, seen: [1, 2] });
+      expect(await beat(a.id, v1.id, [7], sec(70))).toEqual({ ok: false, error: "video_elsewhere" });
+      // ปิด EP.2 (เปลี่ยนคลิปในแท็บเดียวกัน) = ปล่อยทันที
+      expect(await beat(a.id, v2.id, [], sec(71), { activeSeconds: 0, release: true })).toMatchObject({ ok: true });
+      expect(await beat(a.id, v1.id, [7], sec(72))).toMatchObject({ ok: true, seen: [1, 2, 3, 4, 5, 6, 7] });
+    });
+
+    it("PDF ไม่ติดการจองคลิป", async () => {
+      const { a, docs, v1 } = await twoVideos();
+      await startSession(T0);
+      await beat(a.id, v1.id, [1], sec(15));
+      expect(await beat(a.id, docs[0].id, [1, 2, 3], sec(16))).toMatchObject({ ok: true, completed: true });
+    });
+
+    it("คลิปเดียวกันเปิดหลายแท็บ ส่งถี่ ๆ = งบรวมทั้งรอบเรียนไม่เกินดูทีละคลิปที่ 2 เท่า", async () => {
+      const { a, v1 } = await twoVideos();
+      const all = Array.from({ length: 30 }, (_, i) => i + 1);
+      await startSession(T0);
+      // 4 แท็บ ทุกแท็บส่งทุก 15 วินาที เป็นเวลา 60 วินาที — แท็บละเพดานต่อครั้ง 4 ช่วง = 64 ช่วงถ้าไม่มีงบรวม
+      for (let t = 15; t <= 60; t += 15) for (let tab = 0; tab < 4; tab++) await beat(a.id, v1.id, all, sec(t + tab * 0.1));
+      // 60 วินาทีที่ 2 เท่า = 12 ช่วง + งบตั้งต้น 12 ช่วง
+      expect((await seenOf(v1.id)).length).toBeLessThanOrEqual(24);
+      expect((await seenOf(v1.id)).length).toBeGreaterThanOrEqual(12);
+    });
+  });
+
+  describe("ทบทวนหลังสอบผ่าน", () => {
+    async function passed() {
+      const s = await seed();
+      await testDb().update(schema.assignments).set({ passedAt: T0 }).where(eq(schema.assignments.id, s.a.id));
+      return s;
+    }
+
+    it("ผ่านแล้ว = เปิดคลิป/เอกสารได้ไม่ต้องมีรอบเรียน · ลงบันทึกการเปิด · หน้าเรียนเป็นโหมดทบทวน", async () => {
+      const { a, docs } = await passed();
+      expect(await L.documentLink({ personId: ME, assignmentId: a.id, documentId: docs[0].id, now: sec(1) })).toMatchObject({ ok: true });
+      expect(await L.documentLink({ personId: ME, assignmentId: a.id, documentId: docs[2].id, now: sec(1) })).toEqual({ ok: true, url: `/learn/${a.id}/doc/${docs[2].id}` });
+      expect(await testDb().select().from(schema.documentViews)).toHaveLength(1);
+      expect(await L.learnView(ME, a.id, sec(2))).toMatchObject({ state: "passed", review: true });
+      // ทบทวนไม่นับความคืบหน้า — ยังต้องมีรอบเรียนถึงจะบันทึก
+      expect(await L.recordReading({ personId: ME, assignmentId: a.id, documentId: docs[0].id, pages: [1], activeSeconds: 5, now: sec(3) })).toEqual({
+        ok: false,
+        error: "session_ended",
+      });
+    });
+
+    it("ยังไม่ผ่าน = ต้องมีรอบเรียน · ผ่านแล้วแต่ถูกตัดจบ = ไม่ทบทวน", async () => {
+      const { a, docs } = await seed();
+      expect(await L.documentLink({ personId: ME, assignmentId: a.id, documentId: docs[0].id, now: sec(1) })).toEqual({ ok: false, error: "session_ended" });
+      expect((await L.learnView(ME, a.id, sec(1)))?.review).toBe(false);
+      await testDb().update(schema.assignments).set({ passedAt: T0, endedAt: T0, endReason: "not_in_audience" }).where(eq(schema.assignments.id, a.id));
+      expect((await L.documentLink({ personId: ME, assignmentId: a.id, documentId: docs[0].id, now: sec(1) })).ok).toBe(false);
+      expect((await L.learnView(ME, a.id, sec(1)))?.review).toBe(false);
+    });
+  });
+
   it("การมอบของคนอื่นอ่านไม่ได้", async () => {
     const { a, docs } = await seed();
     await testDb().update(schema.assignments).set({ personId: 77 }).where(eq(schema.assignments.id, a.id));

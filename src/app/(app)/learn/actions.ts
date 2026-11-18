@@ -98,9 +98,16 @@ export async function documentLinkAction(input: { assignmentId: number; document
   return documentLink({ personId: actor.personId, ...input });
 }
 
-export async function readingBeatAction(input: { assignmentId: number; documentId: number; pages: number[]; activeSeconds: number }) {
+export async function readingBeatAction(input: { assignmentId: number; documentId: number; pages: number[]; activeSeconds: number; release?: boolean }) {
   const actor = await learner();
-  return recordReading({ personId: actor.personId, ...input });
+  return recordReading({
+    personId: actor.personId,
+    assignmentId: input.assignmentId,
+    documentId: input.documentId,
+    pages: input.pages,
+    activeSeconds: input.activeSeconds,
+    release: input.release === true,
+  });
 }
 
 export async function answerAction(input: { attemptId: number; questionId: number; choiceIndex: number }) {

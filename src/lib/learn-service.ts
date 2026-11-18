@@ -31,7 +31,7 @@ import {
   type Rng,
 } from "@/domain/exam";
 import { scanGate } from "@/lib/identity-service";
-import { isVideoMime, maxNewSegments, VIDEO_SEGMENT_SECONDS } from "@/domain/document";
+import { isVideoMime, maxNewSegments, VIDEO_HOLD_MS, VIDEO_SEGMENT_SECONDS, videoCredit } from "@/domain/document";
 import { objectStore, VIDEO_LINK_TTL_SECONDS } from "@/lib/object-store";
 import { coverPath, type Outcome } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
@@ -220,6 +220,8 @@ export async function endStudySession(personId: number, now: Date = new Date()):
  * ไม่มีรอบเรียนที่เปิดอยู่ = ไม่นับ และบอกให้สแกนใหม่
  * ★ คืน `seen` = หน้า/ช่วงที่เซิร์ฟเวอร์นับแล้วทั้งหมด — ช่วงวิดีโอที่เกินเพดานต่อครั้งถูกตัด เบราว์เซอร์ต้องส่งช่วงที่ไม่อยู่ใน `seen`
  *   ซ้ำในครั้งถัดไป (เดิมเบราว์เซอร์ถือว่านับแล้ว จอขึ้นครบแต่ฐานไม่ครบ ปุ่มสอบไม่มา)
+ * ★ วิดีโอนับทีละคลิป (ADR-0020) — มีคลิปอื่นนับอยู่ (อีกแท็บ/อีกเครื่อง) = `video_elsewhere` ไม่นับอะไรเลย ·
+ *   `release` = ปิดคลิปนี้แล้ว ปล่อยให้คลิปอื่นนับได้ทันที
  */
 export async function recordReading(input: {
   personId: number;
@@ -227,6 +229,7 @@ export async function recordReading(input: {
   documentId: number;
   pages: number[];
   activeSeconds: number;
+  release?: boolean;
   now?: Date;
 }): Promise<Outcome<{ completed: boolean; seen: number[] }>> {
   const now = input.now ?? new Date();
@@ -247,9 +250,19 @@ export async function recordReading(input: {
     .from(readingProgress)
     .where(and(eq(readingProgress.assignmentId, mine.a.id), eq(readingProgress.documentId, doc.id), eq(readingProgress.readRound, round)));
   // วิดีโอ: ช่วงใหม่ต่อครั้งต้องไม่เกินที่เล่นทันในเวลาที่ดูจริง (เร็วสุด 2 เท่า · ADR-0013) — เกินมาไม่นับ ต้องดูอีก
+  // และทั้งรอบเรียนนับได้ทีละคลิป ในงบเวลาจริงก้อนเดียว (ADR-0020)
   const already = new Set(prev?.pagesSeen ?? []);
   const fresh = valid.filter((p) => !already.has(p)).sort((x, y) => x - y);
-  const pages = isVideoMime(doc.mimeType) ? fresh.slice(0, maxNewSegments(seconds)) : fresh;
+  let pages = fresh;
+  if (isVideoMime(doc.mimeType)) {
+    const claim = await claimVideo(session, doc.id, now, {
+      wanted: Math.min(fresh.length, maxNewSegments(seconds)),
+      active: seconds > 0 || fresh.length > 0,
+      release: input.release === true,
+    });
+    if (!claim.ok) return { ok: false, error: "video_elsewhere" };
+    pages = fresh.slice(0, claim.granted);
+  }
   const seen = [...new Set([...already, ...pages])].sort((x, y) => x - y);
   const completed = seen.length >= doc.pageCount;
   const values = {
@@ -276,6 +289,36 @@ export async function recordReading(input: {
   return { ok: true, completed, seen };
 }
 
+type SessionRow = typeof studySessions.$inferSelect;
+
+/**
+ * จองการนับวิดีโอของรอบเรียน (ADR-0020) — คลิปอื่นยังจองอยู่ (heartbeat ภายใน 30 วินาที และยังไม่ปล่อย) = ไม่ได้ (`ok: false`)
+ * ได้ = คลิปนี้เป็นคนจอง + ตัดงบช่วงตามเวลาจริง · สองคำขอชนกันพอดี คำขอที่แพ้ได้ 0 ช่วง (เบราว์เซอร์ส่งซ้ำรอบหน้า)
+ */
+async function claimVideo(
+  s: SessionRow,
+  documentId: number,
+  now: Date,
+  ask: { wanted: number; active: boolean; release: boolean },
+): Promise<{ ok: true; granted: number } | { ok: false }> {
+  const heldElsewhere =
+    s.videoDocumentId !== null && s.videoDocumentId !== documentId && s.videoHeldAt !== null && s.videoHeldAt.getTime() > now.getTime() - VIDEO_HOLD_MS;
+  if (heldElsewhere) return { ok: false };
+  if (!ask.active && !ask.release) return { ok: true, granted: 0 };
+  const credit = videoCredit(s.videoCreditUntil, now, ask.wanted);
+  const [won] = await db()
+    .update(studySessions)
+    .set({ videoDocumentId: documentId, videoHeldAt: ask.release ? null : now, videoCreditUntil: credit.creditUntil })
+    .where(
+      and(
+        eq(studySessions.id, s.id),
+        s.videoCreditUntil ? eq(studySessions.videoCreditUntil, s.videoCreditUntil) : isNull(studySessions.videoCreditUntil),
+      ),
+    )
+    .returning({ id: studySessions.id });
+  return { ok: true, granted: won ? credit.granted : 0 };
+}
+
 async function readingComplete(a: Pick<AssignmentRow, "id" | "readRound">, versionId: number): Promise<boolean> {
   const required = await requiredDocuments(versionId);
   if (!required.length) return false;
@@ -290,11 +333,19 @@ async function readingComplete(a: Pick<AssignmentRow, "id" | "readRound">, versi
 /**
  * ลิงก์เปิดเอกสารอายุสั้น — ต้องมีรอบเรียนที่เปิดอยู่ · ห้ามระหว่างสอบ (ล็อกเอกสาร · spec §10) · บันทึกทุกการเปิด (ADR-0010)
  */
-/** เอกสารที่คนนี้เปิดได้ตอนนี้ — มีรอบเรียนเปิดอยู่ · ไม่ได้กำลังสอบ · อยู่ในเวอร์ชันที่อนุมัติล่าสุด */
+/**
+ * ทบทวนได้ — สอบผ่านแล้วและยังได้รับมอบอยู่ (ไม่ถูกตัดจบ) · เปิดคลิป/เอกสารซ้ำได้ไม่จำกัดโดยไม่ต้องเริ่มรอบเรียน (ไม่สแกน)
+ * ★ ทบทวนไม่นับความคืบหน้า ไม่ต่ออายุอะไร — ผลผ่านอยู่แล้ว · การเปิดยังลง `document_views` ทุกครั้ง
+ */
+function canReview(a: Pick<AssignmentRow, "passedAt" | "endedAt">): boolean {
+  return a.passedAt !== null && a.endedAt === null;
+}
+
+/** เอกสารที่คนนี้เปิดได้ตอนนี้ — มีรอบเรียนเปิดอยู่ (หรือทบทวนหลังผ่าน) · ไม่ได้กำลังสอบ · อยู่ในเวอร์ชันที่อนุมัติล่าสุด */
 async function openableDocument(input: { personId: number; assignmentId: number; documentId: number; now: Date }) {
-  if (!(await activeSession(input.personId, input.now))) return { ok: false as const, error: "session_ended" };
   const mine = await myAssignment(input.personId, input.assignmentId);
   if (!mine || mine.set.status !== "active") return { ok: false as const, error: "ไม่พบการมอบนี้" };
+  if (!canReview(mine.a) && !(await activeSession(input.personId, input.now))) return { ok: false as const, error: "session_ended" };
   if (await openAttempt(mine.a.id)) return { ok: false as const, error: "กำลังสอบอยู่ — เปิดเอกสารไม่ได้" };
   const version = await approvedVersion(mine.set.id);
   const doc = version ? (await requiredDocuments(version.id)).find((d) => d.id === input.documentId) : undefined;
@@ -527,6 +578,8 @@ export async function learnView(personId: number, assignmentId: number, now: Dat
     openAttemptId: open?.id ?? null,
     update: update ? { versionId: update.version.id, label: update.version.label, kind: update.kind, summary: update.version.changeSummary ?? "" } : null,
     state,
+    /** สอบผ่านแล้ว ไม่มีอะไรค้าง = หน้าเรียนเป็นโหมดทบทวน (เปิดได้เลย ไม่นับ ไม่ต้องสแกน) */
+    review: state === "passed" && canReview(mine.a),
     session: await activeSession(personId, now),
   };
 }

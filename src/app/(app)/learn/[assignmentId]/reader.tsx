@@ -12,6 +12,8 @@ import { documentLinkAction, readingBeatAction } from "../actions";
  * ★ เซิร์ฟเวอร์ตอบ `session_ended` (นิ่งเกิน 2 นาที) = รีเฟรชหน้า → ปุ่มสแกนเพื่อเรียนต่อ
  * ★ วิดีโอ: นับช่วงละ 10 วินาทีที่เล่นผ่านจริง (`video.played` — กรอข้ามไม่นับ) · เร็วสุด 2 เท่า ·
  *   ลิงก์หมดอายุกลางเรื่อง = ขอใหม่แล้วเล่นต่อจากจุดเดิม
+ * ★ ดูได้ทีละคลิป (ADR-0020) — แท็บไหนกดเล่น แท็บอื่นหยุด · เซิร์ฟเวอร์ตอบ `video_elsewhere` = หยุดและไม่นับส่วนที่เพิ่งดู
+ * ★ `review` (สอบผ่านแล้ว) = เปิดซ้ำได้ไม่จำกัด ไม่ส่งความคืบหน้า กรอ/เร่งได้อิสระ
  * ★ pdfjs ≥ 6.2.108 เท่านั้น (GHSA-hq66-cqwq-w95j: รัน JavaScript จาก PDF ที่ประสงค์ร้ายได้) — ไฟล์มาจากผู้สร้างในบริษัท แต่ไม่ไว้ใจเนื้อไฟล์
  */
 
@@ -48,11 +50,14 @@ export function LessonWorkspace({
   start,
   exam,
   examRules,
+  review = false,
 }: {
   assignmentId: number;
   documents: LessonDoc[];
   viewer: string;
   active: boolean;
+  /** สอบผ่านแล้ว — เปิดซ้ำได้ไม่จำกัด ไม่ส่งความคืบหน้า · การ์ดสอบเปลี่ยนเป็นคำอธิบายการทบทวน */
+  review?: boolean;
   start?: ReactNode;
   exam?: ReactNode;
   /** กติกาการสอบ — แสดงเป็นรายการก่อนปุ่มเริ่มสอบ */
@@ -106,9 +111,10 @@ export function LessonWorkspace({
               doc={open}
               label={`EP.${clipNo.get(open.id)} จาก ${videos.length} คลิป`}
               onSeen={onSeen(open.id)}
+              counting={!review}
             />
           ) : (
-            <PdfDoc key={open.id} assignmentId={assignmentId} doc={open} viewer={viewer} onSeen={onSeen(open.id)} />
+            <PdfDoc key={open.id} assignmentId={assignmentId} doc={open} viewer={viewer} onSeen={onSeen(open.id)} counting={!review} />
           )
         ) : (
           start
@@ -192,21 +198,30 @@ export function LessonWorkspace({
           </ol>
         </div>
 
-        <div className="space-y-2.5 rounded-[13px] border border-line bg-raised p-4">
-          <h2 className="text-[15px] font-semibold text-fg">ก่อนเริ่มสอบ</h2>
-          <ul className="list-disc space-y-1 pl-5 text-[14px] leading-relaxed text-ink-2">
-            {examRules.map((r) => (
-              <li key={r}>{r}</li>
-            ))}
-          </ul>
-          {exam ?? (
-            <p className="rounded-[10px] border border-dashed border-ink-4 bg-canvas px-3 py-3 text-center text-[13px] text-muted">
-              {remaining > 0
-                ? `เริ่มสอบได้เมื่อดู/อ่านครบ — เหลืออีก ${remaining} รายการ`
-                : "ดู/อ่านครบแล้ว กำลังบันทึกความคืบหน้า — ปุ่มเริ่มสอบจะขึ้นเองในไม่กี่วินาที อย่าเพิ่งปิดหน้านี้"}
+        {review ? (
+          <div className="space-y-1.5 rounded-[13px] border border-line bg-raised p-4">
+            <h2 className="text-[15px] font-semibold text-fg">ทบทวนบทเรียน</h2>
+            <p className="text-[14px] leading-relaxed text-ink-2">
+              สอบผ่านแล้ว — เปิดคลิปและเอกสารซ้ำได้ทุกเมื่อ ไม่ต้องสแกน ไม่นับเวลา และไม่ต้องสอบใหม่
             </p>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="space-y-2.5 rounded-[13px] border border-line bg-raised p-4">
+            <h2 className="text-[15px] font-semibold text-fg">ก่อนเริ่มสอบ</h2>
+            <ul className="list-disc space-y-1 pl-5 text-[14px] leading-relaxed text-ink-2">
+              {examRules.map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
+            {exam ?? (
+              <p className="rounded-[10px] border border-dashed border-ink-4 bg-canvas px-3 py-3 text-center text-[13px] text-muted">
+                {remaining > 0
+                  ? `เริ่มสอบได้เมื่อดู/อ่านครบ — เหลืออีก ${remaining} รายการ`
+                  : "ดู/อ่านครบแล้ว กำลังบันทึกความคืบหน้า — ปุ่มเริ่มสอบจะขึ้นเองในไม่กี่วินาที อย่าเพิ่งปิดหน้านี้"}
+              </p>
+            )}
+          </div>
+        )}
       </aside>
     </div>
   );
@@ -259,19 +274,32 @@ function Thumb({ video, cover, length }: { video: boolean; cover: string | null;
 /**
  * ส่งความคืบหน้าให้เซิร์ฟเวอร์ทุก 15 วินาที + ตอนซ่อนแท็บ/ปิดเอกสาร — ใช้ร่วมกันทั้ง PDF และวิดีโอ
  * นับเวลาทีละวินาทีเฉพาะตอนแท็บอยู่หน้า และ (ขยับภายใน 30 วินาที หรือ `busy()` เช่นวิดีโอกำลังเล่น)
- * คืนกล่องหน้า/ช่วงที่รอส่ง — ตัวแสดงผลเติมเข้าไปเอง
+ * คืนกล่องหน้า/ช่วงที่รอส่ง (ตัวแสดงผลเติมเข้าไปเอง) + `release()` ปล่อยการนับคลิปนี้ให้คลิปอื่น (ADR-0020)
+ * `counting: false` (ทบทวนหลังผ่าน) = ไม่ส่งอะไรเลย
  */
-function useProgressBeat(assignmentId: number, documentId: number, busy: () => boolean) {
+function useProgressBeat(
+  assignmentId: number,
+  documentId: number,
+  busy: () => boolean,
+  opts: { counting: boolean; video?: boolean; onElsewhere?: (pages: number[]) => void },
+) {
   const router = useRouter();
   const pending = useRef<Set<number>>(new Set());
   const activeSeconds = useRef(0);
   const lastActivity = useRef(Date.now());
+  /** คลิปนี้เป็นคนนับอยู่ที่เซิร์ฟเวอร์ — ปิดคลิปแล้วต้องปล่อย */
+  const held = useRef(false);
   const busyRef = useRef(busy);
+  const elsewhereRef = useRef(opts.onElsewhere);
+  const flushRef = useRef<(release?: boolean) => Promise<void>>(async () => undefined);
   useEffect(() => {
     busyRef.current = busy;
+    elsewhereRef.current = opts.onElsewhere;
   });
+  const { counting, video = false } = opts;
 
   useEffect(() => {
+    if (!counting) return;
     const bump = () => (lastActivity.current = Date.now());
     const events = ["scroll", "mousemove", "keydown", "touchstart", "wheel"] as const;
     events.forEach((e) => window.addEventListener(e, bump, { passive: true }));
@@ -279,27 +307,37 @@ function useProgressBeat(assignmentId: number, documentId: number, busy: () => b
       if (document.visibilityState !== "visible") return;
       if (busyRef.current() || Date.now() - lastActivity.current < ACTIVE_WINDOW_MS) activeSeconds.current += 1;
     }, 1000);
-    const flush = async () => {
+    const flush = async (release = false) => {
       const pages = [...pending.current];
       const secs = activeSeconds.current;
-      if (!pages.length && !secs) return;
+      const releasing = release && video && held.current;
+      if (!pages.length && !secs && !releasing) return;
       pending.current.clear();
       activeSeconds.current = 0;
+      if (releasing) held.current = false;
       // ส่งไม่ถึง (เน็ตหลุด) = คืนเข้าคิวทั้งหมด ส่งใหม่รอบหน้า
-      const out = await readingBeatAction({ assignmentId, documentId, pages, activeSeconds: secs }).catch(() => null);
+      const out = await readingBeatAction({ assignmentId, documentId, pages, activeSeconds: secs, release: releasing }).catch(() => null);
       if (!out) {
         for (const p of pages) pending.current.add(p);
         activeSeconds.current += secs;
         return;
       }
       if (!out.ok && out.error === "session_ended") return router.refresh();
+      // มีคลิปอื่นนับอยู่ (อีกแท็บ/อีกเครื่อง) — ที่ส่งไปไม่นับและไม่ส่งซ้ำ ตัวเล่นหยุดและล้างส่วนที่เพิ่งดู
+      if (!out.ok && out.error === "video_elsewhere") {
+        held.current = false;
+        if (!releasing && (pages.length || secs)) elsewhereRef.current?.(pages);
+        return;
+      }
       if (!out.ok) return;
+      if (video && !releasing && (pages.length || secs)) held.current = true;
       // ช่วงวิดีโอที่เกินเพดานต่อครั้งเซิร์ฟเวอร์ยังไม่นับ — ส่งซ้ำรอบหน้า (เพดาน +1 ช่วงทุกครั้ง แม้นิ่ง จึงทยอยครบเอง)
       const saved = new Set(out.seen);
       for (const p of pages) if (!saved.has(p)) pending.current.add(p);
       if (out.completed) router.refresh();
     };
-    const beat = setInterval(flush, BEAT_MS);
+    flushRef.current = flush;
+    const beat = setInterval(() => void flush(), BEAT_MS);
     const onHide = () => document.visibilityState === "hidden" && void flush();
     document.addEventListener("visibilitychange", onHide);
     return () => {
@@ -307,29 +345,104 @@ function useProgressBeat(assignmentId: number, documentId: number, busy: () => b
       clearInterval(tick);
       clearInterval(beat);
       document.removeEventListener("visibilitychange", onHide);
-      void flush();
+      flushRef.current = async () => undefined;
+      // ปิดคลิป/เปลี่ยนไปคลิปอื่น = ส่งที่ค้างพร้อมปล่อยการนับ
+      void flush(true);
     };
-  }, [assignmentId, documentId, router]);
+  }, [assignmentId, documentId, router, counting, video]);
 
-  return pending;
+  return { pending, release: () => void flushRef.current(true) };
 }
 
-function VideoDoc({ assignmentId, doc, label, onSeen }: { assignmentId: number; doc: LessonDoc; label: string; onSeen: (n: number) => void }) {
+/** ช่องคุยระหว่างแท็บของเว็บเดียวกัน — แท็บไหนกดเล่น แท็บอื่นหยุด (ADR-0020) · เบราว์เซอร์ที่ไม่มี = เซิร์ฟเวอร์ยังกันอยู่ */
+const PLAY_CHANNEL = "worktrain-video-playing";
+function openPlayChannel(): BroadcastChannel | null {
+  return typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(PLAY_CHANNEL);
+}
+
+function VideoDoc({
+  assignmentId,
+  doc,
+  label,
+  onSeen,
+  counting,
+}: {
+  assignmentId: number;
+  doc: LessonDoc;
+  label: string;
+  onSeen: (n: number) => void;
+  /** false = ทบทวนหลังผ่าน — กรอ/เร่งได้อิสระ ไม่ส่งความคืบหน้า */
+  counting: boolean;
+}) {
   const router = useRouter();
   const video = useRef<HTMLVideoElement>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** ทำไมตัวเล่นหยุดเอง — อีกแท็บเริ่มเล่น / มีคลิปอื่นนับอยู่ */
+  const [notice, setNotice] = useState<string | null>(null);
   const [seen, setSeen] = useState<Set<number>>(() => new Set(doc.pagesSeen));
   const [playingSegment, setPlayingSegment] = useState<number | null>(null);
   const seenRef = useRef(seen);
   const linkedAt = useRef(0);
   /** จุดที่ต้องเล่นต่อหลังเปลี่ยนลิงก์ */
   const resume = useRef<{ time: number; play: boolean } | null>(null);
-  const pending = useProgressBeat(assignmentId, doc.id, () => {
-    const v = video.current;
-    return Boolean(v && !v.paused && !v.ended);
-  });
+  const channel = useRef<BroadcastChannel | null>(null);
+  const beat = useProgressBeat(
+    assignmentId,
+    doc.id,
+    () => {
+      const v = video.current;
+      return Boolean(v && !v.paused && !v.ended);
+    },
+    { counting, video: true, onElsewhere: voidUnsaved },
+  );
+  const pending = beat.pending;
   const duration = doc.durationSeconds ?? doc.pageCount * VIDEO_SEGMENT_SECONDS;
+
+  /**
+   * เซิร์ฟเวอร์ไม่นับเพราะมีคลิปอื่นนับอยู่ — หยุดเล่น · เอาช่วงที่ยังไม่ได้บันทึกออก · โหลดตัวเล่นใหม่ที่จุดเดิม
+   * (ล้าง `video.played` — ไม่อย่างนั้นช่วงที่เล่นตอนชนกันจะถูกเก็บกลับเข้ามาอีก)
+   */
+  function voidUnsaved(sent: number[]) {
+    const v = video.current;
+    const drop = new Set([...sent, ...pending.current]);
+    pending.current.clear();
+    const next = new Set([...seenRef.current].filter((n) => !drop.has(n)));
+    seenRef.current = next;
+    setSeen(next);
+    onSeen(next.size);
+    setNotice("มีคลิปอื่นกำลังเล่นอยู่ในอีกแท็บหรืออีกเครื่อง — ดูได้ทีละคลิป ส่วนที่เพิ่งดูในแท็บนี้ไม่นับ ปิดคลิปนั้นก่อนแล้วกดเล่นต่อ");
+    if (!v) return;
+    v.pause();
+    resume.current = { time: v.currentTime, play: false };
+    v.load();
+  }
+
+  // แท็บอื่นกดเล่น = แท็บนี้หยุดและปล่อยการนับ (ADR-0020)
+  useEffect(() => {
+    const ch = openPlayChannel();
+    channel.current = ch;
+    if (!ch) return;
+    ch.onmessage = () => {
+      const v = video.current;
+      if (v && !v.paused) {
+        v.pause();
+        setNotice("หยุดไว้ เพราะเริ่มเล่นคลิปในอีกแท็บ — ดูได้ทีละคลิป");
+      }
+      beat.release();
+    };
+    return () => {
+      ch.close();
+      channel.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `beat.release` อ่านจาก ref ทุกครั้ง
+  }, []);
+
+  function onPlay() {
+    setNotice(null);
+    channel.current?.postMessage("playing");
+    collect();
+  }
 
   async function link(): Promise<void> {
     linkedAt.current = Date.now();
@@ -360,7 +473,7 @@ function VideoDoc({ assignmentId, doc, label, onSeen }: { assignmentId: number; 
   /** ช่วงที่เล่นผ่านแล้วอย่างน้อย 80% ตาม `video.played` (กรอข้ามไม่เข้า played) */
   function collect() {
     const v = video.current;
-    if (!v) return;
+    if (!v || !counting) return;
     const now = v.paused || v.ended ? null : Math.min(doc.pageCount, Math.floor(v.currentTime / VIDEO_SEGMENT_SECONDS) + 1);
     setPlayingSegment((p) => (p === now ? p : now));
     const ranges = v.played;
@@ -393,14 +506,15 @@ function VideoDoc({ assignmentId, doc, label, onSeen }: { assignmentId: number; 
       resume.current = null;
       return;
     }
-    // เปิดครั้งแรก: เริ่มที่ช่วงแรกที่ยังไม่ได้ดู
+    // เปิดครั้งแรก: เริ่มที่ช่วงแรกที่ยังไม่ได้ดู · ทบทวน = เริ่มต้นเรื่อง
+    if (!counting) return;
     const firstUnseen = Array.from({ length: doc.pageCount }, (_, i) => i + 1).find((n) => !seenRef.current.has(n));
     if (firstUnseen && firstUnseen > 1) v.currentTime = (firstUnseen - 1) * VIDEO_SEGMENT_SECONDS;
   }
 
   function onRateChange() {
     const v = video.current;
-    if (v && v.playbackRate > MAX_VIDEO_PLAYBACK_RATE) v.playbackRate = MAX_VIDEO_PLAYBACK_RATE;
+    if (counting && v && v.playbackRate > MAX_VIDEO_PLAYBACK_RATE) v.playbackRate = MAX_VIDEO_PLAYBACK_RATE;
   }
 
   function onError() {
@@ -438,7 +552,7 @@ function VideoDoc({ assignmentId, doc, label, onSeen }: { assignmentId: number; 
           onContextMenu={(e) => e.preventDefault()}
           onLoadedMetadata={onLoadedMetadata}
           onTimeUpdate={collect}
-          onPlay={collect}
+          onPlay={onPlay}
           onPause={collect}
           onEnded={collect}
           onRateChange={onRateChange}
@@ -447,56 +561,79 @@ function VideoDoc({ assignmentId, doc, label, onSeen }: { assignmentId: number; 
         />
       </div>
       {error && <p className="text-[13px] text-danger">{error}</p>}
-      <div className="space-y-2.5 rounded-[13px] border border-line bg-raised px-4 py-3.5">
-        <div className="flex flex-wrap justify-between gap-2 text-[13px]">
-          <span className="font-semibold text-fg">
-            ดูแล้ว {watchedLabel(doc, seen.size)}
-          </span>
-          <span className="text-muted">กรอข้ามได้ แต่ส่วนที่ข้ามยังไม่นับ · เร่งได้ถึง {MAX_VIDEO_PLAYBACK_RATE} เท่า</span>
+      {notice && (
+        <p role="status" className="rounded-[10px] border border-warn bg-warn-soft px-3.5 py-2.5 text-[13px] text-fg">
+          {notice}
+        </p>
+      )}
+      {!counting ? (
+        <p className="rounded-[13px] border border-line bg-raised px-4 py-3.5 text-[13px] text-ink-2">
+          ทบทวน — ดูซ้ำได้ไม่จำกัด กรอและเร่งได้อิสระ ระบบไม่นับเวลา และไม่ต้องสอบใหม่
+        </p>
+      ) : (
+        <div className="space-y-2.5 rounded-[13px] border border-line bg-raised px-4 py-3.5">
+          <div className="flex flex-wrap justify-between gap-2 text-[13px]">
+            <span className="font-semibold text-fg">
+              ดูแล้ว {watchedLabel(doc, seen.size)}
+            </span>
+            <span className="text-muted">กรอข้ามได้ แต่ส่วนที่ข้ามยังไม่นับ · เร่งได้ถึง {MAX_VIDEO_PLAYBACK_RATE} เท่า</span>
+          </div>
+          <div className="flex h-3.5 gap-px" role="img" aria-label={`ดูแล้ว ${watchedLabel(doc, seen.size)}`}>
+            {Array.from({ length: doc.pageCount }, (_, i) => {
+              const n = i + 1;
+              const cls = seen.has(n)
+                ? "bg-success"
+                : n === playingSegment
+                  ? "bg-fg"
+                  : n < furthest
+                    ? "border border-dashed border-ink-4 bg-line"
+                    : "bg-subtle";
+              return <span key={n} className={`min-w-0 flex-1 rounded-[2px] ${cls}`} />;
+            })}
+          </div>
+          <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-ink-2">
+            <li className="flex items-center gap-1.5">
+              <span className="size-3 rounded-[3px] bg-success" aria-hidden />
+              ดูแล้ว
+            </li>
+            <li className="flex items-center gap-1.5">
+              <span className="size-3 rounded-[3px] bg-fg" aria-hidden />
+              กำลังเล่น
+            </li>
+            <li className="flex items-center gap-1.5">
+              <span className="size-3 rounded-[3px] border border-dashed border-ink-4 bg-line" aria-hidden />
+              ข้ามไป — ยังไม่นับ
+            </li>
+            <li className="flex items-center gap-1.5">
+              <span className="size-3 rounded-[3px] bg-subtle" aria-hidden />
+              ยังไม่ดู
+            </li>
+          </ul>
         </div>
-        <div className="flex h-3.5 gap-px" role="img" aria-label={`ดูแล้ว ${watchedLabel(doc, seen.size)}`}>
-          {Array.from({ length: doc.pageCount }, (_, i) => {
-            const n = i + 1;
-            const cls = seen.has(n)
-              ? "bg-success"
-              : n === playingSegment
-                ? "bg-fg"
-                : n < furthest
-                  ? "border border-dashed border-ink-4 bg-line"
-                  : "bg-subtle";
-            return <span key={n} className={`min-w-0 flex-1 rounded-[2px] ${cls}`} />;
-          })}
-        </div>
-        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-ink-2">
-          <li className="flex items-center gap-1.5">
-            <span className="size-3 rounded-[3px] bg-success" aria-hidden />
-            ดูแล้ว
-          </li>
-          <li className="flex items-center gap-1.5">
-            <span className="size-3 rounded-[3px] bg-fg" aria-hidden />
-            กำลังเล่น
-          </li>
-          <li className="flex items-center gap-1.5">
-            <span className="size-3 rounded-[3px] border border-dashed border-ink-4 bg-line" aria-hidden />
-            ข้ามไป — ยังไม่นับ
-          </li>
-          <li className="flex items-center gap-1.5">
-            <span className="size-3 rounded-[3px] bg-subtle" aria-hidden />
-            ยังไม่ดู
-          </li>
-        </ul>
-      </div>
+      )}
     </div>
   );
 }
 
-function PdfDoc({ assignmentId, doc, viewer, onSeen }: { assignmentId: number; doc: LessonDoc; viewer: string; onSeen: (n: number) => void }) {
+function PdfDoc({
+  assignmentId,
+  doc,
+  viewer,
+  onSeen,
+  counting,
+}: {
+  assignmentId: number;
+  doc: LessonDoc;
+  viewer: string;
+  onSeen: (n: number) => void;
+  counting: boolean;
+}) {
   const confidential = doc.kind === "pricelist";
   const router = useRouter();
   const container = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [seen, setSeen] = useState<Set<number>>(new Set(doc.pagesSeen));
-  const pending = useProgressBeat(assignmentId, doc.id, () => false);
+  const { pending } = useProgressBeat(assignmentId, doc.id, () => false, { counting });
 
   useEffect(() => {
     onSeen(seen.size);
@@ -567,7 +704,7 @@ function PdfDoc({ assignmentId, doc, viewer, onSeen }: { assignmentId: number; d
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <span className="min-w-0 truncate text-[14px] font-semibold text-fg">{doc.fileName}</span>
         <span className="text-[13px] text-muted">
-          อ่านแล้ว {seen.size} จาก {doc.pageCount} หน้า — เลื่อนให้ครบทุกหน้าก่อนสอบ
+          {counting ? `อ่านแล้ว ${seen.size} จาก ${doc.pageCount} หน้า — เลื่อนให้ครบทุกหน้าก่อนสอบ` : `ทบทวน · ${doc.pageCount} หน้า`}
         </span>
       </div>
       {confidential && <p className="mb-2 text-[13px] text-danger">Pricelist — ดูในระบบเท่านั้น · ทุกหน้ามีชื่อของคุณและเวลาที่เปิด · ระบบบันทึกการเปิดทุกครั้ง</p>}

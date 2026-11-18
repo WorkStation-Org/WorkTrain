@@ -103,7 +103,11 @@ export default async function LearnSetPage({
         </Alert>
       )}
 
-      {view.state === "passed" && <Alert kind="success" title="สอบผ่านชุดนี้แล้ว">ผลนี้นับในสถิติประจำเดือนและส่งให้ WorkHR แล้ว</Alert>}
+      {view.state === "passed" && (
+        <Alert kind="success" title="สอบผ่านชุดนี้แล้ว">
+          ผลนี้นับในสถิติประจำเดือนและส่งให้ WorkHR แล้ว{view.review ? " · กลับมาดูคลิปและอ่านเอกสารทบทวนได้ทุกเมื่อด้านล่าง" : ""}
+        </Alert>
+      )}
       {view.update && (view.state === "update_ack" || view.state === "update_exam") && (
         <Card>
           <SectionTitle className="mb-2">เอกสารอัปเดต{view.update.label ? ` · ${view.update.label}` : ""}</SectionTitle>
@@ -138,6 +142,10 @@ export default async function LearnSetPage({
             กลับไปทำข้อสอบต่อ
           </Button>
         </Card>
+      )}
+
+      {view.review && (
+        <LessonWorkspace assignmentId={view.assignment.id} documents={view.documents} viewer={`${actor.name} · ${actor.email}`} active review examRules={[]} />
       )}
 
       {view.state !== "passed" && view.state !== "in_exam" && (

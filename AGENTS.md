@@ -34,7 +34,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
   ไม่ผ่าน 3 ครั้งติด → คิว TG (`/admin/faces`) · ภาพสแกนลบเมื่อครบ 90 วัน (cron เช้า) · ไม่ตั้ง AWS = `scanMode()` เป็น `off` บน production ·
   env `FACE_SCAN_PAUSED=1` = `paused` — เรียน/สอบได้โดยไม่สแกน ไม่บังคับยินยอม (`scanGate()` · `consentRequired()` · ADR-0019)
 - `src/app/(app)/learn/scan-flow.tsx` — FaceLivenessDetector (Amplify) · บนเครื่อง dev เป็นปุ่มข้ามกล้อง
-- `src/lib/learn-service.ts` — รอบเรียน (นิ่ง 2 นาที = จบ) · ความคืบหน้าการอ่าน · ครั้งที่สอบ (ทีละข้อ · หมดเวลา/ออกหน้าสอบตัดสินที่เซิร์ฟเวอร์) · ทุกฟังก์ชันตรวจว่าเป็นของคนที่ล็อกอิน
+- `src/lib/learn-service.ts` — รอบเรียน (นิ่ง 2 นาที = จบ) · ความคืบหน้าการอ่าน (วิดีโอนับทีละคลิป + งบเวลาจริงต่อรอบเรียน · ผ่านแล้วทบทวนได้ไม่ต้องสแกน · ADR-0020) · ครั้งที่สอบ (ทีละข้อ · หมดเวลา/ออกหน้าสอบตัดสินที่เซิร์ฟเวอร์) · ทุกฟังก์ชันตรวจว่าเป็นของคนที่ล็อกอิน
 - `/learn` (`myLearningList()`: สรุปตัวเลข · ทำต่อจากที่ค้างไว้ · แท็บกรอง + ค้นหา · การ์ดพร้อมปกคลิป) · `/learn/[id]` (`LessonWorkspace`: ตัวแสดงทางซ้าย + รายการเนื้อหาในชุดทางขวา · ตัวอ่าน PDF ด้วย pdfjs ≥ 6.2.108 · ตัวเล่นวิดีโอนับช่วงที่เล่นผ่าน)
 - ปกวิดีโอ: `sets/[id]/cover-picker.tsx` (จับเฟรมในเบราว์เซอร์) → `setVideoCover()` ใน set-service · ภาพออกทาง `/api/covers/[documentId]` (ADR-0013) · `/learn/[id]/exam/[attemptId]` · `/consent` — หน้าผู้เรียนผ่าน `learnerActor()` (ต้องยินยอมก่อน)
 - `scripts/dev-seed-learner.mjs` — ใส่ชุดพร้อมสอบลง PGlite ไว้ลองฝั่งผู้เรียนบนเครื่องโดยไม่ต้องมี AI
