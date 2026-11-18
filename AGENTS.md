@@ -79,3 +79,4 @@ This version has breaking changes — APIs, conventions, and file structure may 
 ## Git
 
 - เข้า `main` ผ่าน Pull Request เท่านั้น (กติกาเครือข้อ 9) — `.githooks/pre-push` กันไว้ · `npm run ci` ต้องเขียวก่อน merge (ข้อ 11)
+- audit ระดับ high ที่ยังไม่มี patch และใช้โจมตีที่นี่ไม่ได้ ยกเว้นได้ที่ `scripts/audit-allowlist.json` พร้อมเหตุผลและวันทบทวน (ADR-0023) — ห้ามใช้แทนการอัปเกรดเมื่อมี patch แล้ว

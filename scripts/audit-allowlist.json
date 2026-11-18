@@ -1,0 +1,9 @@
+[
+  {
+    "id": "GHSA-fc5q-39xc-vjpf",
+    "package": "picomatch",
+    "reason": "ReDoS ต้องให้ผู้โจมตีส่ง glob pattern เข้ามาเอง · ในโปรเจกต์นี้ picomatch มาแค่ผ่าน vitest / vite (เครื่องมือทดสอบ ไม่ขึ้น production) และ glob มาจาก config ของเราเอง · advisory ยังไม่มีเวอร์ชันที่แก้แล้ว (first_patched_version = null · ล่าสุด 4.0.7)",
+    "addedOn": "2026-11-18",
+    "reviewBy": "2027-01-31"
+  }
+]

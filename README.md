@@ -42,7 +42,7 @@ npm run dev                 # http://localhost:3000
 | `npm test` | vitest ทั้งชุด — รวม migration + CHECK + trigger บน PGlite |
 | `npm run build` | build production — ไม่ต้องมี env |
 | `npm run db:generate` | สร้าง migration จาก `src/db/schema.ts` — แก้ schema แล้วต้องรันและ commit `drizzle/` |
-| `npm run ci` | ทุกขั้นของ CI บนเครื่อง (typecheck · test · build · audit · migration ตรง schema) — ต้องเขียวก่อน merge |
+| `npm run ci` | ทุกขั้นของ CI บนเครื่อง (typecheck · test · build · audit · migration ตรง schema) — ต้องเขียวก่อน merge · audit ยกเว้นได้ที่ `scripts/audit-allowlist.json` (ADR-0023) |
 
 ## Deploy
 
