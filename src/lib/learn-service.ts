@@ -22,11 +22,13 @@ import {
 } from "@/db/schema";
 import {
   buildLayout,
-  currentIndex,
+  lastOpenIndex,
   leaveForcesSubmit,
   needsRelearn,
   pickForm,
+  retriesLeft,
   score,
+  shownIndex,
   type LayoutItem,
   type Rng,
 } from "@/domain/exam";
@@ -536,10 +538,22 @@ export async function learnView(personId: number, assignmentId: number, now: Dat
     .from(readingProgress)
     .where(and(eq(readingProgress.assignmentId, mine.a.id), eq(readingProgress.readRound, mine.a.readRound)));
   const past = await db()
-    .select({ id: attempts.id, kind: attempts.kind, endedAt: attempts.endedAt, scorePercent: attempts.scorePercent, passed: attempts.passed, endReason: attempts.endReason })
+    .select({
+      id: attempts.id,
+      kind: attempts.kind,
+      endedAt: attempts.endedAt,
+      scorePercent: attempts.scorePercent,
+      passed: attempts.passed,
+      endReason: attempts.endReason,
+      readRound: attempts.readRound,
+      layout: attempts.layout,
+      answers: attempts.answers,
+    })
     .from(attempts)
     .where(eq(attempts.assignmentId, mine.a.id))
     .orderBy(asc(attempts.startedAt));
+  const ended = past.filter((x) => x.endedAt);
+  const key = await correctChoices(ended.flatMap((x) => (x.layout as LayoutItem[]).map((l) => l.questionId)));
   const open = await openAttempt(mine.a.id, now);
   const complete = await readingComplete(mine.a, version.id);
   const update = await pendingUpdate(mine.a);
@@ -574,7 +588,24 @@ export async function learnView(personId: number, assignmentId: number, now: Dat
         completed: Boolean(p?.completedAt),
       };
     }),
-    attempts: past.filter((x) => x.endedAt),
+    /** ครั้งที่สอบที่จบแล้ว พร้อมคะแนนเป็นข้อ (`right` จาก `total`) */
+    attempts: ended.map((x) => {
+      const l = x.layout as LayoutItem[];
+      return {
+        id: x.id,
+        kind: x.kind,
+        scorePercent: x.scorePercent,
+        passed: x.passed,
+        endReason: x.endReason,
+        right: score(l, x.answers as Record<string, number>, key).right,
+        total: l.length,
+      };
+    }),
+    /** สอบได้แล้วแต่เคยไม่ผ่านในรอบอ่านนี้ = ทำใหม่ได้อีกกี่ครั้งก่อนต้องอ่านใหม่ · ไม่มีอะไรต้องบอก = null (ADR-0021) */
+    retriesLeft:
+      state === "ready" && ended.some((x) => x.kind === "full" && x.readRound === mine.a.readRound)
+        ? retriesLeft(ended.filter((x) => x.kind === "full" && x.readRound === mine.a.readRound).map((x) => Boolean(x.passed)))
+        : null,
     openAttemptId: open?.id ?? null,
     update: update ? { versionId: update.version.id, label: update.version.label, kind: update.kind, summary: update.version.changeSummary ?? "" } : null,
     state,
@@ -693,15 +724,21 @@ async function myAttempt(personId: number, attemptId: number) {
 
 type AttemptRow = typeof attempts.$inferSelect;
 
+/** ตัวเลือกที่ถูกของแต่ละข้อ (questionId → choiceId) — ใช้ตรวจคะแนนในเซิร์ฟเวอร์เท่านั้น */
+async function correctChoices(questionIds: readonly number[]): Promise<Map<number, number>> {
+  if (!questionIds.length) return new Map();
+  const rows = await db()
+    .select({ questionId: choices.questionId, id: choices.id })
+    .from(choices)
+    .where(and(inArray(choices.questionId, [...new Set(questionIds)]), eq(choices.isCorrect, true)));
+  return new Map(rows.map((c) => [c.questionId, c.id]));
+}
+
 /** ปิดครั้งที่สอบ — คะแนน · ผ่านแล้วลงที่การมอบ · ไม่ผ่าน 2 ครั้งติดให้กลับไปอ่านใหม่ */
 async function finalize(t: AttemptRow, reason: "submitted" | "timeout" | "left_page", now: Date): Promise<void> {
   const layout = t.layout as LayoutItem[];
   const answers = t.answers as Record<string, number>;
-  const correctRows = await db()
-    .select({ questionId: choices.questionId, id: choices.id })
-    .from(choices)
-    .where(and(inArray(choices.questionId, layout.map((l) => l.questionId)), eq(choices.isCorrect, true)));
-  const { percent } = score(layout, answers, new Map(correctRows.map((c) => [c.questionId, c.id])));
+  const { percent } = score(layout, answers, await correctChoices(layout.map((l) => l.questionId)));
   const [a] = await db()
     .select({ a: assignments, passPercent: learningSets.passPercent })
     .from(assignments)
@@ -739,21 +776,64 @@ export interface AttemptView {
   setTitle: string;
   assignmentId: number;
   ended: boolean;
-  /** ระหว่างสอบ */
+  /** ระหว่างสอบ — ข้อที่แสดง (ตามลำดับที่สลับแล้ว) */
   index?: number;
   total: number;
+  /** ระหว่างสอบ — ข้อไหนตอบแล้ว (ตามลำดับที่แสดง) · เปิดได้ถึง `lastOpen` (ย้อนแก้ได้ ข้ามไปข้างหน้าไม่ได้ · ADR-0021) */
+  answered?: boolean[];
+  lastOpen?: number;
   /**
    * ตัวเลือกส่งเฉพาะข้อความตามลำดับที่สลับแล้ว — ตอบด้วยตำแหน่ง (0–3) ไม่ใช่ id ของตัวเลือก
    * (id เรียงตามลำดับที่ AI วาง ถ้าส่งออกไป เรียง id ก็ได้ลำดับเดิมคืน = การสลับไม่มีผล)
+   * `chosen` = ตำแหน่งที่ตอบไว้แล้ว (ย้อนกลับมาแก้) · ยังไม่ตอบ = null
    */
-  question?: { id: number; text: string; choices: { text: string }[] };
+  question?: { id: number; text: string; choices: { text: string }[]; chosen: number | null };
   secondsLeft?: number;
   leaveCount: number;
-  /** หลังสอบ — แสดงข้อที่ผิด ไม่เฉลยคำตอบที่ถูก (ADR-0009) */
-  result?: { percent: number; passed: boolean; reason: string; wrongQuestions: string[]; passPercent: number };
+  result?: AttemptResult;
 }
 
-export async function attemptView(personId: number, attemptId: number, now: Date = new Date()): Promise<AttemptView | null> {
+/** หลังสอบ — คะแนนเป็นข้อและร้อยละ · ข้อที่ผิด · เฉลยเฉพาะครั้งที่ผ่าน · ทำอะไรต่อ (ADR-0021) */
+export interface AttemptResult {
+  percent: number;
+  /** ตอบถูกกี่ข้อ จาก `total` ของครั้งที่สอบ */
+  right: number;
+  passed: boolean;
+  reason: string;
+  passPercent: number;
+  /** คำถามของข้อที่ผิด — ไม่มีคำตอบที่ถูก */
+  wrongQuestions: string[];
+  /** เฉลยข้อที่ผิด — มีเฉพาะครั้งที่ผ่าน · ไม่ผ่านไม่เฉลย (กันจำเฉลยไปสอบใหม่) */
+  answerKey?: { question: string; yours: string | null; correct: string }[];
+  /** ไม่ผ่าน → `retry` ทำใหม่ได้ · `relearn` ต้องกลับไปเรียนใหม่ · `none` ไม่มีอะไรให้ทำต่อจากหน้านี้ (ผ่านแล้ว/มีครั้งใหม่กว่าแล้ว) */
+  next: "retry" | "relearn" | "none";
+  /** `retry` ของชุดเต็ม — ทำใหม่ได้อีกกี่ครั้งก่อนต้องเรียนใหม่ · ส่วนที่เปลี่ยนของเวอร์ชันใหม่สอบซ้ำได้ไม่จำกัด = null */
+  retriesLeft: number | null;
+}
+
+/** ไม่ผ่านแล้วทำอะไรต่อ — ดูจากครั้งนี้เป็นครั้งล่าสุดไหม และการมอบถูกสั่งให้อ่านใหม่จากรอบอ่านของครั้งนี้หรือยัง */
+async function nextAfterFail(t: AttemptRow): Promise<Pick<AttemptResult, "next" | "retriesLeft">> {
+  const none = { next: "none", retriesLeft: null } as const;
+  const [later] = await db()
+    .select({ id: attempts.id })
+    .from(attempts)
+    .where(and(eq(attempts.assignmentId, t.assignmentId), gt(attempts.startedAt, t.startedAt)))
+    .limit(1);
+  if (later) return none;
+  const [a] = await db().select().from(assignments).where(eq(assignments.id, t.assignmentId));
+  if (t.kind === "delta") return (await pendingUpdate(a))?.kind === "large" ? { next: "retry", retriesLeft: null } : none;
+  if (a.passedAt) return none;
+  if (a.relearnRequiredAt && a.readRound > t.readRound) return { next: "relearn", retriesLeft: 0 };
+  const round = await db()
+    .select({ passed: attempts.passed })
+    .from(attempts)
+    .where(and(eq(attempts.assignmentId, a.id), eq(attempts.kind, "full"), eq(attempts.readRound, a.readRound), isNotNull(attempts.endedAt)))
+    .orderBy(asc(attempts.startedAt));
+  return { next: "retry", retriesLeft: retriesLeft(round.map((r) => Boolean(r.passed))) };
+}
+
+/** `at` = ข้อที่ขอดู (จาก `?q=`) — เปิดไม่ได้ (ข้ามไปข้างหน้า) ได้ข้อแรกที่ยังไม่ตอบแทน */
+export async function attemptView(personId: number, attemptId: number, now: Date = new Date(), at?: number): Promise<AttemptView | null> {
   let t = await myAttempt(personId, attemptId);
   if (!t) return null;
   if (!t.endedAt && t.deadlineAt <= now) {
@@ -770,47 +850,61 @@ export async function attemptView(personId: number, attemptId: number, now: Date
   const base = { attemptId: t.id, setTitle: meta.title, assignmentId: t.assignmentId, total: layout.length, leaveCount: t.leaveCount };
 
   if (t.endedAt) {
-    const correctRows = await db()
-      .select({ questionId: choices.questionId, id: choices.id })
-      .from(choices)
-      .where(and(inArray(choices.questionId, layout.map((l) => l.questionId)), eq(choices.isCorrect, true)));
-    const { wrong } = score(layout, answers, new Map(correctRows.map((c) => [c.questionId, c.id])));
+    const key = await correctChoices(layout.map((l) => l.questionId));
+    const { right, wrong } = score(layout, answers, key);
+    const passed = Boolean(t.passed);
     const texts = wrong.length ? await db().select({ id: questions.id, text: questions.text }).from(questions).where(inArray(questions.id, wrong)) : [];
+    const questionText = (id: number) => texts.find((x) => x.id === id)?.text ?? "";
+    // เฉลยเฉพาะครั้งที่ผ่าน — ไม่ผ่านแล้วเฉลย = จำเฉลยไปสอบใหม่แทนการกลับไปอ่าน (ADR-0021)
+    let answerKey: AttemptResult["answerKey"];
+    if (passed && wrong.length) {
+      const ids = wrong.flatMap((id) => [key.get(id), answers[String(id)]]).filter((x): x is number => x !== undefined);
+      const cs = await db().select({ id: choices.id, text: choices.text }).from(choices).where(inArray(choices.id, [...new Set(ids)]));
+      const choiceText = (id: number | undefined) => (id === undefined ? null : (cs.find((c) => c.id === id)?.text ?? null));
+      answerKey = wrong.map((id) => ({ question: questionText(id), yours: choiceText(answers[String(id)]), correct: choiceText(key.get(id)) ?? "" }));
+    }
     return {
       ...base,
       ended: true,
       result: {
         percent: t.scorePercent ?? 0,
-        passed: Boolean(t.passed),
+        right,
+        passed,
         reason: t.endReason ?? "submitted",
-        wrongQuestions: wrong.map((id) => texts.find((x) => x.id === id)?.text ?? ""),
         passPercent: meta.passPercent,
+        wrongQuestions: wrong.map(questionText),
+        answerKey,
+        ...(passed ? { next: "none" as const, retriesLeft: null } : await nextAfterFail(t)),
       },
     };
   }
 
-  const idx = currentIndex(layout, answers);
-  if (idx === null) {
-    // ตอบครบแล้วแต่ยังไม่ปิด (ล้มระหว่างบันทึกคำตอบสุดท้ายกับการตรวจ) — ปิดให้ตอนนี้ แทนที่หน้าจะพัง
-    await finalize(t, "submitted", now);
-    return attemptView(personId, attemptId, now);
-  }
+  const idx = shownIndex(layout, answers, at);
   const item = layout[idx];
   const [q] = await db().select({ id: questions.id, text: questions.text }).from(questions).where(eq(questions.id, item.questionId));
   const cs = await db().select({ id: choices.id, text: choices.text }).from(choices).where(inArray(choices.id, item.choiceIds));
+  const mine = answers[String(item.questionId)];
   return {
     ...base,
     ended: false,
     index: idx,
-    question: { id: q.id, text: q.text, choices: item.choiceIds.map((id) => ({ text: cs.find((c) => c.id === id)!.text })) },
+    answered: layout.map((l) => answers[String(l.questionId)] !== undefined),
+    lastOpen: lastOpenIndex(layout, answers),
+    question: {
+      id: q.id,
+      text: q.text,
+      choices: item.choiceIds.map((id) => ({ text: cs.find((c) => c.id === id)!.text })),
+      chosen: mine === undefined ? null : item.choiceIds.indexOf(mine),
+    },
     secondsLeft: Math.max(0, Math.ceil((t.deadlineAt.getTime() - now.getTime()) / 1000)),
   };
 }
 
 /**
- * ตอบข้อปัจจุบันด้วยตำแหน่งของตัวเลือกที่แสดง — ต้องเป็นข้อที่กำลังแสดง (ย้อนกลับ/ข้ามไม่ได้) · ตอบครบ = ส่งเอง
- * ★ เขียนคำตอบด้วย SQL ข้อเดียว และเฉพาะข้อที่ยังไม่มีคำตอบ — สองคำขอพร้อมกันตอบข้อเดียวกันได้ครั้งเดียว
- *   และคำขอเก่าที่มาช้าทับคำตอบที่ลงไปแล้วไม่ได้
+ * ตอบ/แก้คำตอบด้วยตำแหน่งของตัวเลือกที่แสดง — ข้อที่ตอบแล้วกลับมาแก้ได้ · ข้อที่ยังไม่ถึงตอบไม่ได้ (ADR-0021)
+ * ตอบครบแล้วยังไม่ส่ง — ต้องกด `submitAttempt()` (หรือหมดเวลา/ออกจากหน้าสอบครั้งที่ 5)
+ * ★ เขียนคำตอบด้วย SQL ข้อเดียว (`||`) — สองคำขอพร้อมกันคนละข้อไม่ทับกัน · ข้อเดียวกันคำขอหลังสุดเป็นคำตอบ
+ * ★ ตรวจ "ยังไม่ถึง" จากแถวที่อ่านก่อนเขียนได้ เพราะคำตอบมีแต่เพิ่ม — ข้อที่เปิดได้ไม่มีวันหดลง
  */
 export async function answer(input: { personId: number; attemptId: number; questionId: number; choiceIndex: number; now?: Date }): Promise<Outcome> {
   const now = input.now ?? new Date();
@@ -822,18 +916,38 @@ export async function answer(input: { personId: number; attemptId: number; quest
     return { ok: false, error: "หมดเวลาสอบ" };
   }
   const layout = t.layout as LayoutItem[];
-  const idx = currentIndex(layout, t.answers as Record<string, number>);
-  if (idx === null || layout[idx].questionId !== input.questionId) return { ok: false, error: "ตอบได้เฉพาะข้อที่กำลังแสดง" };
+  const idx = layout.findIndex((l) => l.questionId === input.questionId);
+  if (idx === -1) return { ok: false, error: "ไม่พบข้อนี้ในการสอบครั้งนี้" };
+  if (idx > lastOpenIndex(layout, t.answers as Record<string, number>)) return { ok: false, error: "ตอบข้อก่อนหน้าให้ครบก่อน" };
   const choiceId = Number.isInteger(input.choiceIndex) ? layout[idx].choiceIds[input.choiceIndex] : undefined;
   if (choiceId === undefined) return { ok: false, error: "ตัวเลือกไม่ถูกต้อง" };
   const key = String(input.questionId);
   const [saved] = await db()
     .update(attempts)
     .set({ answers: sql`${attempts.answers} || jsonb_build_object(${key}::text, ${choiceId}::int)` })
-    .where(and(eq(attempts.id, t.id), isNull(attempts.endedAt), sql`not jsonb_exists(${attempts.answers}, ${key}::text)`))
-    .returning();
-  if (!saved) return { ok: false, error: "ตอบข้อนี้ไปแล้ว" };
-  if (currentIndex(layout, saved.answers as Record<string, number>) === null) await finalize(saved, "submitted", now);
+    .where(and(eq(attempts.id, t.id), isNull(attempts.endedAt)))
+    .returning({ id: attempts.id });
+  if (!saved) return { ok: false, error: "การสอบนี้จบแล้ว" };
+  return { ok: true };
+}
+
+/**
+ * กดส่งคำตอบ — ต้องตอบครบทุกข้อ (หมดเวลา/ออกจากหน้าสอบครั้งที่ 5 ส่งเองได้โดยไม่ครบ · ข้อที่ไม่ตอบ = ผิด)
+ * ส่งไปแล้ว (กดซ้ำ/อีกแท็บส่งก่อน) = สำเร็จ ให้หน้าแสดงผลได้เลย
+ */
+export async function submitAttempt(input: { personId: number; attemptId: number; now?: Date }): Promise<Outcome> {
+  const now = input.now ?? new Date();
+  const t = await myAttempt(input.personId, input.attemptId);
+  if (!t) return { ok: false, error: "ไม่พบการสอบนี้" };
+  if (t.endedAt) return { ok: true };
+  if (t.deadlineAt <= now) {
+    await finalize(t, "timeout", now);
+    return { ok: true };
+  }
+  const answers = t.answers as Record<string, number>;
+  const left = (t.layout as LayoutItem[]).filter((l) => answers[String(l.questionId)] === undefined).length;
+  if (left) return { ok: false, error: `ยังไม่ได้ตอบอีก ${left} ข้อ` };
+  await finalize(t, "submitted", now);
   return { ok: true };
 }
 

@@ -89,7 +89,7 @@ export default async function LearnSetPage({
           current={step === 2}
           done={step > 2}
           title={`สอบ ${QUESTIONS} ข้อ ต้องได้ ${view.set.passPercent}% ขึ้นไป`}
-          sub={step === 1 ? `${view.set.examMinutes} นาที · เปิดได้เมื่อขั้นที่ 1 ครบ` : `${view.set.examMinutes} นาที · ทำทีละข้อ`}
+          sub={step === 1 ? `${view.set.examMinutes} นาที · เปิดได้เมื่อขั้นที่ 1 ครบ` : `${view.set.examMinutes} นาที · ทำทีละข้อ ย้อนแก้ได้`}
         />
         <Step no={3} current={false} done={view.state === "passed"} title="ผ่าน" sub="ผลส่งเข้าสถิติและ WorkHR ให้เอง" />
       </ol>
@@ -130,6 +130,11 @@ export default async function LearnSetPage({
           )}
         </Card>
       )}
+      {view.retriesLeft !== null && (
+        <Alert kind="warn" title={`สอบไม่ผ่าน · ทำใหม่ได้อีก ${view.retriesLeft} ครั้ง`}>
+          ถ้าไม่ผ่านอีกต้องกลับไปดูคลิปและอ่านเอกสารให้ครบใหม่ก่อนสอบ — ทบทวนเนื้อหาด้านล่างก่อนเริ่มสอบได้
+        </Alert>
+      )}
       {view.state === "relearn" && (
         <Alert kind="warn" title="ต้องทบทวนก่อนสอบใหม่">
           สอบไม่ผ่าน 2 ครั้งติด — ดูคลิปและอ่านเอกสารให้ครบอีกรอบ แล้วสอบได้อีก
@@ -156,7 +161,8 @@ export default async function LearnSetPage({
           active={Boolean(view.session)}
           examRules={[
             `${QUESTIONS} ข้อ · ${view.set.examMinutes} นาที · ต้องได้ ${view.set.passPercent}% ขึ้นไป`,
-            "ทำทีละข้อ ตอบแล้วกลับไปแก้ไม่ได้",
+            "ทำทีละข้อ ย้อนกลับไปแก้คำตอบได้จนกว่าจะกดส่ง",
+            "ไม่ผ่านทำใหม่ได้ 1 ครั้ง · ไม่ผ่านอีกครั้งต้องกลับไปเรียนใหม่",
             "ระหว่างสอบเปิดคลิปและเอกสารไม่ได้",
             "สลับไปหน้าอื่นครบ 5 ครั้ง ระบบจะส่งคำตอบให้ทันที",
           ]}
@@ -191,7 +197,8 @@ export default async function LearnSetPage({
             {view.attempts.map((t, i) => (
               <li key={t.id} className="flex flex-wrap items-center gap-2 py-2.5">
                 ครั้งที่ {i + 1}
-                {t.kind === "delta" ? " (ส่วนที่เปลี่ยน)" : ""} · {t.scorePercent}% <Badge tone={t.passed ? "success" : "danger"} label={t.passed ? "ผ่าน" : "ไม่ผ่าน"} />
+                {t.kind === "delta" ? " (ส่วนที่เปลี่ยน)" : ""} · ได้ {t.right}/{t.total} คะแนน ({t.scorePercent}%){" "}
+                <Badge tone={t.passed ? "success" : "danger"} label={t.passed ? "ผ่าน" : "ไม่ผ่าน"} />
                 <span className="text-muted">{END_REASON[t.endReason ?? ""] ?? ""}</span>
               </li>
             ))}

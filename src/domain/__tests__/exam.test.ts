@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLayout, currentIndex, leaveForcesSubmit, needsRelearn, pickForm, score, shuffle } from "@/domain/exam";
+import { buildLayout, currentIndex, lastOpenIndex, leaveForcesSubmit, needsRelearn, pickForm, retriesLeft, score, shownIndex, shuffle } from "@/domain/exam";
 
 /** rng ที่คาดเดาได้ — วนตามลำดับที่ให้ */
 function seq(...values: number[]) {
@@ -58,9 +58,20 @@ describe("ตอบทีละข้อ · คะแนน", () => {
     expect(currentIndex(layout, { "7": 70, "8": 80, "9": 91 })).toBeNull();
   });
 
+  it("ย้อนแก้ข้อที่ตอบแล้วได้ · ข้ามไปข้อที่ยังไม่ถึงไม่ได้ · ตอบครบเปิดได้ทุกข้อ (ADR-0021)", () => {
+    expect(lastOpenIndex(layout, {})).toBe(0);
+    expect(lastOpenIndex(layout, { "7": 70 })).toBe(1);
+    expect(lastOpenIndex(layout, { "7": 70, "8": 80, "9": 91 })).toBe(2);
+    const some = { "7": 70, "8": 80 };
+    expect(shownIndex(layout, some)).toBe(2);
+    expect(shownIndex(layout, some, 0)).toBe(0);
+    expect(shownIndex(layout, { "7": 70 }, 2)).toBe(1);
+    for (const bad of [-1, 1.5, Number.NaN, 99]) expect(shownIndex(layout, { "7": 70 }, bad)).toBe(1);
+  });
+
   it("ปัดลง · ข้อที่ไม่ตอบนับผิด · คืนข้อที่ผิด", () => {
-    expect(score(layout, { "7": 71, "8": 80 }, correct)).toEqual({ percent: 66, wrong: [9] });
-    expect(score(layout, { "7": 71, "8": 80, "9": 90 }, correct)).toEqual({ percent: 100, wrong: [] });
+    expect(score(layout, { "7": 71, "8": 80 }, correct)).toEqual({ percent: 66, right: 2, wrong: [9] });
+    expect(score(layout, { "7": 71, "8": 80, "9": 90 }, correct)).toEqual({ percent: 100, right: 3, wrong: [] });
   });
 });
 
@@ -74,5 +85,12 @@ describe("กติกาอื่น (spec §10)", () => {
     expect(needsRelearn([false, false])).toBe(true);
     expect(needsRelearn([false, true, false])).toBe(false);
     expect(needsRelearn([true, false, false])).toBe(true);
+  });
+
+  it("ไม่ผ่านครั้งแรกทำใหม่ได้ 1 ครั้ง · ไม่ผ่านครั้งที่ 2 ไม่เหลือ (ADR-0021)", () => {
+    expect(retriesLeft([])).toBe(2);
+    expect(retriesLeft([false])).toBe(1);
+    expect(retriesLeft([false, false])).toBe(0);
+    expect(retriesLeft([false, true, false])).toBe(1);
   });
 });

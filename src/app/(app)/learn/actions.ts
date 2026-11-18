@@ -3,7 +3,17 @@
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { beginScan, consentRequired, devScan, finishScan, giveConsent, withdrawConsent, type ScanPurpose } from "@/lib/identity-service";
-import { acknowledgeVersion, answer, documentLink, endStudySession, recordLeave, recordReading, startAttempt, startStudySession } from "@/lib/learn-service";
+import {
+  acknowledgeVersion,
+  answer,
+  documentLink,
+  endStudySession,
+  recordLeave,
+  recordReading,
+  startAttempt,
+  startStudySession,
+  submitAttempt,
+} from "@/lib/learn-service";
 import { awsFaceApi } from "@/lib/rekognition";
 import { alertTgQuietly } from "@/lib/tg-alerts";
 
@@ -113,6 +123,11 @@ export async function readingBeatAction(input: { assignmentId: number; documentI
 export async function answerAction(input: { attemptId: number; questionId: number; choiceIndex: number }) {
   const actor = await learner();
   return answer({ personId: actor.personId, ...input });
+}
+
+export async function submitAction(input: { attemptId: number }) {
+  const actor = await learner();
+  return submitAttempt({ personId: actor.personId, ...input });
 }
 
 export async function leaveAction(input: { attemptId: number }) {

@@ -7,7 +7,7 @@ import { Icon, type IconName } from "./kit/icons";
 import { ThemeToggle } from "./kit/theme-toggle";
 
 /**
- * โครงหน้าหลังล็อกอิน — ยกจาก WorkPass `vault-app.tsx` (Shell): เมนูซ้ายยุบได้ · จอแคบ (< 720px) เป็น drawer ·
+ * โครงหน้าหลังล็อกอิน — ยกจาก WorkPass `vault-app.tsx` (Shell): เมนูซ้ายยุบได้ (ปุ่มยุบอยู่ท้ายเมนูซ้าย) · จอแคบ (< 720px) เป็น drawer ·
  * แถบบนมีชื่อหน้า · ปุ่มสลับโหมดสี · ออกจากระบบ
  *
  * ★ รายการเมนูมาจาก server (`(app)/layout.tsx`) ตาม role — ที่นี่แค่วาดและไฮไลต์หน้าปัจจุบัน
@@ -105,7 +105,8 @@ export function AppShell({
   // หน้าที่ลึกที่สุดที่ตรง = ชื่อบนแถบบน (เช่น /learn/12 → ชุดที่ต้องเรียน)
   const current = all.filter((i) => isActive(pathname, i.href)).sort((a, b) => b.href.length - a.href.length)[0];
 
-  const sidebar = (c: boolean) => (
+  /** `collapsible` = เมนูซ้ายบนจอกว้าง (ยุบ/ขยายได้) · drawer บนจอแคบไม่มีปุ่มยุบ */
+  const sidebar = (c: boolean, collapsible: boolean) => (
     <div className="flex h-full flex-col">
       <Link href="/" className={`flex min-h-12 items-center ${c ? "justify-center" : "px-1"}`} aria-label="WORKTRAIN — หน้าแรก">
         <BrandMark collapsed={c} />
@@ -124,6 +125,20 @@ export function AppShell({
           ) : null,
         )}
       </nav>
+      {collapsible && (
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          aria-label={c ? "ขยายเมนูด้านซ้าย" : "ยุบเมนูด้านซ้าย"}
+          title={c ? "ขยายเมนูด้านซ้าย" : undefined}
+          aria-expanded={!c}
+          aria-controls="sidebar"
+          className={`press mb-3 flex min-h-[42px] w-full items-center gap-3 rounded-lg text-[13px] text-muted transition-colors hover:bg-subtle hover:text-fg ${c ? "justify-center px-0" : "px-3.5"}`}
+        >
+          <Icon name="sidebar" size={17} className={`transition-transform duration-200 ${c ? "-scale-x-100" : ""}`} />
+          {!c && <span className="min-w-0 flex-1 truncate text-left">ยุบเมนู</span>}
+        </button>
+      )}
       <div className="border-t border-line pt-4">
         {!c && (
           <p className="kicker mb-4 flex items-center gap-2 px-1.5 text-[10px]">
@@ -152,13 +167,13 @@ export function AppShell({
         id="sidebar"
         className={`fixed inset-y-0 left-0 z-30 hidden border-r border-line bg-raised pt-7 pb-4 transition-[width,padding] duration-200 nav:block ${collapsed ? "w-20 px-3" : "w-[248px] px-4"}`}
       >
-        {sidebar(collapsed)}
+        {sidebar(collapsed, true)}
       </aside>
       {/* จอแคบ (< 720px): เมนูเลื่อนออกจากซ้าย */}
       {drawer && (
         <div className="fixed inset-0 z-40 nav:hidden" role="dialog" aria-modal aria-label="เมนู">
           <button type="button" aria-label="ปิดเมนู" className="absolute inset-0 animate-fade-in bg-black/50" onClick={() => setDrawer(false)} />
-          <aside className="absolute inset-y-0 left-0 w-[280px] max-w-[85vw] animate-slide-in border-r border-line bg-raised px-4 pt-6 pb-4 shadow-pop">{sidebar(false)}</aside>
+          <aside className="absolute inset-y-0 left-0 w-[280px] max-w-[85vw] animate-slide-in border-r border-line bg-raised px-4 pt-6 pb-4 shadow-pop">{sidebar(false, false)}</aside>
         </div>
       )}
       <div className={`flex min-h-dvh flex-col transition-[padding] duration-200 ${collapsed ? "nav:pl-20" : "nav:pl-[248px]"}`}>
@@ -172,17 +187,6 @@ export function AppShell({
               className="press flex size-10 shrink-0 items-center justify-center rounded-lg border border-line text-muted hover:bg-subtle hover:text-fg nav:hidden"
             >
               <Icon name="menu" size={18} />
-            </button>
-            <button
-              type="button"
-              onClick={toggleCollapsed}
-              aria-label={collapsed ? "ขยายเมนูด้านซ้าย" : "ยุบเมนูด้านซ้าย"}
-              title={collapsed ? "ขยายเมนูด้านซ้าย" : "ยุบเมนูด้านซ้าย"}
-              aria-expanded={!collapsed}
-              aria-controls="sidebar"
-              className="press hidden size-10 shrink-0 items-center justify-center rounded-lg border border-line text-muted hover:bg-subtle hover:text-fg nav:flex"
-            >
-              <Icon name="sidebar" size={18} className={`transition-transform duration-200 ${collapsed ? "-scale-x-100" : ""}`} />
             </button>
             <span className="truncate text-[13px] text-muted">{current?.label ?? "WorkTrain"}</span>
           </div>
