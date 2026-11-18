@@ -20,7 +20,8 @@ const steps = [
   { name: "test", cmd: "npm test", pick: /Tests\s+(.+)/ },
   // ไม่ใส่ env ตอน build — ทุกหน้าเป็น dynamic ไม่แตะ DB ตอน build (เหมือนใน ci.yml)
   { name: "build (ไม่มี env)", cmd: "npm run build", env: { DATABASE_URL: "", SESSION_SECRET: "" } },
-  { name: "audit --audit-level=high", cmd: "npm audit --audit-level=high" },
+  // = npm audit --audit-level=high แต่ข้าม advisory ที่ยกเว้นไว้ใน scripts/audit-allowlist.json (ยังไม่เลยวันทบทวน · ADR-0023)
+  { name: "audit (high · ยกเว้นตาม allowlist)", cmd: "node scripts/audit-check.mjs", pick: /(ยกเว้น \d+)\)\s*$/m },
   // generate ที่ได้ไฟล์ใหม่ = schema.ts เปลี่ยนแต่ยังไม่มี migration
   { name: "migration ตรงกับ schema", cmd: "npx drizzle-kit generate", expect: /No schema changes/ },
 ];
