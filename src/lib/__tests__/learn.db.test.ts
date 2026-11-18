@@ -105,16 +105,23 @@ async function shownAt(attemptId: number, questionId: number, choiceId: number):
   return (t.layout as { questionId: number; choiceIds: number[] }[]).find((l) => l.questionId === questionId)!.choiceIds.indexOf(choiceId);
 }
 
-/** ตอบทุกข้อ — ถูก `rightCount` ข้อแรก ที่เหลือผิด */
-async function answerAll(attemptId: number, rightCount: number, at: Date) {
+/** ตอบทุกข้อ — ถูก `rightCount` ข้อแรก ที่เหลือผิด · ไม่ส่ง */
+async function answerEach(attemptId: number, rightCount: number, at: Date) {
   for (let i = 0; i < 10; i++) {
-    const v = await L.attemptView(ME, attemptId, at);
+    const v = await L.attemptView(ME, attemptId, at, i);
     if (!v || v.ended) break;
     const correct = await testDb().select().from(schema.choices).where(eq(schema.choices.questionId, v.question!.id));
     const pick = correct.find((c) => (i < rightCount ? c.isCorrect : !c.isCorrect))!;
     const r = await L.answer({ personId: ME, attemptId, questionId: v.question!.id, choiceIndex: await shownAt(attemptId, v.question!.id, pick.id), now: at });
     if (!r.ok) throw new Error(r.error);
   }
+}
+
+/** ตอบทุกข้อแล้วกดส่ง — ถูก `rightCount` ข้อแรก ที่เหลือผิด */
+async function answerAll(attemptId: number, rightCount: number, at: Date) {
+  await answerEach(attemptId, rightCount, at);
+  const sent = await L.submitAttempt({ personId: ME, attemptId, now: at });
+  if (!sent.ok) throw new Error(sent.error);
   return L.attemptView(ME, attemptId, at);
 }
 
@@ -486,7 +493,7 @@ describe("การสอบ (spec §10)", () => {
     expect(await startExam(a.id, T0)).toEqual({ ok: false, error: "ต้องอ่านเอกสารให้ครบทุกหน้าและดูวิดีโอครบทุกช่วงก่อนสอบ" });
   });
 
-  it("อ่านครบ → สแกน → สอบทีละข้อ ย้อนไม่ได้ · ถูก 8/10 = 80% ผ่าน → การมอบผ่าน · ไม่เฉลย", async () => {
+  it("อ่านครบ → สแกน → สอบทีละข้อ · ตอบครบยังไม่ส่งเอง · กดส่ง → ถูก 8/10 = 80% ผ่าน → การมอบผ่าน · เฉลยข้อที่ผิด", async () => {
     const { a, docs } = await seed();
     await startSession(T0);
     await readAll(a.id, docs, sec(5));
@@ -498,30 +505,76 @@ describe("การสอบ (spec §10)", () => {
     expect((await L.documentLink({ personId: ME, assignmentId: a.id, documentId: docs[0].id, now: sec(11) })).ok).toBe(false);
 
     const first = await L.attemptView(ME, attemptId, sec(11));
-    expect(first).toMatchObject({ ended: false, index: 0, total: 10, secondsLeft: 15 * 60 - 1 });
+    expect(first).toMatchObject({ ended: false, index: 0, total: 10, lastOpen: 0, secondsLeft: 15 * 60 - 1 });
+    expect(first?.question?.chosen).toBeNull();
+    expect(first?.answered).toEqual(Array(10).fill(false));
     expect(JSON.stringify(first)).not.toContain("isCorrect");
 
-    const result = await answerAll(attemptId, 8, sec(20));
-    expect(result?.result).toMatchObject({ percent: 80, passed: true, reason: "submitted" });
+    // ตอบครบแล้วยังไม่จบ — ต้องกดส่ง (ย้อนแก้ได้จนกว่าจะส่ง · ADR-0021)
+    await answerEach(attemptId, 8, sec(20));
+    const unsent = await L.attemptView(ME, attemptId, sec(21));
+    expect(unsent).toMatchObject({ ended: false, index: 9, lastOpen: 9 });
+    expect(unsent?.answered).toEqual(Array(10).fill(true));
+
+    expect(await L.submitAttempt({ personId: ME, attemptId, now: sec(22) })).toEqual({ ok: true });
+    const result = await L.attemptView(ME, attemptId, sec(23));
+    expect(result?.result).toMatchObject({ percent: 80, right: 8, passed: true, reason: "submitted", next: "none" });
     expect(result?.result?.wrongQuestions).toHaveLength(2);
+    // ผ่าน = เฉลยข้อที่ผิด: คำถาม · ที่ตอบ · ที่ถูก (ตัวเลือก 0 ถูกเสมอใน seed)
+    expect(result?.result?.answerKey).toHaveLength(2);
+    for (const k of result!.result!.answerKey!) {
+      expect(k.correct).toBe("ตัวเลือก 0");
+      expect(k.yours).not.toBe("ตัวเลือก 0");
+      expect(result?.result?.wrongQuestions).toContain(k.question);
+    }
     expect(JSON.stringify(result)).not.toContain("isCorrect");
+    // ส่งซ้ำ = ผลเดิม ไม่ตรวจใหม่
+    expect(await L.submitAttempt({ personId: ME, attemptId, now: sec(24) })).toEqual({ ok: true });
     const [row] = await testDb().select().from(schema.assignments);
     expect(row.passedAt).not.toBeNull();
-    expect((await L.learnView(ME, a.id, sec(30)))?.state).toBe("passed");
+    const view = await L.learnView(ME, a.id, sec(30));
+    expect(view?.state).toBe("passed");
+    expect(view?.attempts).toMatchObject([{ scorePercent: 80, right: 8, total: 10, passed: true }]);
   });
 
-  it("ตอบข้อที่ไม่ได้แสดงอยู่ไม่ได้ (ข้าม/ย้อน)", async () => {
+  it("ย้อนกลับไปแก้คำตอบข้อที่ตอบแล้วได้ · ข้ามไปข้อที่ยังไม่ถึงไม่ได้ (ADR-0021)", async () => {
     const { a, docs } = await seed();
     await startSession(T0);
     await readAll(a.id, docs, sec(5));
     const { attemptId } = (await startExam(a.id, sec(10))) as { attemptId: number };
-    const v = (await L.attemptView(ME, attemptId, sec(11)))!;
     const [t] = await testDb().select().from(schema.attempts);
-    const other = (t.layout as { questionId: number; choiceIds: number[] }[]).find((l) => l.questionId !== v.question!.id)!;
-    expect(await L.answer({ personId: ME, attemptId, questionId: other.questionId, choiceIndex: 0, now: sec(12) })).toEqual({
+    const layout = t.layout as { questionId: number; choiceIds: number[] }[];
+    const correctOf = async (qid: number) => {
+      const cs = await testDb().select().from(schema.choices).where(eq(schema.choices.questionId, qid));
+      return layout.find((l) => l.questionId === qid)!.choiceIds.indexOf(cs.find((c) => c.isCorrect)!.id);
+    };
+
+    // ข้อที่ยังไม่ถึง: ตอบไม่ได้ · ขอดูได้ข้อแรกที่ยังไม่ตอบแทน
+    expect(await L.answer({ personId: ME, attemptId, questionId: layout[1].questionId, choiceIndex: 0, now: sec(11) })).toEqual({
       ok: false,
-      error: "ตอบได้เฉพาะข้อที่กำลังแสดง",
+      error: "ตอบข้อก่อนหน้าให้ครบก่อน",
     });
+    expect((await L.attemptView(ME, attemptId, sec(11), 5))?.index).toBe(0);
+    expect(await L.answer({ personId: ME, attemptId, questionId: 999_999, choiceIndex: 0, now: sec(11) })).toEqual({
+      ok: false,
+      error: "ไม่พบข้อนี้ในการสอบครั้งนี้",
+    });
+
+    // ข้อ 1 ตอบผิด → ข้อ 2 → ย้อนไปข้อ 1 เห็นที่ตอบไว้ แล้วแก้เป็นข้อที่ถูก
+    const right0 = await correctOf(layout[0].questionId);
+    const wrong0 = (right0 + 1) % 4;
+    expect((await L.answer({ personId: ME, attemptId, questionId: layout[0].questionId, choiceIndex: wrong0, now: sec(12) })).ok).toBe(true);
+    expect((await L.answer({ personId: ME, attemptId, questionId: layout[1].questionId, choiceIndex: 0, now: sec(13) })).ok).toBe(true);
+    const back = await L.attemptView(ME, attemptId, sec(14), 0);
+    expect(back).toMatchObject({ index: 0, lastOpen: 2 });
+    expect(back?.question).toMatchObject({ id: layout[0].questionId, chosen: wrong0 });
+    expect((await L.answer({ personId: ME, attemptId, questionId: layout[0].questionId, choiceIndex: right0, now: sec(15) })).ok).toBe(true);
+    expect((await L.attemptView(ME, attemptId, sec(16), 0))?.question?.chosen).toBe(right0);
+    const [after] = await testDb().select().from(schema.attempts).where(eq(schema.attempts.id, attemptId));
+    expect(Object.keys(after.answers as object)).toHaveLength(2);
+
+    // ส่งก่อนตอบครบไม่ได้
+    expect(await L.submitAttempt({ personId: ME, attemptId, now: sec(17) })).toEqual({ ok: false, error: "ยังไม่ได้ตอบอีก 8 ข้อ" });
   });
 
   it("ตัวเลือกส่งไปหน้าจอแค่ข้อความ (ไม่มี id) · ตอบด้วยตำแหน่ง · ตำแหน่งนอกช่วง = ไม่รับ", async () => {
@@ -536,16 +589,18 @@ describe("การสอบ (spec §10)", () => {
     }
   });
 
-  it("กดตอบข้อเดียวกันพร้อมกันสองครั้ง → ลงครั้งเดียว ไม่ทับกัน · ออกจากหน้าสอบพร้อมกันนับครบ", async () => {
+  it("กดตอบข้อเดียวกันพร้อมกันสองครั้ง → เหลือคำตอบเดียว · ออกจากหน้าสอบพร้อมกันนับครบ", async () => {
     const { a, docs } = await seed();
     await startSession(T0);
     await readAll(a.id, docs, sec(5));
     const { attemptId } = (await startExam(a.id, sec(10))) as { attemptId: number };
     const v = (await L.attemptView(ME, attemptId, sec(11)))!;
     const outs = await Promise.all([0, 1].map((i) => L.answer({ personId: ME, attemptId, questionId: v.question!.id, choiceIndex: i, now: sec(12) })));
-    expect(outs.filter((o) => o.ok)).toHaveLength(1);
+    expect(outs.every((o) => o.ok)).toBe(true);
     const [t] = await testDb().select().from(schema.attempts).where(eq(schema.attempts.id, attemptId));
     expect(Object.keys(t.answers as object)).toEqual([String(v.question!.id)]);
+    const shown = (t.layout as { questionId: number; choiceIds: number[] }[]).find((l) => l.questionId === v.question!.id)!.choiceIds;
+    expect(shown.slice(0, 2)).toContain((t.answers as Record<string, number>)[String(v.question!.id)]);
 
     await Promise.all([1, 2].map((i) => L.recordLeave({ personId: ME, attemptId, now: sec(12 + i) })));
     const [after] = await testDb().select().from(schema.attempts).where(eq(schema.attempts.id, attemptId));
@@ -584,14 +639,24 @@ describe("การสอบ (spec §10)", () => {
     expect((await L.attemptView(ME, attemptId, sec(16)))?.result?.reason).toBe("left_page");
   });
 
-  it("ไม่ผ่าน 2 ครั้งติด → ต้องอ่านใหม่ · ได้ชุดไม่ซ้ำ · อ่านครบอีกรอบแล้วสอบได้", async () => {
+  it("ไม่ผ่าน → ไม่เฉลย · ทำใหม่ได้ 1 ครั้ง · ไม่ผ่านอีก → ต้องอ่านใหม่ · ได้ชุดไม่ซ้ำ · อ่านครบอีกรอบแล้วสอบได้", async () => {
     const { a, docs } = await seed();
     await startSession(T0);
     await readAll(a.id, docs, sec(5));
     const one = (await startExam(a.id, sec(10))) as { attemptId: number };
-    await answerAll(one.attemptId, 3, sec(20));
+    const failed = await answerAll(one.attemptId, 3, sec(20));
+    expect(failed?.result).toMatchObject({ percent: 30, right: 3, passed: false, next: "retry", retriesLeft: 1 });
+    expect(failed?.result?.wrongQuestions).toHaveLength(7);
+    expect(failed?.result?.answerKey).toBeUndefined();
+    expect(JSON.stringify(failed)).not.toContain("ตัวเลือก");
+    expect(await L.learnView(ME, a.id, sec(25))).toMatchObject({ state: "ready", retriesLeft: 1 });
+
     const two = (await startExam(a.id, sec(30))) as { attemptId: number };
-    await answerAll(two.attemptId, 3, sec(40));
+    const again = await answerAll(two.attemptId, 3, sec(40));
+    expect(again?.result).toMatchObject({ passed: false, next: "relearn", retriesLeft: 0 });
+    expect(again?.result?.answerKey).toBeUndefined();
+    // ครั้งเก่าดูย้อนหลัง = ไม่มีปุ่มทำใหม่ (มีครั้งที่ใหม่กว่าแล้ว)
+    expect((await L.attemptView(ME, one.attemptId, sec(45)))?.result).toMatchObject({ next: "none", retriesLeft: null });
     const forms = await testDb().select({ f: schema.attempts.formId }).from(schema.attempts).orderBy(asc(schema.attempts.id));
     expect(forms[0].f).not.toBe(forms[1].f);
 
@@ -600,7 +665,7 @@ describe("การสอบ (spec §10)", () => {
 
     await startSession(sec(60));
     await readAll(a.id, docs, sec(65));
-    expect((await L.learnView(ME, a.id, sec(70)))?.state).toBe("ready");
+    expect(await L.learnView(ME, a.id, sec(70))).toMatchObject({ state: "ready", retriesLeft: null });
     expect((await startExam(a.id, sec(70))).ok).toBe(true);
   });
 

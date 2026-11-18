@@ -258,6 +258,7 @@ describe("เรียนรู้และทดสอบ", () => {
       const shown = (t.layout as { questionId: number; choiceIds: number[] }[]).find((l) => l.questionId === v.question!.id)!.choiceIds;
       await L.answer({ personId: ME, attemptId, questionId: v.question!.id, choiceIndex: shown.indexOf(cs.find((c) => c.isCorrect)!.id), now: at });
     }
+    expect(await L.submitAttempt({ personId: ME, attemptId, now: at })).toEqual({ ok: true });
     const done = (await L.attemptView(ME, attemptId, at))!;
     expect(done.result).toMatchObject({ percent: 100, passed: true });
     expect((await L.learnView(ME, assignmentId))!.state).toBe("passed");

@@ -6,7 +6,7 @@ import { MAX_LEAVES_BEFORE_SUBMIT } from "@/db/schema";
 
 export type Rng = () => number;
 
-/** ไม่ผ่าน 2 ครั้งติด = ต้องกลับไปอ่านใหม่ก่อนสอบ (forced re-learn) */
+/** ไม่ผ่าน 2 ครั้งติด = ต้องกลับไปอ่านใหม่ก่อนสอบ (forced re-learn) — ไม่ผ่านครั้งแรกจึงทำใหม่ได้ 1 ครั้ง (ADR-0021) */
 export const FAILS_BEFORE_RELEARN = 2;
 
 /**
@@ -42,10 +42,24 @@ export function buildLayout(questions: readonly { id: number; choiceIds: readonl
   return shuffle(questions, rng).map((q) => ({ questionId: q.id, choiceIds: shuffle(q.choiceIds, rng) }));
 }
 
-/** ข้อถัดไปที่ต้องตอบ — แสดงทีละข้อ ย้อนกลับไม่ได้ · null = ตอบครบแล้ว */
+/** ข้อแรกที่ยังไม่ตอบ · null = ตอบครบแล้ว */
 export function currentIndex(layout: readonly LayoutItem[], answers: Readonly<Record<string, number>>): number | null {
   const i = layout.findIndex((item) => answers[String(item.questionId)] === undefined);
   return i === -1 ? null : i;
+}
+
+/**
+ * ข้อสุดท้ายที่เปิดได้ — ทำทีละข้อ ย้อนกลับไปแก้ข้อที่ตอบแล้วได้ แต่ข้ามไปข้างหน้าไม่ได้ (ADR-0021)
+ * = ข้อแรกที่ยังไม่ตอบ · ตอบครบแล้วเปิดได้ทุกข้อ
+ */
+export function lastOpenIndex(layout: readonly LayoutItem[], answers: Readonly<Record<string, number>>): number {
+  return currentIndex(layout, answers) ?? layout.length - 1;
+}
+
+/** ข้อที่จะแสดง — ขอข้อไหนมา (`at`) ถ้าเปิดได้ก็ข้อนั้น ไม่อย่างนั้นข้อแรกที่ยังไม่ตอบ (ตอบครบ = ข้อสุดท้าย) */
+export function shownIndex(layout: readonly LayoutItem[], answers: Readonly<Record<string, number>>, at?: number): number {
+  const last = lastOpenIndex(layout, answers);
+  return at !== undefined && Number.isInteger(at) && at >= 0 && at <= last ? at : last;
 }
 
 /** คะแนนเป็นร้อยละ ปัดลง · ข้อที่ไม่ตอบ = ผิด */
@@ -53,10 +67,10 @@ export function score(
   layout: readonly LayoutItem[],
   answers: Readonly<Record<string, number>>,
   correct: ReadonlyMap<number, number>,
-): { percent: number; wrong: number[] } {
+): { percent: number; right: number; wrong: number[] } {
   const wrong = layout.filter((item) => answers[String(item.questionId)] !== correct.get(item.questionId)).map((i) => i.questionId);
   const right = layout.length - wrong.length;
-  return { percent: layout.length ? Math.floor((right * 100) / layout.length) : 0, wrong };
+  return { percent: layout.length ? Math.floor((right * 100) / layout.length) : 0, right, wrong };
 }
 
 /** ออกจากหน้าสอบครั้งนี้แล้วต้องส่งเลยไหม — ครั้งที่ 1–4 เตือน · ครั้งที่ 5 ส่งเอง */
@@ -68,4 +82,11 @@ export function leaveForcesSubmit(leaveCountAfter: number): boolean {
 export function needsRelearn(results: readonly boolean[]): boolean {
   if (results.length < FAILS_BEFORE_RELEARN) return false;
   return results.slice(-FAILS_BEFORE_RELEARN).every((passed) => !passed);
+}
+
+/** ไม่ผ่านแล้วทำใหม่ได้อีกกี่ครั้งก่อนต้องอ่านใหม่ — นับผลท้าย ๆ ที่ไม่ผ่านติดกัน (เรียงเก่า → ใหม่) */
+export function retriesLeft(results: readonly boolean[]): number {
+  let fails = 0;
+  for (let i = results.length - 1; i >= 0 && !results[i]; i--) fails++;
+  return Math.max(0, FAILS_BEFORE_RELEARN - fails);
 }
