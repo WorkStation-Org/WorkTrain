@@ -2,9 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAuthor, requireUser } from "@/lib/auth";
+import { requireAdmin, requireAuthor, requireUser } from "@/lib/auth";
 import { approve, closeSet, deleteDraft, returnToAuthor, submitForApproval } from "@/lib/approval-service";
 import { notifyApprovalEvent, setAudience, syncAssignments } from "@/lib/assignment-service";
+import { transferClip } from "@/lib/clip-transfer";
 import { claudeExamModel } from "@/lib/exam-generator";
 import { editQuestion, generateExams, importExams, regenerateQuestion, setQuestionReviewed, type ImportOutcome, type QuestionEdit } from "@/lib/exam-service";
 import { MAX_EXAM_SHEET_BYTES } from "@/domain/document";
@@ -15,6 +16,7 @@ import {
   createSet,
   moveDocument,
   removeDocument,
+  renameSet,
   requestUpload,
   setDocumentHidden,
   setSpreadMode,
@@ -109,6 +111,18 @@ export async function updateSettingsAction(form: FormData) {
     },
   });
   back(setId, out, "บันทึกแล้ว", str(form, "tab"));
+}
+
+/** เปลี่ยนชื่อชุด — TG เท่านั้น ทุกสถานะ (ADR-0022) · `renameSet` ตรวจซ้ำที่ service */
+export async function renameSetAction(form: FormData) {
+  const actor = await requireAdmin();
+  const setId = int(form, "setId");
+  const out = await renameSet({ actor, setId, title: str(form, "title") });
+  if (out.ok) {
+    revalidatePath("/sets", "layout");
+    revalidatePath("/learn", "layout");
+  }
+  back(setId, out, "เปลี่ยนชื่อชุดแล้ว", str(form, "tab"));
 }
 
 export async function requestUploadAction(input: { setId: number; docKind: string; fileName: string; mime: string; size: number }) {
@@ -312,6 +326,22 @@ export async function setDocumentHiddenAction(input: { setId: number; documentId
   const out = await setDocumentHidden({ actor, documentId: input.documentId, hidden: input.hidden === true });
   revalidatePath(`/sets/${input.setId}`);
   revalidatePath("/learn", "layout");
+  return out;
+}
+
+/**
+ * ย้าย/คัดลอกคลิปไปชุดอื่น — TG เท่านั้น (ADR-0022) · `transferClip` ตรวจซ้ำที่ service
+ * ชุดที่ใช้อยู่เห็นผลทันทีทั้งสองชุด จึง revalidate หน้าผู้เรียนด้วย
+ */
+export async function transferClipAction(input: { setId: number; documentId: number; targetSetId: number; mode: string }) {
+  const actor = await requireAdmin();
+  const out = await transferClip({ actor, documentId: input.documentId, targetSetId: input.targetSetId, mode: input.mode === "move" ? "move" : "copy" });
+  revalidatePath(`/sets/${input.setId}`);
+  if (out.ok) {
+    revalidatePath(`/sets/${out.targetSetId}`);
+    revalidatePath("/sets", "layout");
+    revalidatePath("/learn", "layout");
+  }
   return out;
 }
 

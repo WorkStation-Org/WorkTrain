@@ -1,17 +1,18 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PersonName } from "@/components/person-name";
-import { Badge, Button, Card, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle } from "@/components/ui";
+import { Badge, Button, Card, FIELD_HINT_CLASS, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle } from "@/components/ui";
 import { LEVEL_LABELS, slots, topicLabel, topicsOf, type Blueprint } from "@/domain/blueprint";
 import { aiReadable, isVideoMime } from "@/domain/document";
 import { coverage } from "@/domain/spread";
 import { FORMS_PER_VERSION, type Level } from "@/db/schema";
 import { hiddenFromLists, hiddenReason } from "@/domain/assignment-end";
 import { assignmentStatus, audienceRulesOf, onboardingPositionsOf, type AssignmentState } from "@/lib/assignment-service";
+import { clipTargets, type ClipTransferDetail } from "@/lib/clip-transfer";
 import { examEditor, reviewedQuestionIds } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
 import { personLabelsFrom } from "@/lib/person-name";
-import { approverRole, audienceMode, canCloseSet, canDeleteDraft, canEditDraft, canEditVersion, canManage, coverPath, getSetDetail } from "@/lib/set-service";
+import { approverRole, audienceMode, canCloseSet, canDeleteDraft, canEditDraft, canEditVersion, canManage, canRenameSet, coverPath, getSetDetail } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { fetchOrg } from "@/lib/workid";
 import {
@@ -20,6 +21,7 @@ import {
   editSummaryAction,
   generateDeltaAction,
   generateExamsAction,
+  renameSetAction,
   returnAction,
   returnVersionAction,
   setChangeKindAction,
@@ -55,6 +57,9 @@ const EVENT_LABELS: Record<string, string> = {
   deleted: "ลบร่าง",
   closed: "ปิดชุด",
   document_visibility: "ซ่อน/แสดงไฟล์",
+  renamed: "เปลี่ยนชื่อชุด",
+  clip_sent: "ส่งคลิปไปชุดอื่น",
+  clip_received: "รับคลิปจากชุดอื่น",
 };
 
 type Tab = "settings" | "docs" | "exam" | "audience" | "learners" | "history";
@@ -83,6 +88,8 @@ export default async function SetPage({
   const editor = examEditor(actor, set, version);
   const newVersion = set.status === "active" && version && version.versionNo > 1 && !version.approvedAt ? version : null;
   const isOwner = actor.role === "admin" || actor.personId === set.authorPersonId;
+  // TG เปลี่ยนชื่อชุดได้ทุกสถานะ · ย้าย/คัดลอกคลิปไปชุดอื่นได้ (ADR-0022) — ร่างของตัวเองแก้ชื่อในฟอร์มตั้งค่าตามเดิม
+  const canRename = canRenameSet(actor, set);
   // ผู้อนุมัติที่ระบุ หรือ TG ที่อนุมัติแทน (ADR-0018) — `actingTg` = TG ที่ไม่ใช่ผู้อนุมัติที่ระบุ (หน้าจอบอกว่ากำลังทำแทนใคร)
   const role = approverRole(actor, set);
   const actingTg = role === "tg";
@@ -260,15 +267,33 @@ export default async function SetPage({
           </Card>
         ) : (
           <Card>
+            {canRename && (
+              <form action={renameSetAction} className="mb-5 border-b border-line pb-5">
+                <input type="hidden" name="setId" value={set.id} />
+                <input type="hidden" name="tab" value="settings" />
+                <label htmlFor="set-title" className={FIELD_LABEL_CLASS}>
+                  ชื่อชุด
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <input id="set-title" name="title" defaultValue={set.title} required maxLength={200} className={`${INPUT_CLASS} min-w-0 flex-[1_1_280px]`} />
+                  <Button type="submit" variant="primary">
+                    เปลี่ยนชื่อ
+                  </Button>
+                </div>
+                <p className={FIELD_HINT_CLASS}>
+                  TG เปลี่ยนได้ทุกสถานะ — ผู้เรียน · Dashboard · WorkHR เห็นชื่อใหม่ทันที · ข้อความ LINE ที่ส่งไปแล้วยังเป็นชื่อเดิม · ลงประวัติทุกครั้ง
+                </p>
+              </form>
+            )}
             <dl className="grid gap-4 text-[13px] sm:grid-cols-2">
-              <Item label="ชื่อชุด" value={set.title} />
+              {!canRename && <Item label="ชื่อชุด" value={set.title} />}
               <Item label="เวอร์ชันตามเอกสาร" value={version?.label ?? "—"} />
               <Item label="กำหนดส่ง" value={`${set.dueDays} วันหลังได้รับมอบ`} />
               <Item label="เวลาสอบ" value={`${set.examMinutes} นาที · ผ่าน ${set.passPercent}%`} />
               <Item label="ผู้สร้าง" value={set.authorName} />
               <Item label="ผู้อนุมัติ" value={set.approverName ?? "ยังไม่ได้เลือก"} />
             </dl>
-            <p className="mt-4 text-[12px] text-muted">ตั้งค่าแก้ได้ตอนชุดยังเป็นร่าง</p>
+            <p className="mt-4 text-[12px] text-muted">ตั้งค่าอื่นแก้ได้ตอนชุดยังเป็นร่าง</p>
           </Card>
         ))}
 
@@ -307,6 +332,15 @@ export default async function SetPage({
             canToggleHidden={isOwner && set.status !== "closed" && set.status !== "deleted"}
             allowPricelist={detail.kind.allowPricelist}
             customWeights={set.spreadMode === "custom"}
+            transfer={
+              actor.role === "admin"
+                ? {
+                    targets: await clipTargets(actor, set.id),
+                    // ย้ายออก: เวอร์ชันที่ยังแก้ได้ = ลบออกจริง · ชุดที่มีผู้เรียน = ซ่อน (service ตัดสินอีกครั้ง) · ชุดที่ปิดแล้วคัดลอกได้อย่างเดียว
+                    moveOut: set.status === "closed" ? null : docsEditable ? "remove" : "hide",
+                  }
+                : null
+            }
           />
         </div>
       )}
@@ -522,8 +556,24 @@ function OnBehalfNote({ approverName }: { approverName: string | null }) {
 
 /** ส่วนขยายของประวัติ — ข้อสอบมาจากไหน · TG กดแทนใคร · ผู้อนุมัติเพิ่มผู้รับ */
 function eventNote(action: string, detail: unknown): string | null {
-  const d = (detail ?? {}) as { kind?: string; fileName?: string; onBehalfOf?: { name: string | null } | null; ownSet?: boolean; by?: string; hidden?: boolean };
+  const d = (detail ?? {}) as {
+    kind?: string;
+    fileName?: string;
+    onBehalfOf?: { name: string | null } | null;
+    ownSet?: boolean;
+    by?: string;
+    hidden?: boolean;
+    from?: string;
+    to?: string;
+  } & Partial<ClipTransferDetail>;
   if (action === "document_visibility") return `${d.hidden ? "ซ่อน" : "แสดง"} ${d.fileName ?? "ไฟล์"}`;
+  if (action === "renamed") return `จาก "${d.from ?? ""}" เป็น "${d.to ?? ""}"`;
+  if (action === "clip_sent" || action === "clip_received") {
+    const verb = d.mode === "move" ? "ย้าย" : "คัดลอก";
+    const where = action === "clip_sent" ? `ไปชุด "${d.otherSet?.title ?? ""}"` : `จากชุด "${d.otherSet?.title ?? ""}"`;
+    const after = d.source === "hidden" ? " · ซ่อนในชุดนี้" : d.source === "removed" ? " · ลบออกจากชุดนี้" : "";
+    return `${verb} ${d.fileName ?? "คลิป"} ${where}${after}`;
+  }
   if (action === "exams_generated" || action === "exams_imported") {
     const parts = [d.kind === "delta" && "(ส่วนที่เปลี่ยน)", d.fileName && `จากไฟล์ ${d.fileName}`].filter(Boolean);
     return parts.length ? parts.join(" ") : null;

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Button, INPUT_CLASS } from "@/components/ui";
@@ -16,12 +17,14 @@ import {
   maxBytesFor,
 } from "@/domain/document";
 import { confirmUploadAction, moveDocumentAction, removeDocumentAction, requestUploadAction, setDocumentHiddenAction, updateDocumentAction } from "../actions";
+import { ClipTransfer, type ClipTransferOptions, type TransferNotice } from "./clip-transfer";
 import { captureCoverFromFile, CoverEditor, saveCover } from "./cover-picker";
 import { PdfPreview, VideoPreview } from "./doc-preview";
 
 /**
  * เอกสารต้นทาง — ลากวางได้ทีละหลายไฟล์ (ดูชนิดไฟล์ให้เอง) · รายการตามลำดับที่ผู้เรียนเห็นพร้อมป้าย "ใช้ทำอะไร" ·
  * คลิกไฟล์แล้วแก้ในแผงด้านขวา (ชื่อที่ผู้เรียนเห็น · ใช้ทำอะไร · น้ำหนัก · ปกคลิป · ลบ) · เล่นวิดีโอ/เปิดอ่าน PDF ได้ทุกคนที่ทำงานกับชุด
+ * TG ย้าย/คัดลอกคลิปไปชุดอื่นได้จากแผงเดียวกัน (`clip-transfer.tsx` · ADR-0022)
  *
  * ★ อัปทางเดิม: ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยัน · วิดีโอได้ปกอัตโนมัติจากเฟรมที่ 10% ของไฟล์ในเครื่อง (ไม่ต้องพึ่ง CORS)
  */
@@ -71,6 +74,7 @@ export function DocsManager({
   canToggleHidden,
   allowPricelist,
   customWeights,
+  transfer,
 }: {
   setId: number;
   docs: DocItem[];
@@ -81,6 +85,8 @@ export function DocsManager({
   allowPricelist: boolean;
   /** ชุดนี้เฉลี่ยข้อสอบแบบกำหนดเอง — แสดงช่องน้ำหนัก */
   customWeights: boolean;
+  /** TG ย้าย/คัดลอกคลิปไปชุดอื่นได้ (ADR-0022) · null = ไม่ใช่ TG */
+  transfer: ClipTransferOptions | null;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<number | null>(docs[0]?.id ?? null);
@@ -88,6 +94,8 @@ export function DocsManager({
   const [dragOver, setDragOver] = useState(false);
   const [toggling, setToggling] = useState<number | null>(null);
   const [toggleError, setToggleError] = useState<string | null>(null);
+  // ผลการย้าย/คัดลอก — เก็บไว้ที่รายการ เพราะคลิปที่ย้ายออกหายจากรายการ (แผงของมันหายตาม)
+  const [notice, setNotice] = useState<TransferNotice | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const sel = docs.find((d) => d.id === selected) ?? docs[0];
 
@@ -234,6 +242,19 @@ export function DocsManager({
                 {toggleError}
               </p>
             )}
+            {notice && (
+              <p role={notice.ok ? "status" : "alert"} className={`border-b border-line px-4 py-2.5 text-[13px] ${notice.ok ? "bg-success-soft text-success" : "bg-danger-soft text-danger"}`}>
+                {notice.text}
+                {notice.href && (
+                  <>
+                    {" · "}
+                    <Link href={notice.href} className="font-semibold underline">
+                      เปิดชุดปลายทาง
+                    </Link>
+                  </>
+                )}
+              </p>
+            )}
             {docs.length === 0 ? (
               <p className="px-4 py-8 text-center text-[13px] text-muted">ยังไม่มีเอกสาร{editable ? " — ลากไฟล์มาวางด้านบน" : ""}</p>
             ) : (
@@ -331,6 +352,8 @@ export function DocsManager({
             canSetCover={canSetCover}
             allowPricelist={allowPricelist}
             customWeights={customWeights}
+            transfer={transfer}
+            onTransferred={setNotice}
           />
         )}
       </div>
@@ -346,6 +369,8 @@ function DocPanel({
   canSetCover,
   allowPricelist,
   customWeights,
+  transfer,
+  onTransferred,
 }: {
   setId: number;
   doc: DocItem;
@@ -353,6 +378,8 @@ function DocPanel({
   canSetCover: boolean;
   allowPricelist: boolean;
   customWeights: boolean;
+  transfer: ClipTransferOptions | null;
+  onTransferred: (notice: TransferNotice) => void;
 }) {
   const router = useRouter();
   const video = isVideoMime(doc.mimeType);
@@ -448,6 +475,8 @@ function DocPanel({
             <CoverEditor setId={setId} documentId={doc.id} coverUrl={doc.coverUrl} canEdit={canSetCover} />
           </div>
         )}
+
+        {video && transfer && <ClipTransfer setId={setId} documentId={doc.id} fileName={doc.fileName} options={transfer} onDone={onTransferred} />}
 
         <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
           {editable && (

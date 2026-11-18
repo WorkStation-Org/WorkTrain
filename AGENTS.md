@@ -43,7 +43,10 @@ This version has breaking changes — APIs, conventions, and file structure may 
   ช่วงวิดีโอ 10 วินาที · `src/domain/mp4.ts` — ความยาววิดีโอจากหัวไฟล์ MP4 (ADR-0013)
 - `src/lib/set-overview.ts` — `/sets/released` ภาพรวมชุดที่ปล่อยแล้ว (ใช้อยู่ + ปิดแล้ว) แบบการ์ด: เนื้อหา · วันที่ปล่อย · ผ่าน/กำลังเรียน/ยังไม่เริ่ม/เลยกำหนด
   (นับด้วย `assignmentState()` ตัวเดียวกับแท็บผู้เรียน) · ปกการ์ดใช้ `components/set-cover.tsx` ร่วมกับ `/learn`
-- `src/lib/set-service.ts` — สร้างชุด · ตั้งค่า · อัปโหลด (ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยันด้วย HEAD) · `getSetDetail()` (มีเฉลย — เฉพาะ `canManage`)
+- `src/lib/set-service.ts` — สร้างชุด · ตั้งค่า · อัปโหลด (ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยันด้วย HEAD) · `getSetDetail()` (มีเฉลย — เฉพาะ `canManage`) ·
+  `renameSet()` TG เปลี่ยนชื่อชุดได้ทุกสถานะ (ลงประวัติ `renamed` · ชื่อชุดไม่มี snapshot ที่ไหน · ADR-0022)
+- `src/lib/clip-transfer.ts` — TG ย้าย/คัดลอกคลิปไปชุดอื่น (`transferClip` · `clipTargets` · ADR-0022): copy ไฟล์+ปกใน R2 เป็น key ของชุดปลายทางเสมอ ·
+  ย้าย = ลบในเวอร์ชันที่ยังแก้ได้และยังไม่มีใครเรียน ไม่งั้นซ่อน · ปลายทางรับได้เฉพาะร่าง/ใช้อยู่ · UI `sets/[id]/clip-transfer.tsx` ในแผงคลิปของขั้นเอกสาร
 - `/sets/[id]` — แถบขั้นตอน `?tab=` ตั้งค่า · เอกสาร · ข้อสอบ · ผู้รับ · ผู้เรียน · ประวัติ (ADR-0014) · client component ต่อขั้น:
   `approver-picker` · `docs-manager` + `doc-preview` (เล่นวิดีโอ/อ่าน PDF ให้คนที่ทำงานกับชุด · `previewLink()` · Pricelist ทาง `/sets/[id]/doc/[documentId]`) ·
   `spread-panel` + `exam-workspace` (แก้/ตรวจแล้วอยู่ที่เดิม) · `audience-picker` (แก้ได้ทั้งร่างและชุดที่ใช้อยู่) ·

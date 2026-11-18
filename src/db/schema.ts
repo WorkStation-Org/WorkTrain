@@ -302,6 +302,12 @@ export const APPROVAL_ACTIONS = [
   "closed",
   /** ซ่อน/แสดงคลิปหรือเอกสารในชุด · detail `{ documentId, fileName, hidden }` */
   "document_visibility",
+  /** เปลี่ยนชื่อชุด (ADR-0022) · detail `{ from, to }` */
+  "renamed",
+  /** คลิปออกจากชุดนี้ไปชุดอื่น (ADR-0022) · detail `ClipTransferDetail` — `source` บอกว่าชุดนี้ซ่อนหรือลบคลิปเมื่อย้าย */
+  "clip_sent",
+  /** คลิปเข้ามาจากชุดอื่น (ADR-0022) · detail `ClipTransferDetail` */
+  "clip_received",
 ] as const;
 export type ApprovalAction = (typeof APPROVAL_ACTIONS)[number];
 
