@@ -175,8 +175,9 @@ async function defaultApprover(personId: number): Promise<{ personId: number; na
 export async function createSet(input: { actor: Actor; title: string; kindId: number }): Promise<Outcome<{ setId: number }>> {
   const { actor } = input;
   if (actor.role !== "admin" && actor.role !== "author") return { ok: false, error: "บัญชีนี้สร้างชุดการเรียนรู้ไม่ได้" };
-  const title = input.title.trim();
-  if (!title || title.length > TITLE_MAX) return { ok: false, error: `ชื่อชุดต้องมี 1–${TITLE_MAX} ตัวอักษร` };
+  const checked = checkTitle(input.title);
+  if (!checked.ok) return checked;
+  const { title } = checked;
   const kind = Number.isInteger(input.kindId) && input.kindId > 0 ? (await db().select().from(setKinds).where(eq(setKinds.id, input.kindId)))[0] : undefined;
   if (!kind) return { ok: false, error: "เลือกชนิดของชุด" };
   if (!kind.active) return { ok: false, error: `ชนิด "${kind.name}" ปิดอยู่` };
@@ -208,17 +209,56 @@ export interface SetSettings {
   approver?: { personId: number; name: string } | null;
 }
 
-export async function updateSettings(input: { actor: Actor; setId: number; settings: SetSettings }): Promise<Outcome> {
+function checkTitle(raw: string): Outcome<{ title: string }> {
+  const title = raw.trim();
+  if (!title || title.length > TITLE_MAX) return { ok: false, error: `ชื่อชุดต้องมี 1–${TITLE_MAX} ตัวอักษร` };
+  return { ok: true, title };
+}
+
+/** ประวัติการเปลี่ยนชื่อ — ทุกทางที่เปลี่ยน `learning_sets.title` ลงแถวนี้ (ADR-0022) */
+function renamedEvent(actor: Actor, set: Pick<SetRow, "id" | "title">, to: string, now: Date) {
+  return db()
+    .insert(approvalEvents)
+    .values({ setId: set.id, action: "renamed", actorPersonId: actor.personId, actorName: actor.name, detail: { from: set.title, to }, createdAt: now });
+}
+
+/** TG เปลี่ยนชื่อชุดได้ไหม — ทุกสถานะยกเว้นร่างที่ลบแล้ว (ADR-0022) */
+export function canRenameSet(actor: Pick<Actor, "role">, set: Pick<SetRow, "status">): boolean {
+  return actor.role === "admin" && set.status !== "deleted";
+}
+
+/**
+ * เปลี่ยนชื่อชุด — TG เท่านั้น ได้ทุกสถานะ รวมชุดที่ใช้อยู่และปิดแล้ว (ADR-0022) · ลงประวัติ `renamed` { from, to }
+ * ★ ไม่มีที่ไหนเก็บชื่อชุดแบบ snapshot — หน้าผู้เรียน · Dashboard · WorkHR (`trainingStatus`) · ข้อความ LINE รอบถัดไป อ่านชื่อใหม่ทันที
+ *   ข้อความ LINE ที่ส่งไปแล้ว (`notifications.text`) คงชื่อเดิม เพราะเป็นสำเนาของสิ่งที่ส่งไปจริง
+ */
+export async function renameSet(input: { actor: Actor; setId: number; title: string; now?: Date }): Promise<Outcome> {
+  if (input.actor.role !== "admin") return { ok: false, error: "เปลี่ยนชื่อชุดได้เฉพาะ TG" };
+  const set = await loadSet(input.setId);
+  if (!set || !canRenameSet(input.actor, set)) return { ok: false, error: "ไม่พบชุดนี้" };
+  const checked = checkTitle(input.title);
+  if (!checked.ok) return checked;
+  if (checked.title === set.title) return { ok: true };
+  const now = input.now ?? new Date();
+  await atomic([
+    db().update(learningSets).set({ title: checked.title, updatedAt: now }).where(eq(learningSets.id, set.id)),
+    renamedEvent(input.actor, set, checked.title, now),
+  ]);
+  return { ok: true };
+}
+
+export async function updateSettings(input: { actor: Actor; setId: number; settings: SetSettings; now?: Date }): Promise<Outcome> {
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
   if (!canEditDraft(input.actor, set)) return { ok: false, error: "แก้ได้เฉพาะชุดร่างของตัวเอง" };
   const s = input.settings;
-  const patch: Partial<typeof learningSets.$inferInsert> = { updatedAt: new Date() };
+  const now = input.now ?? new Date();
+  const patch: Partial<typeof learningSets.$inferInsert> = { updatedAt: now };
 
   if (s.title !== undefined) {
-    const title = s.title.trim();
-    if (!title || title.length > TITLE_MAX) return { ok: false, error: `ชื่อชุดต้องมี 1–${TITLE_MAX} ตัวอักษร` };
-    patch.title = title;
+    const checked = checkTitle(s.title);
+    if (!checked.ok) return checked;
+    patch.title = checked.title;
   }
   if (s.dueDays !== undefined) {
     if (!Number.isInteger(s.dueDays) || s.dueDays < 1 || s.dueDays > 90) return { ok: false, error: "กำหนดส่งต้องเป็น 1–90 วัน" };
@@ -238,7 +278,11 @@ export async function updateSettings(input: { actor: Actor; setId: number; setti
     patch.approverPersonId = s.approver?.personId ?? null;
     patch.approverName = s.approver?.name ?? null;
   }
-  await db().update(learningSets).set(patch).where(eq(learningSets.id, set.id));
+  const renamed = patch.title !== undefined && patch.title !== set.title;
+  await atomic([
+    db().update(learningSets).set(patch).where(eq(learningSets.id, set.id)),
+    ...(renamed ? [renamedEvent(input.actor, set, patch.title!, now)] : []),
+  ]);
   if (s.label !== undefined) {
     const version = await currentVersion(set.id);
     if (version) await db().update(setVersions).set({ label: s.label?.trim() || null }).where(eq(setVersions.id, version.id));
