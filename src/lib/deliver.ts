@@ -2,6 +2,7 @@ import { and, eq, lt, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { notifications } from "@/db/schema";
 import { errorSummary } from "@/lib/errmsg";
+import { checkFlexMessage, type FlexMessage } from "@/lib/flex";
 import { getFriendship, pushAsync, pushMany } from "@/lib/gateway";
 import { LINE_GROUP_ID } from "@/lib/line-group";
 import { getWorkIdPerson, type OrgPerson } from "@/lib/workid";
@@ -54,11 +55,20 @@ interface Target {
   personId: number | null;
   setId?: number | null;
   assignmentId?: number | null;
+  /** ข้อความล้วน — เก็บลง `notifications.text` และส่งแทนเมื่อไม่มี Flex หรือ Flex ไม่ผ่านการตรวจ */
   text: string;
+  /** การ์ด (`line-cards.ts`) — ส่งแทน `text` เมื่อผ่าน `checkFlexMessage()` (ADR-0024) */
+  flex?: FlexMessage | null;
 }
 
-function toLineMessages(text: string): unknown[] {
-  return [{ type: "text", text: text.slice(0, 4900) }];
+function toLineMessages(m: Pick<Target, "kind" | "text" | "flex">): unknown[] {
+  if (m.flex) {
+    const why = checkFlexMessage(m.flex);
+    if (why === null) return [m.flex];
+    // GateWay ตอบ 202 ก่อนถึง LINE — Flex ที่ผิดข้อจำกัดจะหายเงียบ ต้องตรวจเองแล้วถอยเป็นข้อความล้วน
+    console.log(JSON.stringify({ msg: "flex_fallback_text", kind: m.kind, why }));
+  }
+  return [{ type: "text", text: m.text.slice(0, 4900) }];
 }
 
 type Finish = (status: "sent" | "failed" | "skipped", jobIds: string[], detail: string | null) => Promise<SendResult>;
@@ -173,7 +183,7 @@ export async function sendToGroup(m: Target & { lineGroupId: string | null }): P
   try {
     const outcome = await pushAsync({
       to: target,
-      messages: toLineMessages(m.text),
+      messages: toLineMessages(m),
       idempotencyKey: `wtr:${m.dedupeKey}:${target}`,
       notificationType: `worktrain.${m.kind}`,
     });
@@ -204,7 +214,7 @@ export async function sendToPerson(m: Target & { personId: number }, people: rea
       const to = person?.name ?? `personId ${m.personId}`;
       const outcome = await pushAsync({
         to: testGroup,
-        messages: [{ type: "text", text: `[ทดสอบ · ข้อความตัวต่อตัวถึง ${to}]` }, ...toLineMessages(m.text)],
+        messages: [{ type: "text", text: `[ทดสอบ · ข้อความตัวต่อตัวถึง ${to}]` }, ...toLineMessages(m)],
         idempotencyKey: `wtr:${m.dedupeKey}:${testGroup}`,
         notificationType: `worktrain.${m.kind}`,
       });
@@ -223,7 +233,7 @@ export async function sendToPerson(m: Target & { personId: number }, people: rea
     const targets = lookup.lineUserIds.filter((_, i) => friendships[i].status !== "not_friend");
     if (targets.length === 0) return finish("skipped", [], PERSON_SKIP.notFriend);
 
-    const messages = toLineMessages(m.text);
+    const messages = toLineMessages(m);
     const outcomes = await pushMany(
       targets.map((to) => ({ to, messages, idempotencyKey: `wtr:${m.dedupeKey}:${to}`, notificationType: `worktrain.${m.kind}` })),
     );

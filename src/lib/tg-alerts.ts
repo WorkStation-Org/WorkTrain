@@ -1,6 +1,7 @@
 import { sendToPerson, type SendResult } from "@/lib/deliver";
 import { errorSummary } from "@/lib/errmsg";
 import { reviewQueue } from "@/lib/identity-service";
+import { appUrl, cardMessage, type LineMessage } from "@/lib/line-cards";
 import { fetchOrg, fetchRolePeople } from "@/lib/workid";
 
 /**
@@ -10,10 +11,6 @@ import { fetchOrg, fetchRolePeople } from "@/lib/workid";
  *   (รอบ cron = ส่งซ้ำข้อความที่ล้ม) · dedupe ต่อเรื่องต่อ TG หนึ่งคน จึงไม่แจ้งซ้ำ
  * ★ TG = role `admin` ของแอปที่ WorkID · ไม่แจ้ง TG เรื่องของตัวเอง (ตรวจของตัวเองไม่ได้อยู่แล้ว)
  */
-
-function appUrl(path: string): string {
-  return `${process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/+$/, "") ?? ""}${path}`;
-}
 
 export async function alertTgOfFaceQueue(): Promise<Record<SendResult, number>> {
   const tally: Record<SendResult, number> = { sent: 0, failed: 0, skipped: 0, duplicate: 0 };
@@ -32,25 +29,33 @@ export async function alertTgOfFaceQueue(): Promise<Record<SendResult, number>> 
   };
   const link = appUrl("/admin/faces");
 
-  const jobs: { key: string; kind: "tg_scan_review" | "tg_enroll_request"; subject: number; text: string }[] = [
+  const eyebrow = "WorkTrain · คิวใบหน้า";
+  const action = { label: "เปิดคิวใบหน้า", url: link };
+  const jobs: { key: string; kind: "tg_scan_review" | "tg_enroll_request"; subject: number; msg: LineMessage }[] = [
     // คีย์ผูกกับสแกนแรกของชุดที่ไม่ผ่านติดกัน — สแกนไม่ผ่านเพิ่มในชุดเดิมไม่แจ้งซ้ำ
     ...q.scanReviews.map((r) => ({
       key: `tg-scan-review:${r.personId}:${r.scans.at(-1)!.id}`,
       kind: "tg_scan_review" as const,
       subject: r.personId,
-      text: `🔍 ${nameOf(r.personId)} สแกนใบหน้าไม่ผ่าน ${r.scans.length} ครั้งติด — รอ TG ตรวจภาพ\n${link}`,
+      msg: cardMessage(
+        { tone: "warning", eyebrow, head: "สแกนใบหน้าไม่ผ่าน", items: [{ title: nameOf(r.personId), rows: [["ไม่ผ่าน", `${r.scans.length} ครั้งติด`], ["รอ", "TG ตรวจภาพ"]] }], action },
+        `🔍 ${nameOf(r.personId)} สแกนใบหน้าไม่ผ่าน ${r.scans.length} ครั้งติด — รอ TG ตรวจภาพ\n${link}`,
+      ),
     })),
     ...q.enrollments.map((e) => ({
       key: `tg-enroll:${e.id}`,
       kind: "tg_enroll_request" as const,
       subject: e.personId,
-      text: `🪪 ${nameOf(e.personId)} ขอลงทะเบียนใบหน้าใหม่ — รอ TG อนุมัติ\n${link}`,
+      msg: cardMessage(
+        { tone: "brand", eyebrow, head: "ขอลงทะเบียนใบหน้าใหม่", items: [{ title: nameOf(e.personId), rows: [["รอ", "TG อนุมัติ"]] }], action },
+        `🪪 ${nameOf(e.personId)} ขอลงทะเบียนใบหน้าใหม่ — รอ TG อนุมัติ\n${link}`,
+      ),
     })),
   ];
   for (const j of jobs) {
     for (const tgId of tg.personIds) {
       if (tgId === j.subject) continue;
-      const out = await sendToPerson({ dedupeKey: `${j.key}:${tgId}`, kind: j.kind, personId: tgId, text: j.text }, people);
+      const out = await sendToPerson({ dedupeKey: `${j.key}:${tgId}`, kind: j.kind, personId: tgId, text: j.msg.text, flex: j.msg.flex }, people);
       tally[out] += 1;
     }
   }

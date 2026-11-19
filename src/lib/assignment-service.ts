@@ -19,9 +19,21 @@ import {
 import { endGuardTripped, planEnds } from "@/domain/assignment-end";
 import { resolveAudience, type AudienceRule } from "@/domain/audience";
 import type { Actor } from "@/lib/auth";
-import { markCoveredBy, markSkippedBy, MAX_SEND_ATTEMPTS, sendToGroup, sendToPerson, type NotificationKind, type SendResult } from "@/lib/deliver";
+import { markCoveredBy, markSkippedBy, MAX_SEND_ATTEMPTS, sendToGroup, sendToPerson, testGroupOverride, type NotificationKind, type SendResult } from "@/lib/deliver";
+import {
+  appUrl,
+  cardMessage,
+  dayZeroMessage,
+  endedMessage,
+  notPassedGroupMessage,
+  notPassedMessage,
+  notStartedMessage,
+  overdueMessage,
+  type DayZeroVariant,
+  type LineMessage,
+} from "@/lib/line-cards";
 import { audienceMode, type Outcome } from "@/lib/set-service";
-import { ageInDays, bangkokDate, bangkokParts, formatBangkok } from "@/lib/time";
+import { ageInDays, bangkokDate, bangkokParts } from "@/lib/time";
 import { fetchOrg, fetchRolePeople, type OrgPerson } from "@/lib/workid";
 
 /**
@@ -38,11 +50,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** วันที่เตือน — นับจากวันที่ได้รับมอบ (spec §11) */
 export const REMIND_DAY3 = 3;
 export const REMIND_DAY5 = 5;
-
-function appUrl(path = "/"): string {
-  const base = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/+$/, "") ?? "";
-  return `${base}${path}`;
-}
 
 // ── ผู้รับ ─────────────────────────────────────────────────────────────────
 
@@ -297,30 +304,24 @@ export async function syncAssignments(input: { now?: Date; setId?: number; guard
   // ข้อความวันที่ 0 ที่ยังไม่ถึง (ส่งล้ม · ล้มก่อนได้จอง) ลองใหม่รอบนี้ — `claim()` ตัดสินเองว่าจองซ้ำได้ไหม
   const retry = await unsentDayZero(setIds, inOrg, new Set([...inserted, ...reopened].map((a) => a.id)), now);
   const title = (a: AssignmentRow) => setById.get(a.setId)?.title ?? "";
-  const due = (a: AssignmentRow) => formatBangkok(a.dueAt);
+  const dayZero = (variant: DayZeroVariant) => (as: AssignmentRow[]) =>
+    dayZeroMessage(variant, as.map((a) => ({ assignmentId: a.id, title: title(a), dueAt: a.dueAt })), now);
   const results = [
     ...(await sendCombined([...inserted, ...retry.filter((a) => a.assignRound === 1)], org.people, {
       kind: "assigned",
       key: dayZeroKey,
-      one: (a) => `📚 ชุดการเรียนรู้ใหม่: ${title(a)}\nเรียนแล้วสอบให้ผ่าน 80% ภายใน ${due(a)}\n${appUrl()}`,
-      many: (as) => [`📚 ชุดการเรียนรู้ใหม่ ${as.length} ชุด — เรียนแล้วสอบให้ผ่าน 80%`, ...as.map((a) => `- ${title(a)} · ภายใน ${due(a)}`), appUrl()].join("\n"),
+      message: dayZero("assigned"),
     })),
     ...(await sendCombined([...reopened, ...retry.filter((a) => a.assignRound > 1)], org.people, {
       kind: "reassigned",
       key: dayZeroKey,
-      one: (a) => `🔁 ได้รับมอบอีกครั้ง: ${title(a)}\nเรียนแล้วสอบให้ผ่าน 80% ภายใน ${due(a)}\n${appUrl()}`,
-      many: (as) => [`🔁 ได้รับมอบอีกครั้ง ${as.length} ชุด — เรียนแล้วสอบให้ผ่าน 80%`, ...as.map((a) => `- ${title(a)} · ภายใน ${due(a)}`), appUrl()].join("\n"),
+      message: dayZero("reassigned"),
     })),
     // ไม่ต้องเรียนแล้ว — เฉพาะคนที่ยังไม่ผ่านและยังอยู่ในผัง (คนลาออกไม่ต้องแจ้ง)
     ...(await sendCombined(
       ended.filter((a) => a.endReason === "not_in_audience" && !a.passedAt),
       org.people,
-      {
-        kind: "assignment_ended",
-        key: (a) => roundKey("ended", a),
-        one: (a) => `📕 ชุดการเรียนรู้ ${title(a)} ไม่ต้องเรียนแล้ว (คุณไม่อยู่ในกลุ่มผู้รับของชุดนี้แล้ว)`,
-        many: (as) => [`📕 ไม่ต้องเรียนแล้ว ${as.length} ชุด (คุณไม่อยู่ในกลุ่มผู้รับของชุดเหล่านี้แล้ว)`, ...as.map((a) => `- ${title(a)}`)].join("\n"),
-      },
+      { kind: "assignment_ended", key: (a) => roundKey("ended", a), message: (as) => endedMessage(as.map(title)) },
     )),
   ];
   return {
@@ -341,7 +342,7 @@ export async function syncAssignments(input: { now?: Date; setId?: number; guard
 async function sendCombined<T extends Pick<AssignmentRow, "id" | "setId" | "personId">>(
   rows: readonly T[],
   people: readonly OrgPerson[],
-  spec: { kind: NotificationKind; key: (r: T) => string; one: (r: T) => string; many: (rs: T[]) => string },
+  spec: { kind: NotificationKind; key: (r: T) => string; message: (rs: T[]) => LineMessage },
 ): Promise<SendResult[]> {
   const byPerson = new Map<number, T[]>();
   for (const r of rows) byPerson.set(r.personId, [...(byPerson.get(r.personId) ?? []), r]);
@@ -350,11 +351,13 @@ async function sendCombined<T extends Pick<AssignmentRow, "id" | "setId" | "pers
       const sorted = [...list].sort((a, b) => a.id - b.id);
       if (sorted.length === 1) {
         const r = sorted[0];
-        return [await sendToPerson({ dedupeKey: spec.key(r), kind: spec.kind, personId, setId: r.setId, assignmentId: r.id, text: spec.one(r) }, people)];
+        const m = spec.message(sorted);
+        return [await sendToPerson({ dedupeKey: spec.key(r), kind: spec.kind, personId, setId: r.setId, assignmentId: r.id, text: m.text, flex: m.flex }, people)];
       }
       const keys = sorted.map(spec.key);
       const groupKey = `${spec.kind}-combined:${createHash("sha256").update(keys.join(",")).digest("hex").slice(0, 32)}`;
-      const res = await sendToPerson({ dedupeKey: groupKey, kind: spec.kind, personId, text: spec.many(sorted) }, people);
+      const m = spec.message(sorted);
+      const res = await sendToPerson({ dedupeKey: groupKey, kind: spec.kind, personId, text: m.text, flex: m.flex }, people);
       const items = sorted.map((r) => ({ dedupeKey: spec.key(r), kind: spec.kind, personId, setId: r.setId, assignmentId: r.id }));
       if (res === "sent") await markCoveredBy(groupKey, items);
       else if (res === "skipped") await markSkippedBy(groupKey, items);
@@ -383,12 +386,23 @@ async function heldSinceEarlierDay(ids: number[], open: number, now: Date): Prom
     return false;
   }
   const org = await fetchOrg(now.getTime());
-  const text = [
-    `⚠️ รอบเช้านี้ระบบจะตัดจบ ${sorted.length} การมอบ (จาก ${open} ที่เปิดอยู่) — มากผิดปกติ จึงหยุดไว้ก่อน`,
-    "ถ้าพรุ่งนี้ผัง WorkID ยังบอกเหมือนเดิม ระบบจะตัดจบตามนั้น",
-    appUrl("/dashboard"),
-  ].join("\n");
-  for (const tgId of tg.personIds) await sendToPerson({ dedupeKey: `${key}:tg${tgId}`, kind: "end_guard", personId: tgId, text }, org.ok ? org.people : null);
+  const msg = cardMessage(
+    {
+      tone: "danger",
+      eyebrow: "WorkTrain · ถึง TG",
+      head: "หยุดการตัดจบไว้ก่อน",
+      intro: `รอบเช้านี้ระบบจะตัดจบ ${sorted.length} การมอบ (จาก ${open} ที่เปิดอยู่) — มากผิดปกติ`,
+      lines: ["ถ้าพรุ่งนี้ผัง WorkID ยังบอกเหมือนเดิม ระบบจะตัดจบตามนั้น"],
+      action: { label: "ดูภาพรวม", url: appUrl("/dashboard") },
+    },
+    [
+      `⚠️ รอบเช้านี้ระบบจะตัดจบ ${sorted.length} การมอบ (จาก ${open} ที่เปิดอยู่) — มากผิดปกติ จึงหยุดไว้ก่อน`,
+      "ถ้าพรุ่งนี้ผัง WorkID ยังบอกเหมือนเดิม ระบบจะตัดจบตามนั้น",
+      appUrl("/dashboard"),
+    ].join("\n"),
+  );
+  for (const tgId of tg.personIds)
+    await sendToPerson({ dedupeKey: `${key}:tg${tgId}`, kind: "end_guard", personId: tgId, text: msg.text, flex: msg.flex }, org.ok ? org.people : null);
   return false;
 }
 
@@ -413,6 +427,62 @@ async function unsentDayZero(setIds: number[], inOrg: Set<number>, skip: Set<num
   if (!open.length) return [];
   const done = await sentOrSkipped(open.map(dayZeroKey));
   return open.filter((a) => !done.has(dayZeroKey(a)));
+}
+
+/**
+ * แจ้งซ้ำถึงตัวจริงหลังเลิกช่วงทดสอบ (ADR-0024) — การมอบที่ยังเปิดอยู่ ซึ่งข้อความวันที่ 0 ถูกส่งเข้ากลุ่ม Test
+ *
+ * ★ รู้ว่าเข้ากลุ่ม Test จาก `notifications.line_group_id`: ข้อความตัวต่อตัวลงค่านี้เฉพาะตอนส่งเข้ากลุ่ม Test
+ *   (ส่งจริงลง null · ข้อความรวมก็ยกค่าจากแถวรวมมา) · แถวที่ลองซ้ำหลังเปิดใช้จริงถูกเขียนทับเป็น null
+ * ★ คีย์ `golive:<คีย์วันที่ 0>` — ส่งครั้งเดียวต่อการมอบต่อรอบ · ล้มแล้วรอบ cron ถัดไปลองใหม่ ·
+ *   ยังอยู่ช่วงทดสอบ (`TEST_LINE_GROUP_ID` ตั้งอยู่) = ไม่ทำอะไร ไม่งั้นแค่ส่งเข้ากลุ่ม Test ซ้ำ
+ * ★ ข้ามคนที่ผ่านแล้ว · ถูกตัดจบ · เลยกำหนด · ไม่อยู่ในผัง · ชุดไม่ได้ใช้อยู่ — หลังรอบแรกไม่เหลืออะไรให้ส่ง (หยุดเอง)
+ */
+export async function resendTestPeriodAssignments(input: { now?: Date } = {}): Promise<Record<SendResult, number>> {
+  if (testGroupOverride()) return tally([]);
+  const now = input.now ?? new Date();
+  const open = await db()
+    .select({ a: assignments, title: learningSets.title })
+    .from(assignments)
+    .innerJoin(learningSets, eq(learningSets.id, assignments.setId))
+    .where(and(eq(learningSets.status, "active"), isNull(assignments.passedAt), isNull(assignments.endedAt), gt(assignments.dueAt, now)));
+  if (!open.length) return tally([]);
+  const viaTest = new Set(
+    (
+      await db()
+        .select({ key: notifications.dedupeKey })
+        .from(notifications)
+        .where(
+          and(
+            inArray(notifications.dedupeKey, open.map((r) => dayZeroKey(r.a))),
+            eq(notifications.status, "sent"),
+            isNotNull(notifications.lineGroupId),
+          ),
+        )
+    ).map((r) => r.key),
+  );
+  const goliveKey = (a: AssignmentRow) => `golive:${dayZeroKey(a)}`;
+  const candidates = open.filter((r) => viaTest.has(dayZeroKey(r.a)));
+  if (!candidates.length) return tally([]);
+  const org = await fetchOrg(now.getTime());
+  if (!org.ok) {
+    console.log(JSON.stringify({ msg: "golive_resend_no_org", why: org.why, pending: candidates.length }));
+    return tally([]);
+  }
+  const inOrg = new Set(org.people.map((p) => p.personId));
+  const done = await sentOrSkipped(candidates.map((r) => goliveKey(r.a)));
+  const pending = candidates.filter((r) => inOrg.has(r.a.personId) && !done.has(goliveKey(r.a)));
+  return tally(
+    await sendCombined(
+      pending.map((r) => ({ id: r.a.id, setId: r.a.setId, personId: r.a.personId, r })),
+      org.people,
+      {
+        kind: "assigned",
+        key: (x) => goliveKey(x.r.a),
+        message: (xs) => dayZeroMessage("golive", xs.map((x) => ({ assignmentId: x.r.a.id, title: x.r.title, dueAt: x.r.a.dueAt })), now),
+      },
+    ),
+  );
 }
 
 // ── เตือน ──────────────────────────────────────────────────────────────────
@@ -469,6 +539,10 @@ export async function runReminders(input: { now?: Date } = {}): Promise<Reminder
   const day3Key = (r: Live) => roundKey("remind-day3", r.a);
   const day5Key = (r: Live) => roundKey("remind-day5", r.a);
   const asRow = (r: Live) => ({ id: r.a.id, setId: r.a.setId, personId: r.a.personId, r });
+  const personDue = (r: Live) => {
+    const p = inOrg.get(r.a.personId)!;
+    return { assignmentId: r.a.id, title: r.title, dueAt: r.a.dueAt, person: p.nickname ?? p.name };
+  };
 
   const day3All = live.filter((r) => ageDays(r.a) >= REMIND_DAY3 && !started.has(r.a.id) && r.a.dueAt > now);
   const day3Done = await sentOrSkipped(day3All.map(day3Key));
@@ -478,8 +552,7 @@ export async function runReminders(input: { now?: Date } = {}): Promise<Reminder
     {
       kind: "remind_day3",
       key: (x) => day3Key(x.r),
-      one: (x) => `⏰ ยังไม่ได้เริ่มเรียน: ${x.r.title}\nกำหนดส่ง ${formatBangkok(x.r.a.dueAt)}\n${appUrl()}`,
-      many: (xs) => [`⏰ ยังไม่ได้เริ่มเรียน ${xs.length} ชุด`, ...xs.map((x) => `- ${x.r.title} · กำหนดส่ง ${formatBangkok(x.r.a.dueAt)}`), appUrl()].join("\n"),
+      message: (xs) => notStartedMessage(xs.map((x) => personDue(x.r)), now),
     },
   );
 
@@ -495,27 +568,24 @@ export async function runReminders(input: { now?: Date } = {}): Promise<Reminder
     if (g) byGroup.set(g, [...(byGroup.get(g) ?? []), r]);
     else day5Solo.push(r);
   }
-  const line5 = (r: Live) => {
-    const p = inOrg.get(r.a.personId)!;
-    return `- ${p.nickname ?? p.name} · ${r.title} · กำหนดส่ง ${formatBangkok(r.a.dueAt)}`;
-  };
   const soloResults = await sendCombined(day5Solo.map(asRow), org.people, {
     kind: "remind_day5",
     key: (x) => day5Key(x.r),
-    one: (x) => `⚠️ ยังสอบไม่ผ่าน\n${line5(x.r)}\n${appUrl()}`,
-    many: (xs) => [`⚠️ ยังสอบไม่ผ่าน (${xs.length})`, ...xs.map((x) => line5(x.r)), appUrl()].join("\n"),
+    message: (xs) => notPassedMessage(xs.map((x) => personDue(x.r)), now),
   });
   const groupResults = await Promise.all(
     [...byGroup.entries()].map(async ([lineGroupId, rows]) => {
       const keys = rows.map(day5Key).sort();
       // คีย์ของข้อความรวม = ชุดการมอบในข้อความ — ส่งล้มแล้วรอบถัดไปชุดเดิมจองซ้ำได้ · มีคนเพิ่ม = ข้อความใหม่เฉพาะที่ยังค้าง
       const groupKey = `remind-day5-group:${createHash("sha256").update(keys.join(",")).digest("hex").slice(0, 32)}`;
+      const msg = notPassedGroupMessage(rows.map(personDue), now);
       const out = await sendToGroup({
         dedupeKey: groupKey,
         kind: "remind_day5",
         personId: rows.length === 1 ? rows[0].a.personId : null,
         lineGroupId,
-        text: [`⚠️ ยังสอบไม่ผ่าน (${rows.length})`, ...rows.map(line5), appUrl()].join("\n"),
+        text: msg.text,
+        flex: msg.flex,
       });
       // ส่งถึงแล้ว = ทุกการมอบในข้อความนี้นับว่าเตือนวันที่ 5 แล้ว (ใช้ jobId ของข้อความรวม)
       if (out === "sent") await markCoveredBy(groupKey, rows.map((r) => ({ dedupeKey: day5Key(r), kind: "remind_day5", personId: r.a.personId, setId: r.a.setId, assignmentId: r.a.id })));
@@ -534,17 +604,13 @@ export async function runReminders(input: { now?: Date } = {}): Promise<Reminder
     }
     const ymd = bangkokDate(now);
     overdueResults = await Promise.all(
-      [...byManager.entries()].map(([boss, rows]) =>
-        sendToPerson(
-          {
-            dedupeKey: `overdue:${boss}:${ymd}`,
-            kind: "overdue_summary",
-            personId: boss,
-            text: [`📋 ลูกทีมที่เลยกำหนดส่งและยังสอบไม่ผ่าน (${rows.length})`, ...rows.map((r) => `- ${r.a.personName} · ${r.title}`)].join("\n"),
-          },
-          org.people,
-        ),
-      ),
+      [...byManager.entries()].map(([boss, rows]) => {
+        const msg = overdueMessage(
+          rows.map((r) => ({ assignmentId: r.a.id, title: r.title, dueAt: r.a.dueAt, person: r.a.personName })),
+          now,
+        );
+        return sendToPerson({ dedupeKey: `overdue:${boss}:${ymd}`, kind: "overdue_summary", personId: boss, text: msg.text, flex: msg.flex }, org.people);
+      }),
     );
   }
 
@@ -571,18 +637,60 @@ export async function notifyApprovalEvent(eventId: number): Promise<SendResult |
   const byTg = d.onBehalfOf !== undefined;
   const who = byTg ? `${e.actorName} (TG)` : e.actorName;
   const instead = byTg && d.onBehalfOf ? `แทน ${d.onBehalfOf.name ?? "ผู้อนุมัติ"}` : "";
+  const eyebrow = "WorkTrain · การอนุมัติ";
+  const open = { label: "เปิดชุดนี้", url: link };
+  const byWhom = `${who}${instead ? ` ${instead}` : ""}`;
   const plan =
     e.action === "submitted" && set.approverPersonId
-      ? { kind: "approval_requested" as const, to: set.approverPersonId, text: `📝 ${set.authorName} ส่งข้อสอบให้ตรวจ: ${set.title}\n${link}` }
+      ? {
+          kind: "approval_requested" as const,
+          to: set.approverPersonId,
+          msg: cardMessage(
+            { tone: "brand", eyebrow, head: "ส่งข้อสอบให้ตรวจ", items: [{ title: set.title, rows: [["ผู้สร้าง", set.authorName]] }], action: open },
+            `📝 ${set.authorName} ส่งข้อสอบให้ตรวจ: ${set.title}\n${link}`,
+          ),
+        }
       : e.action === "returned"
-        ? { kind: "approval_returned" as const, to: set.authorPersonId, text: `↩️ ${who} ตีกลับ${instead}: ${set.title}\n${e.comment ?? ""}\n${link}` }
+        ? {
+            kind: "approval_returned" as const,
+            to: set.authorPersonId,
+            msg: cardMessage(
+              { tone: "warning", eyebrow, head: "ตีกลับให้แก้", items: [{ title: set.title, rows: [["โดย", byWhom], ["ความเห็น", e.comment ?? ""]] }], action: open },
+              `↩️ ${who} ตีกลับ${instead}: ${set.title}\n${e.comment ?? ""}\n${link}`,
+            ),
+          }
         : e.action === "approved"
-          ? { kind: "approval_approved" as const, to: set.authorPersonId, text: `✅ ${who} อนุมัติ${instead || "แล้ว"}: ${set.title}\n${link}` }
+          ? {
+              kind: "approval_approved" as const,
+              to: set.authorPersonId,
+              msg: cardMessage(
+                { tone: "success", eyebrow, head: "อนุมัติแล้ว", items: [{ title: set.title, rows: [["โดย", byWhom]] }], action: open },
+                `✅ ${who} อนุมัติ${instead || "แล้ว"}: ${set.title}\n${link}`,
+              ),
+            }
           : e.action === "audience_changed" && d.by === "approver"
             ? {
                 kind: "audience_added" as const,
                 to: set.authorPersonId,
-                text: `➕ ${e.actorName} (ผู้อนุมัติ) เพิ่มผู้รับในชุด ${set.title}: ${(d.added ?? []).join(" · ")}${d.gained ? ` (+${d.gained} คน)` : ""}\n${link}`,
+                msg: cardMessage(
+                  {
+                    tone: "brand",
+                    eyebrow,
+                    head: "ผู้อนุมัติเพิ่มผู้รับ",
+                    items: [
+                      {
+                        title: set.title,
+                        rows: [
+                          ["โดย", e.actorName],
+                          ["เพิ่ม", (d.added ?? []).join(" · ")],
+                          ["ผู้รับเพิ่ม", d.gained ? `${d.gained} คน` : ""],
+                        ],
+                      },
+                    ],
+                    action: open,
+                  },
+                  `➕ ${e.actorName} (ผู้อนุมัติ) เพิ่มผู้รับในชุด ${set.title}: ${(d.added ?? []).join(" · ")}${d.gained ? ` (+${d.gained} คน)` : ""}\n${link}`,
+                ),
               }
             : null;
   if (!plan) return null;
@@ -590,17 +698,18 @@ export async function notifyApprovalEvent(eventId: number): Promise<SendResult |
   const people = org.ok ? org.people : null;
   // ไม่แจ้งคนที่กดเอง — TG อนุมัติชุดที่ตัวเองสร้าง
   const main =
-    plan.to === e.actorPersonId ? null : await sendToPerson({ dedupeKey: `approval:${e.id}`, kind: plan.kind, personId: plan.to, setId: set.id, text: plan.text }, people);
+    plan.to === e.actorPersonId
+      ? null
+      : await sendToPerson({ dedupeKey: `approval:${e.id}`, kind: plan.kind, personId: plan.to, setId: set.id, text: plan.msg.text, flex: plan.msg.flex }, people);
   // TG กดแทน → บอกผู้อนุมัติตัวจริงด้วย จะได้ไม่เข้าไปหางานที่เสร็จไปแล้ว
   if (byTg && d.onBehalfOf && (e.action === "approved" || e.action === "returned") && d.onBehalfOf.personId !== e.actorPersonId) {
+    const verb = e.action === "approved" ? "อนุมัติ" : "ตีกลับ";
+    const msg = cardMessage(
+      { tone: "neutral", eyebrow, head: `TG ${verb}แทนคุณแล้ว`, items: [{ title: set.title, rows: [["โดย", who]] }], action: open },
+      `ℹ️ ${who} ${verb}แทนคุณแล้ว: ${set.title}\n${link}`,
+    );
     await sendToPerson(
-      {
-        dedupeKey: `approval:${e.id}:approver`,
-        kind: plan.kind,
-        personId: d.onBehalfOf.personId,
-        setId: set.id,
-        text: `ℹ️ ${who} ${e.action === "approved" ? "อนุมัติ" : "ตีกลับ"}แทนคุณแล้ว: ${set.title}\n${link}`,
-      },
+      { dedupeKey: `approval:${e.id}:approver`, kind: plan.kind, personId: d.onBehalfOf.personId, setId: set.id, text: msg.text, flex: msg.flex },
       people,
     );
   }

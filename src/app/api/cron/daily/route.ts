@@ -1,6 +1,6 @@
 import { errorSummary } from "@/lib/errmsg";
 import { reportHeartbeat } from "@/lib/gateway";
-import { retryApprovalNotices, runReminders, syncAssignments } from "@/lib/assignment-service";
+import { resendTestPeriodAssignments, retryApprovalNotices, runReminders, syncAssignments } from "@/lib/assignment-service";
 import { deleteExpiredScanImages, deleteRetiredEnrollmentImages } from "@/lib/identity-service";
 import { alertTgOfFaceQueue } from "@/lib/tg-alerts";
 import { retryNewVersionNotices } from "@/lib/version-service";
@@ -27,6 +27,8 @@ export async function GET(req: Request) {
   try {
     const now = new Date();
     const sync = await syncAssignments({ now });
+    // หลังเลิกช่วงทดสอบ: การมอบที่ยังเปิดอยู่ซึ่งเคยแจ้งเข้ากลุ่ม Test ได้รับแจ้งถึงตัวจริงครั้งเดียว (ADR-0024)
+    const golive = await resendTestPeriodAssignments({ now });
     const remind = await runReminders({ now });
     // ข้อความที่ล้มไปแล้วของเหตุการณ์ที่ไม่เกิดซ้ำเอง (อนุมัติ · เวอร์ชันใหม่)
     const retries = {
@@ -36,7 +38,7 @@ export async function GET(req: Request) {
       tgFaces: await alertTgOfFaceQueue(),
     };
     const imagesDeleted = (await deleteExpiredScanImages(now)) + (await deleteRetiredEnrollmentImages());
-    const groups = [sync.notified, remind.day3, remind.day5, remind.overdue, retries.approvals, retries.versions, retries.tgFaces];
+    const groups = [sync.notified, golive, remind.day3, remind.day5, remind.overdue, retries.approvals, retries.versions, retries.tgFaces];
     const failed = groups.reduce((n, g) => n + g.failed, 0);
     const sent = groups.reduce((n, g) => n + g.sent, 0);
     const healthy = sync.ok && remind.ok && failed === 0;
@@ -46,8 +48,8 @@ export async function GET(req: Request) {
       failed,
       message: `assigned=${sync.assigned} sent=${sent} failed=${failed} imagesDeleted=${imagesDeleted}${sync.why ? ` sync=${sync.why}` : ""}${remind.why ? ` remind=${remind.why}` : ""}`,
     });
-    console.log(JSON.stringify({ msg: "cron_daily_done", sync, remind, retries, imagesDeleted }));
-    return Response.json({ ok: healthy, sync, remind, retries, imagesDeleted });
+    console.log(JSON.stringify({ msg: "cron_daily_done", sync, golive, remind, retries, imagesDeleted }));
+    return Response.json({ ok: healthy, sync, golive, remind, retries, imagesDeleted });
   } catch (err) {
     await reportHeartbeat(HB_JOB, false, { ...HB, message: errorSummary(err) });
     console.log(JSON.stringify({ msg: "cron_daily_failed", error: errorSummary(err) }));
