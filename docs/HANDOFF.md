@@ -37,5 +37,7 @@
 ## งานถัดไป (ต้องมีคน)
 1. ลองสแกนหน้าบนมือถือจริงกับ AWS · ลองทำข้อสอบบน production · ล็อกอินเปิด `/admin/kinds` · `/admin/api-keys` · `/consent` บน production
 2. ลองอนุมัติชุดแรก → ดูข้อความเข้ากลุ่ม Test ครบ (มอบงาน · เตือนวันที่ 3/5 · แจ้ง TG)
-3. เปิดใช้จริง: ลบ `TEST_LINE_GROUP_ID` ออกจาก Production แล้ว redeploy
+3. เปิดใช้จริง (ADR-0024): หลัง deploy การ์ด Flex ดูหน้าตาในกลุ่ม Test ก่อน → ลบ `TEST_LINE_GROUP_ID` ออกจาก Production แล้ว redeploy ·
+   รอบเช้า 09:00 ถัดไปส่งการ์ด "ชุดการเรียนรู้ที่ต้องเรียน" ถึงคนที่ได้รับมอบช่วงทดสอบและยังไม่ผ่านเอง (ดูผล `golive` ใน log `cron_daily_done`) ·
+   ก่อนวันนั้นประกาศให้พนักงานผูก LINE กับ WorkID (`#me` ใน Work Bot) และแอด Work Bot เป็นเพื่อน — ไม่งั้นข้อความถูกข้าม (`skipped`)
 4. เมื่อ WorkHR จะดึงผล: TG ออก key ระบบ `workhr` (ชื่อ key เช่น "WorkHR — production") ที่ `/admin/api-keys` แล้วส่งให้ทีม WorkHR ทางช่องส่วนตัว

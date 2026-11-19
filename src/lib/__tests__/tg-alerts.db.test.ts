@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { flexTexts, type FlexMessage } from "@/lib/flex";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
 import { clearOrgCache } from "@/lib/workid";
@@ -6,6 +7,10 @@ import { clearOrgCache } from "@/lib/workid";
 /**
  * แจ้ง TG ทาง LINE เมื่อมีงานในคิวใบหน้า (spec §11) — ผังและ TG มาจาก env dev · GateWay ปลอมที่ระดับ fetch
  */
+
+/** ข้อความที่ส่งไป GateWay อ่านเป็นข้อความเดียว — การ์ด = altText + ทุกข้อความในการ์ด (ADR-0024) */
+type PushedMessage = { type: "text"; text: string } | FlexMessage;
+const readable = (ms: PushedMessage[]) => ms.map((m) => (m.type === "flex" ? [m.altText, ...flexTexts(m)].join("\n") : m.text)).join("\n");
 
 vi.mock("@/db", async () => {
   const s = await import("@/db/schema");
@@ -43,13 +48,14 @@ beforeEach(async () => {
   vi.stubEnv("WORKTRAIN_DEV_ORG", JSON.stringify(ORG));
   vi.stubEnv("WORKTRAIN_DEV_ADMINS", `${TG_A},${TG_B}`);
   vi.stubEnv("GATEWAY_BASE_URL", "https://gw.test");
+  vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://worktrain.test");
   vi.stubEnv("GATEWAY_API_KEY", "k");
   vi.stubEnv("GATEWAY_LINE_CHANNEL_ID", "1");
   vi.stubEnv("TEST_LINE_GROUP_ID", TEST_GROUP);
   let n = 0;
   vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body)) as { messages: { text: string }[] };
-    pushes.push(body.messages.map((m) => m.text).join("\n"));
+    const body = JSON.parse(String(init?.body)) as { messages: PushedMessage[] };
+    pushes.push(readable(body.messages));
     return new Response(JSON.stringify({ status: "queued", jobId: `job-${++n}` }), { status: 202 });
   });
 });

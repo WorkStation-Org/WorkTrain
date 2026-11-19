@@ -6,6 +6,7 @@ import { DELTA_BLUEPRINT, type Blueprint } from "@/domain/blueprint";
 import type { Actor } from "@/lib/auth";
 import { MAX_SEND_ATTEMPTS, sendToPerson, type SendResult } from "@/lib/deliver";
 import { checkForms, type ExamModel } from "@/lib/exam-generator";
+import { newVersionMessage } from "@/lib/line-cards";
 import { formsComplete, logFormsEvent, replaceForms, sourceDocuments } from "@/lib/exam-service";
 import { approverRole, canEditVersion, currentVersion, onBehalfDetail, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
 import { fetchOrg } from "@/lib/workid";
@@ -207,10 +208,6 @@ export async function approveVersion(input: { actor: Actor; setId: number; now?:
   return { ok: true, eventId: eventIdOf(results), versionId: v.id };
 }
 
-function appUrl(path: string): string {
-  return `${process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/+$/, "") ?? ""}${path}`;
-}
-
 /** แจ้งผู้เรียนที่ผ่านแล้วว่ามีเวอร์ชันใหม่ (spec §11) — ส่งไม่ได้ไม่ทำให้การอนุมัติล้ม */
 export async function notifyNewVersion(versionId: number): Promise<Record<SendResult, number>> {
   const tally: Record<SendResult, number> = { sent: 0, failed: 0, skipped: 0, duplicate: 0 };
@@ -226,28 +223,22 @@ export async function notifyNewVersion(versionId: number): Promise<Record<SendRe
   const org = await fetchOrg();
   const what = row.v.changeKind === "large" ? `${CHANGE_KIND_LABELS.large}: สอบเฉพาะส่วนที่เปลี่ยน (~5 ข้อ)` : `${CHANGE_KIND_LABELS.small}: อ่านสิ่งที่เปลี่ยนแล้วกดรับทราบ`;
   const results = await Promise.all(
-    targets.map((a) =>
-      sendToPerson(
-        {
-          dedupeKey: `version:${versionId}:${a.id}`,
-          kind: "new_version",
-          personId: a.personId,
-          setId: a.setId,
-          assignmentId: a.id,
-          text: `🔄 ${row.title} มีเวอร์ชันใหม่${row.v.label ? ` (${row.v.label})` : ""} — ${what}\n${appUrl(`/learn/${a.id}`)}`,
-        },
+    targets.map((a) => {
+      const msg = newVersionMessage({ assignmentId: a.id, title: row.title, label: row.v.label, what });
+      return sendToPerson(
+        { dedupeKey: `version:${versionId}:${a.id}`, kind: "new_version", personId: a.personId, setId: a.setId, assignmentId: a.id, text: msg.text, flex: msg.flex },
         // ถามผังไม่ได้ = `failed` ไม่ใช่ `skipped` (ทิ้งถาวร)
         org.ok ? org.people : null,
-      ),
-    ),
+      );
+    }),
   );
   for (const r of results) tally[r] += 1;
   return tally;
 }
 
 /**
- * ส่งข้อความ "เวอร์ชันใหม่" ที่ล้มไปแล้วซ้ำ — รันใน cron เช้า · ใช้ข้อความเดิมที่บันทึกไว้ (`notifications.text`)
- * ข้ามคนที่ไม่ต้องรู้แล้ว (การมอบหายหรือชุดเลิกใช้) · `claim()` คุมเพดานจำนวนครั้งและกันส่งซ้ำ
+ * ส่งข้อความ "เวอร์ชันใหม่" ที่ล้มไปแล้วซ้ำ — รันใน cron เช้า · สร้างการ์ดใหม่จากเวอร์ชันนั้น (`notifyNewVersion`)
+ * ข้ามคนที่ไม่ต้องรู้แล้ว (การมอบหายหรือชุดเลิกใช้) · `claim()` คุมเพดานจำนวนครั้งและกันส่งซ้ำ — คนที่ส่งแล้วได้ `duplicate`
  */
 export async function retryNewVersionNotices(): Promise<Record<SendResult, number>> {
   const tally: Record<SendResult, number> = { sent: 0, failed: 0, skipped: 0, duplicate: 0 };
@@ -267,14 +258,13 @@ export async function retryNewVersionNotices(): Promise<Record<SendResult, numbe
         isNotNull(notifications.text),
       ),
     );
-  if (!rows.length) return tally;
-  const org = await fetchOrg();
-  for (const { n } of rows) {
-    const out = await sendToPerson(
-      { dedupeKey: n.dedupeKey, kind: "new_version", personId: n.personId!, setId: n.setId, assignmentId: n.assignmentId, text: n.text! },
-      org.ok ? org.people : null,
-    );
-    tally[out] += 1;
+  const versionIds = new Set(rows.flatMap(({ n }) => {
+    const id = Number(/^version:(\d+):\d+$/.exec(n.dedupeKey)?.[1]);
+    return Number.isInteger(id) ? [id] : [];
+  }));
+  for (const id of versionIds) {
+    const out = await notifyNewVersion(id);
+    for (const k of Object.keys(tally) as SendResult[]) tally[k] += out[k];
   }
   return tally;
 }

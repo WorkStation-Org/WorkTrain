@@ -21,13 +21,15 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/session.ts` + `src/proxy.ts` — session cookie ที่เซ็นแล้ว · ถาม WorkID ใหม่ทุก 5 นาที (fail-open)
 - `src/lib/workid.ts` — SSO · `/v1/session/check` · `fetchOrg()` (ผัง: `positionId` · `teamId` · `managedTeamIds` · `managerPersonId` · `lineGroupId`)
 - `src/lib/gateway.ts` — client ของ WorkGateWay · `src/lib/deliver.ts` — ส่งตัวต่อตัว/เข้ากลุ่มประจำตัว พร้อมจองแถวและบันทึกผล (ยกจาก WorkDaily)
+- `src/lib/line-cards.ts` — การ์ด Flex ของทุกข้อความ (คู่กับข้อความล้วนเสมอ) · `src/lib/flex.ts` — ตัวสร้าง/ตัวตรวจ Flex (ยกจาก WorkDaily) ·
+  ไม่ผ่าน `checkFlexMessage()` = ส่งข้อความล้วนแทน · สีตรงกับ `--wt-*` (ADR-0024)
 - `src/domain/audience.ts` — เงื่อนไขผู้รับ → รายชื่อ · `src/lib/assignment-service.ts` — ผู้รับ · มอบ/ตัดจบ/เปิดใหม่ (`syncAssignments`) · เตือน (`runReminders`) ·
   แจ้งเรื่องอนุมัติ · ข้อความรายคนรวมต่อคนต่อรอบ (`sendCombined`) · `src/domain/assignment-end.ts` — กติกาตัดจบ · ด่านกันผังเพี้ยน · ซ่อนจากรายชื่อ (ADR-0017)
 - `src/lib/onboarding-service.ts` — เส้นทาง Onboarding (`/admin/onboarding`) · `trainingStatus()` ให้ WorkHR ·
   `src/lib/api-consumers.ts` — ด่าน `/api/v1/*` (Bearer `wtr_…` · ตาราง `api_consumers` เก็บแค่ hash · TG ออก/ถอนที่ `/admin/api-keys` · ADR-0012)
 - `src/domain/stats.ts` — สถิติรายคนต่อเดือน · Leaderboard (คะแนนครั้งแรก → ความไว) · `src/lib/stats-service.ts` — `/dashboard` ·
   การมองเห็นตามบทบาท · export CSV · ตัด TG ด้วย `fetchRolePeople("admin")` (WorkID `/v1/apps/worktrain/people`)
-- `src/app/api/cron/daily` — รอบเช้า 09:00: มอบให้คนที่เพิ่งตรงเงื่อนไข แล้วเตือนวันที่ 3 / 5 / เลยกำหนด
+- `src/app/api/cron/daily` — รอบเช้า 09:00: มอบให้คนที่เพิ่งตรงเงื่อนไข · แจ้งซ้ำการมอบที่เคยเข้ากลุ่ม Test เมื่อเลิกช่วงทดสอบ (`resendTestPeriodAssignments`) แล้วเตือนวันที่ 3 / 5 / เลยกำหนด
 - `src/domain/exam.ts` — เลือกชุด (ไม่ซ้ำจนครบ 5) · สลับข้อ/ตัวเลือก · ย้อนแก้ได้ ข้ามไม่ได้ (`lastOpenIndex`) · คะแนน · ไม่ผ่านทำใหม่ได้ 1 ครั้ง ครั้งที่ 2 = อ่านใหม่ (ADR-0021)
 - `src/lib/rekognition.ts` — **ที่เดียวที่คุยกับ AWS** (`FaceApi`: liveness session · ผล liveness · CompareFaces · credential ชั่วคราวให้เบราว์เซอร์)
 - `src/lib/identity-service.ts` — ความยินยอม PDPA · ลงทะเบียนใบหน้า (ครั้งแรกใช้ได้ทันที · ใหม่ต้องให้ TG อนุมัติ) · `beginScan`/`finishScan` เทียบฝั่งเซิร์ฟเวอร์ ·

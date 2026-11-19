@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { flexTexts, type FlexMessage } from "@/lib/flex";
 import { asc, eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { setupTestDb, testDb, truncateAll } from "@/db/__tests__/pgdb";
@@ -11,13 +12,19 @@ import { clearOrgCache } from "@/lib/workid";
  * ผังมาจาก `WORKTRAIN_DEV_ORG` · ทุกข้อความไปกลุ่ม Test (`TEST_LINE_GROUP_ID`) ผ่าน GateWay ปลอมที่ระดับ fetch
  */
 
+/** ข้อความที่ส่งไป GateWay อ่านเป็นข้อความเดียว — การ์ด = altText + ทุกข้อความในการ์ด (ADR-0024) */
+type PushedMessage = { type: "text"; text: string } | FlexMessage;
+const readable = (ms: PushedMessage[]) => ms.map((m) => (m.type === "flex" ? [m.altText, ...flexTexts(m)].join("\n") : m.text)).join("\n");
+
 vi.mock("@/db", async () => {
   const s = await import("@/db/schema");
   const { testDb: get } = await import("@/db/__tests__/pgdb");
   return { db: () => get(), schema: s };
 });
 
-const { setAudience, previewAudience, syncAssignments, runReminders, notifyApprovalEvent, retryApprovalNotices } = await import("@/lib/assignment-service");
+const { setAudience, previewAudience, syncAssignments, runReminders, notifyApprovalEvent, retryApprovalNotices, resendTestPeriodAssignments } = await import(
+  "@/lib/assignment-service"
+);
 
 const TEST_GROUP = `C${"e".repeat(32)}`;
 const TEAM_GROUP = `C${"a".repeat(32)}`;
@@ -39,13 +46,14 @@ let pushes: { to: string; text: string; key: string }[] = [];
 
 function stubGateway() {
   vi.stubEnv("GATEWAY_BASE_URL", "https://gw.test");
+  vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://worktrain.test");
   vi.stubEnv("GATEWAY_API_KEY", "k");
   vi.stubEnv("GATEWAY_LINE_CHANNEL_ID", "1");
   vi.stubEnv("TEST_LINE_GROUP_ID", TEST_GROUP);
   let n = 0;
   vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body)) as { to: string; messages: { text: string }[]; idempotencyKey: string };
-    pushes.push({ to: body.to, text: body.messages.map((m) => m.text).join("\n"), key: body.idempotencyKey });
+    const body = JSON.parse(String(init?.body)) as { to: string; messages: PushedMessage[]; idempotencyKey: string };
+    pushes.push({ to: body.to, text: readable(body.messages), key: body.idempotencyKey });
     return new Response(JSON.stringify({ status: "queued", jobId: `job-${++n}` }), { status: 202 });
   });
 }
@@ -253,13 +261,14 @@ describe("เตือนแบบไล่ระดับ (spec §11)", () => {
     vi.stubEnv("TEST_LINE_GROUP_ID", "");
     vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
       if (String(url).includes("/api/v1/people/")) return new Response("{}", { status: 503 });
-      const body = JSON.parse(String(init?.body)) as { to: string; messages: { text: string }[]; idempotencyKey: string };
-      pushes.push({ to: body.to, text: body.messages[0].text, key: body.idempotencyKey });
+      const body = JSON.parse(String(init?.body)) as { to: string; messages: PushedMessage[]; idempotencyKey: string };
+      pushes.push({ to: body.to, text: readable(body.messages), key: body.idempotencyKey });
       return new Response(JSON.stringify({ status: "queued", jobId: "j" }), { status: 202 });
     });
     const out = await runReminders({ now: MON });
     expect(pushes.map((p) => p.to)).toContain(TEAM_GROUP);
-    expect(pushes.find((p) => p.to === TEAM_GROUP)?.text).toContain("- หนึ่ง · ชุด");
+    // การ์ดไล่ชื่อคน (ชื่อเล่น) ตามด้วยชุด
+    expect(pushes.find((p) => p.to === TEAM_GROUP)?.text).toMatch(/ยังสอบไม่ผ่าน \(1\)[\s\S]*\nหนึ่ง\nชุด\n/);
     // คนที่ไม่มีกลุ่ม → ส่งตัวต่อตัว แต่ WorkID ตอบไม่ได้ = failed (ลองใหม่รอบถัดไป) ไม่ใช่ "ส่งแล้ว"
     expect(out.day5).toMatchObject({ sent: 1, failed: 1 });
   });
@@ -441,8 +450,11 @@ describe("ตัดจบ · เปิดใหม่ · ด่านกัน�
     expect(await syncAssignments({ now: MON })).toMatchObject({ assigned: 4, notified: { sent: 4 } });
     expect(pushes).toHaveLength(2);
     expect(pushes[0].text).toContain("📚 ชุดการเรียนรู้ใหม่ 2 ชุด");
-    expect(pushes[0].text).toContain("- ชุด ก · ภายใน");
-    expect(pushes[0].text).toContain("- ชุด ข · ภายใน");
+    // การ์ดใบเดียว ไล่ชื่อชุด · สำเนาข้อความล้วนที่เก็บไว้ยังไล่ครบ
+    expect(pushes[0].text).toMatch(/\nชุด ก\nกำหนดส่ง\n[\s\S]*\nชุด ข\nกำหนดส่ง\n/);
+    const [stored] = await testDb().select().from(schema.notifications).where(eq(schema.notifications.kind, "assigned")).orderBy(asc(schema.notifications.id));
+    expect(stored.text).toContain("- ชุด ก · ภายใน");
+    expect(stored.text).toContain("- ชุด ข · ภายใน");
     pushes = [];
     expect(await syncAssignments({ now: day(1) })).toMatchObject({ notified: { sent: 0 } });
     expect(pushes).toHaveLength(0);
@@ -553,5 +565,83 @@ describe("ผู้อนุมัติเพิ่มผู้รับ · TG 
     pushes = [];
     expect(await notifyApprovalEvent(own.id)).toBeNull();
     expect(pushes.map((p) => p.text)).toEqual([expect.stringContaining("ℹ️ พีดี (TG) อนุมัติแทนคุณแล้ว")]);
+  });
+});
+
+describe("เลิกช่วงทดสอบ → แจ้งการมอบที่ค้างถึงตัวจริงครั้งเดียว (ADR-0024)", () => {
+  const lineIdOf = (personId: number) => `U${String(personId).padStart(32, "0")}`;
+  /** ส่งจริง: WorkID ให้ LINE ของแต่ละคน · GateWay บอกว่าเป็นเพื่อน · push บันทึกไว้ */
+  function goLive() {
+    vi.stubEnv("TEST_LINE_GROUP_ID", "");
+    vi.stubEnv("WORKID_BASE_URL", "https://workid.test");
+    vi.stubEnv("WORKID_API_KEY", "k");
+    let n = 0;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      const person = /\/api\/v1\/people\/([^/?]+)/.exec(u);
+      if (person) {
+        const p = ORG.find((x) => x.email === decodeURIComponent(person[1]))!;
+        return Response.json({ id: p.personId, email: p.email, fullName: p.fullName, active: true, lines: [{ lineUserId: lineIdOf(p.personId), verified: true }] });
+      }
+      if (u.includes("/profile/")) return Response.json({ status: "ok" });
+      const body = JSON.parse(String(init?.body)) as { to: string; messages: PushedMessage[]; idempotencyKey: string };
+      pushes.push({ to: body.to, text: readable(body.messages), key: body.idempotencyKey });
+      return new Response(JSON.stringify({ status: "queued", jobId: `live-${++n}` }), { status: 202 });
+    });
+  }
+
+  async function salesSet(title: string) {
+    const set = await activeSet(title);
+    await setAudience({ actor: pd, setId: set.id, rules: [{ kind: "position", refId: 41, label: "Sales" }] });
+    await activate(set.id);
+    return set;
+  }
+
+  it("ช่วงทดสอบไม่ทำอะไร · เลิกแล้วส่งถึงตัวจริง รวมต่อคน · รอบถัดไปไม่ส่งซ้ำ · ผ่านแล้ว/ตัดจบ/มอบตอนส่งจริง ไม่ได้", async () => {
+    await salesSet("ชุด ก");
+    await salesSet("ชุด ข");
+    await syncAssignments({ now: MON });
+    expect(pushes.every((p) => p.to === TEST_GROUP)).toBe(true);
+    // ยังอยู่ช่วงทดสอบ — ส่งซ้ำก็แค่เข้ากลุ่ม Test อีก จึงไม่ทำ
+    pushes = [];
+    expect(await resendTestPeriodAssignments({ now: MON })).toMatchObject({ sent: 0 });
+    expect(pushes).toHaveLength(0);
+
+    // เซลสอง (32) สอบผ่านชุดหนึ่งไปแล้ว — เหลือชุดเดียวที่ต้องแจ้ง
+    const rows = await assignmentRows();
+    const passed = rows.find((a) => a.personId === 32)!;
+    await testDb().update(schema.assignments).set({ passedAt: MON }).where(eq(schema.assignments.id, passed.id));
+
+    goLive();
+    const out = await resendTestPeriodAssignments({ now: new Date(MON.getTime() + DAY) });
+    expect(out).toMatchObject({ sent: 3, failed: 0 });
+    expect(pushes.map((p) => p.to).sort()).toEqual([lineIdOf(31), lineIdOf(32)]);
+    const toOne = pushes.find((p) => p.to === lineIdOf(31))!;
+    expect(toOne.text).toContain("📚 ชุดการเรียนรู้ที่ต้องเรียน 2 ชุด");
+    expect(toOne.text).toContain("WorkTrain เริ่มแจ้งทาง LINE แล้ว");
+    expect(toOne.text).not.toContain("[ทดสอบ");
+    expect(pushes.find((p) => p.to === lineIdOf(32))!.text).toContain("📚 ชุดการเรียนรู้ที่ต้องเรียน: ");
+    // บันทึกเป็นส่งจริง (ไม่มีกลุ่ม Test) — แถววันที่ 0 เดิมไม่ถูกแตะ
+    const golive = await testDb().select().from(schema.notifications);
+    expect(golive.filter((n) => n.dedupeKey.startsWith("golive:") && n.status === "sent")).toHaveLength(3);
+    expect(golive.filter((n) => n.dedupeKey.startsWith("golive:")).every((n) => n.lineGroupId === null)).toBe(true);
+
+    // รอบถัดไป: ไม่ส่งซ้ำ · การมอบใหม่ตอนส่งจริงได้ข้อความ "ชุดใหม่" ตามปกติ ไม่ใช่ข้อความแจ้งซ้ำ
+    pushes = [];
+    await salesSet("ชุด ค");
+    await syncAssignments({ now: new Date(MON.getTime() + 2 * DAY) });
+    expect(pushes.every((p) => p.text.includes("📚 ชุดการเรียนรู้ใหม่: ชุด ค"))).toBe(true);
+    pushes = [];
+    expect(await resendTestPeriodAssignments({ now: new Date(MON.getTime() + 2 * DAY) })).toMatchObject({ sent: 0 });
+    expect(pushes).toHaveLength(0);
+  });
+
+  it("เลยกำหนดแล้วไม่แจ้งซ้ำ (หัวหน้าได้สรุปเลยกำหนดอยู่แล้ว)", async () => {
+    await salesSet("ชุด ก");
+    await syncAssignments({ now: MON });
+    goLive();
+    pushes = [];
+    expect(await resendTestPeriodAssignments({ now: new Date(MON.getTime() + 8 * DAY) })).toMatchObject({ sent: 0 });
+    expect(pushes).toHaveLength(0);
   });
 });
