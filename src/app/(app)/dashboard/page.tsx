@@ -1,18 +1,20 @@
 import Link from "next/link";
-import { PersonName } from "@/components/person-name";
-import { Badge, buttonClass, Card, EmptyState, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle, SELECT_CLASS, Table, TBody, TD, TH, THead, TR, type BadgeTone } from "@/components/ui";
-import { formatSpeed } from "@/domain/stats";
+import { buttonClass, Card, EmptyState, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle, SELECT_CLASS } from "@/components/ui";
 import { firstParam, pageActor } from "@/lib/page";
-import { dashboard, monthLeaderboard, PROGRESS_LABEL, type SetProgress } from "@/lib/stats-service";
-import { bangkokMonth, formatBangkok, formatMonth } from "@/lib/time";
+import { dashboard, monthLeaderboard } from "@/lib/stats-service";
+import { bangkokMonth, formatMonth } from "@/lib/time";
+import { countProgress, groupBySet, LeaderboardList, PeopleTable, SetGroups, StatusSummary } from "./parts";
 
 export const dynamic = "force-dynamic";
-
-const TONE: Record<SetProgress, BadgeTone> = { not_opened: "neutral", opened: "info", tried: "warning", passed: "success" };
 
 /**
  * Dashboard + Leaderboard (spec §12)
  * TG เห็นทุกคน · หัวหน้าเห็นทีมที่ดูแล · ผู้สร้างเห็นชุดของตัวเอง · ทุกคนเห็นของตัวเอง + Leaderboard
+ *
+ * โครงตามความกว้างของกรอบหน้า (`@container` — เมนูซ้ายยุบ/ขยายเปลี่ยนพื้นที่ได้):
+ *   ≥ 64rem   ตาราง (ซ้าย) + แถบขวา: สรุปสถานะ · Leaderboard
+ *   ≥ 42rem   สรุปสถานะ | Leaderboard คู่กันหนึ่งแถว แล้วตารางเต็มกว้าง (แท็บเล็ตแนวนอน)
+ *   แคบกว่านั้น เรียงลงทีละส่วน · ตารางเลื่อนแนวนอนได้ คอลัมน์ชื่อตรึงซ้าย
  */
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const actor = await pageActor();
@@ -23,6 +25,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   };
   const month = firstParam(sp.month) ?? bangkokMonth();
   const showHidden = firstParam(sp.hidden) === "1";
+  const expandAll = firstParam(sp.open) === "1";
   const filter = { month, teamId: num("team"), managerPersonId: num("manager"), setId: num("set"), showHidden };
   const data = await dashboard(actor, filter);
   const board = await monthLeaderboard(month, { showHidden });
@@ -36,33 +39,49 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       </main>
     );
   }
-  const qs = new URLSearchParams(Object.entries({ month, team: filter.teamId, manager: filter.managerPersonId, set: filter.setId }).flatMap(([k, v]) => (v ? [[k, String(v)]] : [])));
-  /** บรรทัด "ซ่อน n คน · แสดง" ใต้แต่ละส่วน — ปุ่มเดียวสลับทั้งหน้า */
-  const hiddenLine = (n: number, unit = "คน") =>
+  const now = new Date();
+  const counts = countProgress(data.rows, now);
+  const groups = groupBySet(data.rows, now);
+  // ชุดเดียว (หรือกรองชุดไว้) ไม่ต้องให้กดเปิดอีกชั้น
+  const openGroups = expandAll || groups.length === 1;
+
+  const params = { month, team: filter.teamId, manager: filter.managerPersonId, set: filter.setId };
+  const qs = new URLSearchParams(Object.entries(params).flatMap(([k, v]) => (v ? [[k, String(v)]] : [])));
+  /** ลิงก์กลับหน้านี้ด้วยตัวกรองเดิม แต่สลับ `hidden` / `open` */
+  const href = (o: { hidden: boolean; open: boolean }) => {
+    const q = new URLSearchParams(qs);
+    if (o.hidden) q.set("hidden", "1");
+    if (o.open) q.set("open", "1");
+    return `/dashboard?${q}`;
+  };
+  /** บรรทัด "ซ่อน n คน · แสดง" ใต้แต่ละส่วน — ปุ่มเดียวสลับทั้งหน้า · `edge` = การ์ดที่ตารางชิดขอบ */
+  const hiddenLine = (n: number, unit = "คน", edge = false) =>
     n > 0 || showHidden ? (
-      <p className="mt-3 border-t border-line pt-3 text-[12px] text-ink-3">
+      <p className={`border-t border-line text-[12px] text-ink-3 ${edge ? "px-5 py-3" : "mt-3 pt-3"}`}>
         {showHidden ? "แสดงคนที่ไม่อยู่ในผังหรือถูกตัดจบด้วย" : `ซ่อน ${n} ${unit}ที่ไม่อยู่ในผังหรือถูกตัดจบ`} ·{" "}
-        <Link href={`/dashboard?${qs}${showHidden ? "" : "&hidden=1"}`} className="underline">
+        <Link href={href({ hidden: !showHidden, open: expandAll })} className="underline">
           {showHidden ? "ซ่อน" : "แสดง"}
         </Link>
       </p>
     ) : null;
 
   return (
-    <main className="mx-auto w-full max-w-6xl space-y-5">
+    <main className="@container mx-auto w-full max-w-[1680px]">
       <PageHeader
         kicker="Insights"
         title="Dashboard"
         subtitle={`${formatMonth(month)} · ${data.scope === "all" ? "ทุกคน" : "ของคุณ ทีมที่คุณดูแล และชุดที่คุณสร้าง"}`}
       />
 
-      <Card>
-        <form className="grid gap-3 sm:grid-cols-5 sm:items-end">
-          <label>
+      <Card padded={false} className="p-4">
+        <form className="grid gap-3 @sm:grid-cols-2 @4xl:grid-cols-[10.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.6fr)_auto] @4xl:items-end">
+          {showHidden && <input type="hidden" name="hidden" value="1" />}
+          {expandAll && <input type="hidden" name="open" value="1" />}
+          <label className="min-w-0">
             <span className={FIELD_LABEL_CLASS}>เดือน</span>
             <input type="month" name="month" defaultValue={month} className={INPUT_CLASS} />
           </label>
-          <label>
+          <label className="min-w-0">
             <span className={FIELD_LABEL_CLASS}>ทีม</span>
             <select name="team" defaultValue={filter.teamId ?? ""} className={SELECT_CLASS}>
               <option value="">ทั้งหมด</option>
@@ -73,7 +92,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               ))}
             </select>
           </label>
-          <label>
+          <label className="min-w-0">
             <span className={FIELD_LABEL_CLASS}>หัวหน้า</span>
             <select name="manager" defaultValue={filter.managerPersonId ?? ""} className={SELECT_CLASS}>
               <option value="">ทั้งหมด</option>
@@ -84,7 +103,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               ))}
             </select>
           </label>
-          <label>
+          <label className="min-w-0">
             <span className={FIELD_LABEL_CLASS}>ชุด</span>
             <select name="set" defaultValue={filter.setId ?? ""} className={SELECT_CLASS}>
               <option value="">ทั้งหมด</option>
@@ -95,117 +114,72 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               ))}
             </select>
           </label>
-          <button type="submit" className={buttonClass("secondary")}>
+          <button type="submit" className={buttonClass("secondary", "md", "h-[42px] @sm:col-span-2 @4xl:col-span-1 @4xl:px-6")}>
             กรอง
           </button>
         </form>
         {!data.orgOk && <p className="mt-3 text-[12px] text-danger">ดึงผังจาก WorkID ไม่ได้ — ตัวกรองทีม/หัวหน้าและสิทธิ์หัวหน้าใช้ไม่ได้ชั่วคราว</p>}
       </Card>
 
-      <Card>
-        <SectionTitle className="mb-3">Leaderboard Top 10 · {formatMonth(month)}</SectionTitle>
-        <p className="mb-3 text-[12px] text-ink-3">คะแนนครั้งแรกเฉลี่ย · เท่ากันใช้ความไว · ไม่นับชุดที่ตัวเองสร้างหรืออนุมัติ · TG ไม่ติดอันดับ</p>
-        {!board.tgExcluded && board.rows.length > 0 && <p className="mb-3 text-[12px] text-danger">ถามรายชื่อ TG จาก WorkID ไม่ได้ — อันดับนี้อาจมี TG ปนอยู่</p>}
-        {board.rows.length === 0 ? (
-          <EmptyState compact title="ยังไม่มีใครสอบในเดือนนี้" />
-        ) : (
-          <ol className="divide-y divide-line">
-            {board.rows.map((r) => (
-              <li key={r.personId} className={`flex items-center gap-3 py-2 text-[13px] ${r.personId === actor.personId ? "font-semibold" : ""}`}>
-                <span className="w-6 text-right text-ink-3">{r.rank}</span>
-                <span className="flex-1">
-                  <PersonName label={r.label} />
+      <div className="mt-5 grid items-start gap-5 @5xl:grid-cols-[minmax(0,1fr)_21rem] @7xl:grid-cols-[minmax(0,1fr)_23rem]">
+        {/* ภาพรวมมาก่อนใน DOM — จอแคบอ่านสรุปก่อนตาราง · จอกว้างย้ายไปเป็นแถบขวา */}
+        <aside className="grid items-start gap-5 @2xl:grid-cols-2 @5xl:col-start-2 @5xl:row-start-1 @5xl:grid-cols-1" aria-label="ภาพรวม">
+          <Card>
+            <StatusSummary counts={counts} />
+          </Card>
+
+          <Card>
+            <SectionTitle>Leaderboard Top 10</SectionTitle>
+            <p className="mt-1.5 mb-3 text-[12px] leading-relaxed text-ink-3">คะแนนครั้งแรกเฉลี่ย · เท่ากันใช้ความไว · ไม่นับชุดที่ตัวเองสร้างหรืออนุมัติ · TG ไม่ติดอันดับ</p>
+            {!board.tgExcluded && board.rows.length > 0 && <p className="mb-3 text-[12px] text-danger">ถามรายชื่อ TG จาก WorkID ไม่ได้ — อันดับนี้อาจมี TG ปนอยู่</p>}
+            {board.rows.length === 0 ? <EmptyState compact title="ยังไม่มีใครสอบในเดือนนี้" /> : <LeaderboardList board={board} actorPersonId={actor.personId} />}
+            {hiddenLine(board.hiddenPeople)}
+          </Card>
+        </aside>
+
+        <Card padded={false} className="min-w-0 overflow-hidden @5xl:col-start-1 @5xl:row-start-1">
+            <SectionTitle className="px-5 py-4" right={<a href={`/dashboard/export?kind=people&${qs}`} className={buttonClass("ghost", "sm")}>Export Excel</a>}>
+              สถิติรายคน <span className="ml-1 text-[13px] font-normal tabular-nums text-ink-3">{data.people.length}</span>
+            </SectionTitle>
+            {data.people.length === 0 ? (
+              <div className="border-t border-line">
+                <EmptyState compact title="ไม่มีข้อมูลในเดือนนี้" />
+              </div>
+            ) : (
+              <PeopleTable people={data.people} />
+            )}
+            {hiddenLine(data.hiddenPeople, "คน", true)}
+        </Card>
+
+        {/* สถานะรายชุดยาวที่สุดในหน้า — ใช้เต็มกว้างใต้ทั้งสองคอลัมน์ */}
+        <Card padded={false} className="min-w-0 overflow-hidden @5xl:col-span-2">
+            <SectionTitle
+              className="px-5 py-4"
+              right={
+                <span className="flex items-center gap-1">
+                  {groups.length > 1 && (
+                    <Link href={href({ hidden: showHidden, open: !expandAll })} className={buttonClass("ghost", "sm")} scroll={false}>
+                      {expandAll ? "ยุบทุกชุด" : "เปิดทุกชุด"}
+                    </Link>
+                  )}
+                  <a href={`/dashboard/export?kind=status&${qs}`} className={buttonClass("ghost", "sm")}>
+                    Export Excel
+                  </a>
                 </span>
-                <span className="w-16 text-right">{r.firstScore}%</span>
-                <span className="w-28 text-right text-ink-3">{formatSpeed(r.speedHours)}</span>
-              </li>
-            ))}
-          </ol>
-        )}
-        {hiddenLine(board.hiddenPeople)}
-      </Card>
-
-      <Card>
-        <SectionTitle className="mb-3" right={<a href={`/dashboard/export?kind=people&${qs}`} className={buttonClass("ghost", "sm")}>Export Excel</a>}>
-          สถิติรายคน
-        </SectionTitle>
-        {data.people.length === 0 ? (
-          <EmptyState compact title="ไม่มีข้อมูลในเดือนนี้" />
-        ) : (
-          <Table minWidth="min-w-[760px]">
-            <THead>
-              <tr>
-                <TH>ชื่อ</TH>
-                <TH align="right">ได้รับมอบ</TH>
-                <TH align="right">ผ่าน</TH>
-                <TH align="right">คะแนนครั้งแรก</TH>
-                <TH align="right">คะแนนเฉลี่ย</TH>
-                <TH align="right">ครั้งที่สอบ</TH>
-                <TH align="right">ความไว</TH>
-                <TH align="right">ออกจากหน้าสอบ</TH>
-              </tr>
-            </THead>
-            <TBody>
-              {data.people.map((p) => (
-                <TR key={p.personId}>
-                  <TD>
-                    <PersonName label={p.label} />
-                  </TD>
-                  <TD align="right">{p.assigned}</TD>
-                  <TD align="right">{p.passed}</TD>
-                  <TD align="right">{p.firstScore ?? "—"}</TD>
-                  <TD align="right">{p.avgScore ?? "—"}</TD>
-                  <TD align="right">{p.attempts}</TD>
-                  <TD align="right">{formatSpeed(p.speedHours)}</TD>
-                  <TD align="right">{p.leaves}</TD>
-                </TR>
-              ))}
-            </TBody>
-          </Table>
-        )}
-        {hiddenLine(data.hiddenPeople)}
-      </Card>
-
-      <Card>
-        <SectionTitle className="mb-3" right={<a href={`/dashboard/export?kind=status&${qs}`} className={buttonClass("ghost", "sm")}>Export Excel</a>}>
-          สถานะรายชุด
-        </SectionTitle>
-        {data.rows.length === 0 ? (
-          <EmptyState compact title="ไม่มีการมอบในเดือนนี้" />
-        ) : (
-          <Table minWidth="min-w-[820px]">
-            <THead>
-              <tr>
-                <TH>ชุด</TH>
-                <TH>ชื่อ</TH>
-                <TH>ทีม</TH>
-                <TH>ได้รับมอบ</TH>
-                <TH>กำหนดส่ง</TH>
-                <TH>สถานะ</TH>
-                <TH align="right">ครั้งที่สอบ</TH>
-              </tr>
-            </THead>
-            <TBody>
-              {data.rows.map((r) => (
-                <TR key={r.assignmentId}>
-                  <TD>{r.setTitle}</TD>
-                  <TD>
-                    <PersonName label={r.label} showTeam={false} />
-                  </TD>
-                  <TD>{r.teamName ?? "—"}</TD>
-                  <TD>{formatBangkok(r.assignedAt)}</TD>
-                  <TD>{formatBangkok(r.dueAt)}</TD>
-                  <TD>
-                    <Badge tone={TONE[r.progress]} label={PROGRESS_LABEL[r.progress]} />
-                  </TD>
-                  <TD align="right">{r.attempts}</TD>
-                </TR>
-              ))}
-            </TBody>
-          </Table>
-        )}
-        {hiddenLine(data.hiddenRows, "การมอบ")}
-      </Card>
+              }
+            >
+              สถานะรายชุด <span className="ml-1 text-[13px] font-normal tabular-nums text-ink-3">{groups.length}</span>
+            </SectionTitle>
+            {data.rows.length === 0 ? (
+              <div className="border-t border-line">
+                <EmptyState compact title="ไม่มีการมอบในเดือนนี้" />
+              </div>
+            ) : (
+              <SetGroups groups={groups} open={openGroups} now={now} />
+            )}
+            {hiddenLine(data.hiddenRows, "การมอบ", true)}
+        </Card>
+      </div>
     </main>
   );
 }
