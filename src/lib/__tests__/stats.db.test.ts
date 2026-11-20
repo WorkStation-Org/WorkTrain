@@ -137,6 +137,42 @@ describe("Dashboard", () => {
   });
 });
 
+describe("ใครเรียนอะไรไปแล้ว (learningRecord)", () => {
+  it("ทุกการมอบตั้งแต่เริ่ม ไม่ดูเดือน · เรียงตามคนแล้วชุด · การมองเห็น ตัวกรอง และการซ่อนเดียวกับ Dashboard", async () => {
+    const set = await seed();
+    // ชุดที่ผ่านไปตั้งแต่ ก.ย. — ไม่อยู่ใน Dashboard เดือน พ.ย. แต่ต้องนับว่าเรียนแล้ว
+    const [old] = await testDb()
+      .insert(schema.learningSets)
+      .values({ title: "A100", kindId: schema.SEEDED_KIND_IDS.product, authorPersonId: 10, authorName: "พีดี", blueprint: PRODUCT_BLUEPRINT, status: "active", approvedAt: at("2026-09-01T09:00:00") })
+      .returning();
+    await testDb()
+      .insert(schema.assignments)
+      .values({ setId: old.id, personId: 31, personName: "เซล หนึ่ง", source: "audience", assignedAt: at("2026-09-02T09:00:00"), dueAt: at("2026-09-09T09:00:00"), passedAt: at("2026-09-04T09:00:00") });
+    await assign(set.id, 31);
+    await assign(set.id, 32);
+    const a40 = await assign(set.id, 40);
+    const { eq } = await import("drizzle-orm");
+    await testDb().update(schema.assignments).set({ endedAt: at("2026-11-05T09:00:00"), endReason: "not_in_audience" }).where(eq(schema.assignments.id, a40.id));
+
+    const tg = { personId: 1, role: "admin" as const };
+    expect((await S.dashboard(tg, { month: NOV }))!.rows.some((r) => r.setId === old.id)).toBe(false);
+
+    const rec = await S.learningRecord(tg, {});
+    // "เซล สอง" ก่อน "เซล หนึ่ง" · ในคนเดียวกันเรียงตามชื่อชุด
+    expect(rec.rows.map((r) => [r.personId, r.setTitle, r.progress])).toEqual([
+      [32, "F331", "not_opened"],
+      [31, "A100", "passed"],
+      [31, "F331", "not_opened"],
+    ]);
+    expect(rec.hiddenRows).toBe(1);
+    expect((await S.learningRecord(tg, { showHidden: true })).rows.map((r) => r.personId)).toContain(40);
+    expect((await S.learningRecord(tg, { setId: old.id })).rows.map((r) => r.personId)).toEqual([31]);
+    // ผู้เรียนเห็นแค่ของตัวเอง · หัวหน้าเห็นทีมที่ดูแล
+    expect((await S.learningRecord({ personId: 32, role: "user" }, {})).rows.map((r) => r.personId)).toEqual([32]);
+    expect(new Set((await S.learningRecord({ personId: 20, role: "user" }, {})).rows.map((r) => r.personId))).toEqual(new Set([31, 32]));
+  });
+});
+
 describe("Leaderboard", () => {
   it("ไม่นับชุดที่ตัวเองอนุมัติ · เครื่อง dev ไม่มี TG ให้ตัด", async () => {
     const set = await seed();
