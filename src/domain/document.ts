@@ -133,9 +133,18 @@ export function isJpeg(bytes: Uint8Array): boolean {
 }
 
 /** key ของปก — อยู่ข้างไฟล์วิดีโอ · สุ่มใหม่ทุกครั้งที่เปลี่ยนปก (ปกเก่าถูกลบ · cache ของปกเก่าไม่ค้าง) */
-export function coverKey(videoKey: string, random: string): string {
+export function coverKey(fileKey: string, random: string): string {
   if (!/^[a-z0-9]{16,}$/.test(random)) throw new Error("random ต้องเป็นตัวพิมพ์เล็ก/ตัวเลขอย่างน้อย 16 ตัว");
-  return `${videoKey.replace(/\.mp4$/, "")}-cover-${random}.jpg`;
+  return `${fileKey.replace(/\.(mp4|pdf)$/, "")}-cover-${random}.jpg`;
+}
+
+/**
+ * ไฟล์นี้มีปกได้ไหม — วิดีโอ (เฟรมที่เลือก · ADR-0013) และ PDF (หน้าแรก · ADR-0026)
+ * ★ Pricelist ไม่มีปก — ภาพหน้าแรกไม่มีลายน้ำ จะหลุดราคาออกนอกตัวอ่านที่ประทับลายน้ำ (ADR-0010)
+ */
+export function canHaveCover(d: { kind: string; mimeType: string }): boolean {
+  if (d.kind === "pricelist") return false;
+  return isVideoMime(d.mimeType) || d.mimeType === "application/pdf";
 }
 
 /** `12:05` · `1:02:05` */

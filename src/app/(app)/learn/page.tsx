@@ -138,14 +138,14 @@ function Resume({ item, now }: { item: LearningListItem; now: Date }) {
     <section aria-label="ทำต่อจากที่ค้างไว้" className="flex flex-wrap items-center gap-5 rounded-2xl bg-accent p-4 text-accent-fg sm:p-5">
       <div className="relative flex aspect-video w-full max-w-60 shrink-0 items-center justify-center overflow-hidden rounded-[10px] bg-[#2c2e32] sm:w-60">
         {/* eslint-disable-next-line @next/next/no-img-element -- ภาพผ่าน route ที่ตรวจสิทธิ์ ไม่ผ่าน next/image */}
-        {r.coverUrl && <img src={r.coverUrl} alt="" className="absolute inset-0 size-full object-cover" />}
+        {r.coverUrl && <img src={r.coverUrl} alt="" className={`absolute inset-0 size-full object-cover ${r.isVideo ? "" : "object-top"}`} />}
         {r.isVideo ? (
           <span className="relative flex size-12 items-center justify-center rounded-full bg-white text-[#161719]">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
               <path d="M8 5v14l11-7z" />
             </svg>
           </span>
-        ) : (
+        ) : r.coverUrl ? null : (
           <svg width="34" height="40" viewBox="0 0 40 48" fill="none" stroke="#a4a7ad" strokeWidth="2" aria-hidden>
             <path d="M6 2h20l10 10v34H6z" />
             <path d="M26 2v10h10" />

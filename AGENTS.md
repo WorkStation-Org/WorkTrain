@@ -37,8 +37,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
   env `FACE_SCAN_PAUSED=1` = `paused` — เรียน/สอบได้โดยไม่สแกน ไม่บังคับยินยอม (`scanGate()` · `consentRequired()` · ADR-0019)
 - `src/app/(app)/learn/scan-flow.tsx` — FaceLivenessDetector (Amplify) · บนเครื่อง dev เป็นปุ่มข้ามกล้อง
 - `src/lib/learn-service.ts` — รอบเรียน (นิ่ง 2 นาที = จบ) · ความคืบหน้าการอ่าน (วิดีโอนับทีละคลิป + งบเวลาจริงต่อรอบเรียน · ผ่านแล้วทบทวนได้ไม่ต้องสแกน · ADR-0020) · ครั้งที่สอบ (ทีละข้อ ย้อนแก้ได้ · กดส่งเอง `submitAttempt` · หมดเวลา/ออกหน้าสอบตัดสินที่เซิร์ฟเวอร์ · ผ่านจึงเฉลย) · ทุกฟังก์ชันตรวจว่าเป็นของคนที่ล็อกอิน
-- `/learn` (`myLearningList()`: สรุปตัวเลข · ทำต่อจากที่ค้างไว้ · แท็บกรอง + ค้นหา · การ์ดพร้อมปกคลิป) · `/learn/[id]` (`LessonWorkspace`: ตัวแสดงทางซ้าย + รายการเนื้อหาในชุดทางขวา · ตัวอ่าน PDF ด้วย pdfjs ≥ 6.2.108 · ตัวเล่นวิดีโอนับช่วงที่เล่นผ่าน)
-- ปกวิดีโอ: `sets/[id]/cover-picker.tsx` (จับเฟรมในเบราว์เซอร์) → `setVideoCover()` ใน set-service · ภาพออกทาง `/api/covers/[documentId]` (ADR-0013) · `/learn/[id]/exam/[attemptId]` · `/consent` — หน้าผู้เรียนผ่าน `learnerActor()` (ต้องยินยอมก่อน)
+- `/learn` (`myLearningList()`: สรุปตัวเลข · ทำต่อจากที่ค้างไว้ · แท็บกรอง + ค้นหา · การ์ดพร้อมปกคลิป) · `/learn/[id]` (`LessonWorkspace`: ตัวแสดงทางซ้าย + รายการเนื้อหาในชุดทางขวา · ตัวอ่าน PDF ด้วย pdfjs ≥ 6.2.108 เปิดทีละหน้าพอดีกรอบ ‹ › (ADR-0026) · ตัวเล่นวิดีโอนับช่วงที่เล่นผ่าน)
+- ปกวิดีโอ: `sets/[id]/cover-picker.tsx` (จับเฟรมในเบราว์เซอร์) · ปก PDF หน้าแรก `sets/[id]/pdf-cover.ts` (ไม่มีกับ Pricelist · ADR-0026) → `setDocumentCover()` ใน set-service · ภาพออกทาง `/api/covers/[documentId]` (ADR-0013) · `/learn/[id]/exam/[attemptId]` · `/consent` — หน้าผู้เรียนผ่าน `learnerActor()` (ต้องยินยอมก่อน)
 - `scripts/dev-seed-learner.mjs` — ใส่ชุดพร้อมสอบลง PGlite ไว้ลองฝั่งผู้เรียนบนเครื่องโดยไม่ต้องมี AI
 - `src/domain/blueprint.ts` — สัดส่วนหัวข้อ×ระดับของ 10 ข้อ · หัวข้อเป็นข้อความ (`topicLabel()` แปลรหัสเดิม) · แม่แบบตั้งต้นของสองชนิดเดิม ·
   `src/lib/kind-service.ts` — ทะเบียนชนิดของชุด (`/admin/kinds` · TG เท่านั้น · ADR-0011) · `src/domain/document.ts` — ชนิด/ขนาดไฟล์ · key ใน R2 ·

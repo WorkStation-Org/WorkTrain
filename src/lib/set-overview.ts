@@ -128,8 +128,9 @@ async function overview(actor: Pick<Actor, "personId" | "role">, statuses: reado
       videoSeconds: videos.reduce((n, d) => n + (d.durationSeconds ?? (d.pageCount ?? 0) * VIDEO_SEGMENT_SECONDS), 0),
       pdfs: pdfs.length,
       pdfPages: pdfs.reduce((n, d) => n + (d.pageCount ?? 0), 0),
+      // ปกคลิปแรก · ชุดที่ไม่มีวิดีโอใช้ปก PDF หน้าแรก (ADR-0026)
       coverUrl: (() => {
-        const first = videos.find((d) => d.coverKey);
+        const first = (videos.length ? videos : pdfs).find((d) => d.coverKey);
         return first ? coverPath(first) : null;
       })(),
       learners: c?.learners ?? 0,

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import { formatDuration, isVideoMime, MAX_VIDEO_PLAYBACK_RATE, segmentWatchTarget, VIDEO_SEGMENT_SECONDS } from "@/domain/document";
 import { documentLinkAction, readingBeatAction } from "../actions";
 
@@ -14,6 +15,7 @@ import { documentLinkAction, readingBeatAction } from "../actions";
  *   ลิงก์หมดอายุกลางเรื่อง = ขอใหม่แล้วเล่นต่อจากจุดเดิม
  * ★ ดูได้ทีละคลิป (ADR-0020) — แท็บไหนกดเล่น แท็บอื่นหยุด · เซิร์ฟเวอร์ตอบ `video_elsewhere` = หยุดและไม่นับส่วนที่เพิ่งดู
  * ★ `review` (สอบผ่านแล้ว) = เปิดซ้ำได้ไม่จำกัด ไม่ส่งความคืบหน้า กรอ/เร่งได้อิสระ
+ * ★ PDF เปิดทีละหน้าในกรอบสูงคงที่ (ย่อพอดีทั้งหน้า) · เปลี่ยนหน้าด้วยปุ่ม ‹ › · ลูกศรซ้าย/ขวา · ปัดบนมือถือ · แถบหน้ากดข้ามได้ — หน้าที่วาดขึ้นจอ = เปิดแล้ว
  * ★ เอกสารประกอบ (`reference` · ADR-0025) = กลุ่มแยกใต้รายการ · เปิดได้แบบทบทวน (ไม่ส่งความคืบหน้า) · ไม่นับในตัวเลข "ครบ"
  * ★ pdfjs ≥ 6.2.108 เท่านั้น (GHSA-hq66-cqwq-w95j: รัน JavaScript จาก PDF ที่ประสงค์ร้ายได้) — ไฟล์มาจากผู้สร้างในบริษัท แต่ไม่ไว้ใจเนื้อไฟล์
  */
@@ -305,11 +307,18 @@ function Thumb({ video, cover, length }: { video: boolean; cover: string | null;
       <span className="absolute bottom-[3px] right-1 rounded-[3px] bg-black/60 px-1 text-[10px] leading-4">{length}</span>
     </span>
   ) : (
-    <span className="flex aspect-video w-[88px] shrink-0 items-center justify-center rounded-md border border-line bg-subtle text-muted">
-      <svg width="16" height="20" viewBox="0 0 40 48" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden>
-        <path d="M6 2h20l10 10v34H6z" />
-        <path d="M26 2v10h10" />
-      </svg>
+    <span className="relative flex aspect-video w-[88px] shrink-0 items-center justify-center overflow-hidden rounded-md border border-line bg-subtle text-muted">
+      {/* ปก PDF หน้าแรก (ADR-0026) — ชิดบนให้เห็นหัวเรื่อง */}
+      {/* eslint-disable-next-line @next/next/no-img-element -- ภาพผ่าน route ที่ตรวจสิทธิ์ ไม่ผ่าน next/image */}
+      {cover && <img src={cover} alt="" className="absolute inset-0 size-full object-cover object-top" />}
+      {cover ? (
+        <span className="absolute bottom-[3px] right-1 rounded-[3px] bg-black/60 px-1 text-[10px] font-bold leading-4 text-white">PDF</span>
+      ) : (
+        <svg width="16" height="20" viewBox="0 0 40 48" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden>
+          <path d="M6 2h20l10 10v34H6z" />
+          <path d="M26 2v10h10" />
+        </svg>
+      )}
     </span>
   );
 }
@@ -678,18 +687,30 @@ function PdfDoc({
 }) {
   const confidential = doc.kind === "pricelist";
   const router = useRouter();
-  const container = useRef<HTMLDivElement>(null);
+  const total = doc.pageCount;
+  const stage = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const pdfRef = useRef<PDFDocumentProxy | null>(null);
+  const touchX = useRef<number | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [seen, setSeen] = useState<Set<number>>(new Set(doc.pagesSeen));
+  // เปิดมาที่หน้าแรกที่ยังไม่ได้อ่าน (อ่านต่อจากที่ค้าง) · ทบทวน/อ่านครบแล้ว = หน้า 1
+  const [page, setPage] = useState(() => (counting ? (Array.from({ length: total }, (_, i) => i + 1).find((n) => !doc.pagesSeen.includes(n)) ?? 1) : 1));
+  /** ขนาดกรอบเปลี่ยน (หมุนจอ · ย่อหน้าต่าง) = วาดหน้าใหม่ให้พอดีกรอบ */
+  const [frame, setFrame] = useState({ w: 0, h: 0 });
   const { pending } = useProgressBeat(assignmentId, doc.id, () => false, { counting });
 
   useEffect(() => {
     onSeen(seen.size);
   }, [seen, onSeen]);
 
-  // โหลดและวาดทุกหน้า
+  const go = (n: number) => setPage(Math.min(total, Math.max(1, n)));
+
+  // โหลดไฟล์ครั้งเดียวต่อเอกสาร
   useEffect(() => {
     let cancelled = false;
+    let task: { destroy(): Promise<void> } | null = null;
     (async () => {
       const link = await documentLinkAction({ assignmentId, documentId: doc.id });
       if (!link.ok) {
@@ -698,54 +719,74 @@ function PdfDoc({
       }
       const pdfjs = await import("pdfjs-dist");
       pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
-      const pdf = await pdfjs.getDocument({ url: link.url }).promise;
+      const loading = pdfjs.getDocument({ url: link.url });
+      task = loading;
+      const pdf = await loading.promise;
       if (cancelled) return;
-      // effect อาจรันซ้ำ (strict mode / เปลี่ยนเอกสาร) — ล้างหน้าที่วาดค้างไว้ก่อน
-      container.current?.replaceChildren();
-      for (let n = 1; n <= pdf.numPages && !cancelled; n++) {
-        const page = await pdf.getPage(n);
-        if (cancelled) return;
-        // ★ `||` ไม่ใช่ `??` — ก่อน layout เสร็จ clientWidth เป็น 0 แล้วหน้าแรกจะกว้าง 0
-        const width = container.current?.clientWidth || 800;
-        const base = page.getViewport({ scale: 1 });
-        const viewport = page.getViewport({ scale: (width / base.width) * (window.devicePixelRatio || 1) });
-        const canvas = document.createElement("canvas");
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        canvas.style.width = "100%";
-        canvas.dataset.page = String(n);
-        canvas.className = "mb-3 rounded border border-line";
-        container.current?.appendChild(canvas);
-        await page.render({ canvas, viewport }).promise;
-      }
-    })().catch(() => setError("เปิดเอกสารไม่ได้ ลองรีเฟรชหน้า"));
+      pdfRef.current = pdf;
+      setLoaded(true);
+    })().catch(() => !cancelled && setError("เปิดเอกสารไม่ได้ ลองรีเฟรชหน้า"));
     return () => {
       cancelled = true;
+      pdfRef.current = null;
+      void task?.destroy();
     };
   }, [assignmentId, doc.id, router]);
 
-  // หน้าที่เห็นเกินครึ่ง = เลื่อนผ่านแล้ว
+  // วัดกรอบ — หน้าเอกสารต้องอยู่ในกรอบทั้งหน้า ไม่ต้องเลื่อนลง
   useEffect(() => {
-    const root = container.current;
-    if (!root) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (!e.isIntersecting) continue;
-          const n = Number((e.target as HTMLElement).dataset.page);
-          pending.current.add(n);
-          setSeen((s) => (s.has(n) ? s : new Set(s).add(n)));
-        }
-      },
-      { threshold: 0.5 },
-    );
-    const mo = new MutationObserver(() => root.querySelectorAll("canvas").forEach((c) => io.observe(c)));
-    mo.observe(root, { childList: true });
+    const el = stage.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setFrame((f) => (f.w === el.clientWidth && f.h === el.clientHeight ? f : { w: el.clientWidth, h: el.clientHeight })));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // วาดหน้าปัจจุบันให้พอดีกรอบ (ทั้งกว้างและสูง) · วาดเสร็จ = นับว่าเปิดหน้านั้นแล้ว
+  useEffect(() => {
+    const pdf = pdfRef.current;
+    const el = canvas.current;
+    if (!loaded || !pdf || !el || !frame.w || !frame.h) return;
+    let cancelled = false;
+    let render: RenderTask | null = null;
+    (async () => {
+      const p = await pdf.getPage(page);
+      if (cancelled) return;
+      const base = p.getViewport({ scale: 1 });
+      const fit = Math.min(frame.w / base.width, frame.h / base.height);
+      const dpr = window.devicePixelRatio || 1;
+      const viewport = p.getViewport({ scale: fit * dpr });
+      el.width = Math.floor(viewport.width);
+      el.height = Math.floor(viewport.height);
+      el.style.width = `${Math.floor(base.width * fit)}px`;
+      el.style.height = `${Math.floor(base.height * fit)}px`;
+      render = p.render({ canvas: el, viewport });
+      await render.promise;
+      if (cancelled) return;
+      pending.current.add(page);
+      setSeen((s) => (s.has(page) ? s : new Set(s).add(page)));
+    })().catch(() => undefined);
     return () => {
-      io.disconnect();
-      mo.disconnect();
+      cancelled = true;
+      render?.cancel();
     };
-  }, [pending]);
+  }, [loaded, page, frame, pending]);
+
+  // ← → เปลี่ยนหน้า (ยกเว้นตอนพิมพ์ในช่องค้นหา)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable]")) return;
+      if (e.key === "ArrowRight" || e.key === "PageDown") setPage((n) => Math.min(total, n + 1));
+      else if (e.key === "ArrowLeft" || e.key === "PageUp") setPage((n) => Math.max(1, n - 1));
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [total]);
+
+  const navButton = "flex min-h-11 items-center gap-1.5 rounded-[10px] border border-line-strong bg-raised px-3.5 text-[14px] font-semibold text-fg enabled:hover:bg-subtle disabled:opacity-35";
 
   return (
     <div className="rounded-[13px] border border-line bg-raised p-4">
@@ -753,17 +794,34 @@ function PdfDoc({
         <span className="min-w-0 truncate text-[14px] font-semibold text-fg">{doc.fileName}</span>
         <span className="text-[13px] text-muted">
           {note
-            ? `${note} · ${doc.pageCount} หน้า`
+            ? `${note} · ${total} หน้า`
             : counting
-              ? `อ่านแล้ว ${seen.size} จาก ${doc.pageCount} หน้า — เลื่อนให้ครบทุกหน้าก่อนสอบ`
-              : `ทบทวน · ${doc.pageCount} หน้า`}
+              ? `อ่านแล้ว ${seen.size} จาก ${total} หน้า — เปิดให้ครบทุกหน้าก่อนสอบ`
+              : `ทบทวน · ${total} หน้า`}
         </span>
       </div>
       {confidential && <p className="mb-2 text-[13px] text-danger">Pricelist — ดูในระบบเท่านั้น · ทุกหน้ามีชื่อของคุณและเวลาที่เปิด · ระบบบันทึกการเปิดทุกครั้ง</p>}
       {error && <p className="mb-2 text-[13px] text-danger">{error}</p>}
+      {/* กรอบสูงคงที่ — หน้าเอกสารย่อให้พอดีทั้งหน้า · ปัดซ้าย/ขวาบนมือถือเพื่อเปลี่ยนหน้า */}
       {/* Pricelist: ซ้อนชื่อภาษาไทยบนหน้าจออีกชั้น (ในไฟล์ประทับอีเมล/รหัสไว้แล้วฝั่งเซิร์ฟเวอร์) · ปิดเมนูคลิกขวา */}
-      <div className="relative" onContextMenu={confidential ? (e) => e.preventDefault() : undefined}>
-        <div ref={container} className={confidential ? "select-none" : undefined} />
+      <div
+        ref={stage}
+        className={`relative flex h-[min(68dvh,620px)] items-center justify-center overflow-hidden rounded-[10px] bg-subtle ${confidential ? "select-none" : ""}`}
+        onContextMenu={confidential ? (e) => e.preventDefault() : undefined}
+        onTouchStart={(e) => (touchX.current = e.touches[0]?.clientX ?? null)}
+        onTouchEnd={(e) => {
+          const start = touchX.current;
+          const end = e.changedTouches[0]?.clientX;
+          touchX.current = null;
+          if (start === null || end === undefined || Math.abs(end - start) < 50) return;
+          go(end < start ? page + 1 : page - 1);
+        }}
+      >
+        {!loaded && !error && <span className="text-[13px] text-muted">กำลังเปิด…</span>}
+        <canvas ref={canvas} aria-label={`หน้า ${page} จาก ${total}`} className={`rounded border border-line bg-white shadow-sm ${loaded ? "" : "hidden"}`} />
+        {/* พื้นที่กดครึ่งซ้าย/ขวาของกรอบ = หน้าก่อน/ถัดไป */}
+        <button type="button" aria-label="หน้าก่อนหน้า" disabled={page <= 1} onClick={() => go(page - 1)} className="absolute inset-y-0 left-0 w-1/4 cursor-w-resize disabled:cursor-default" />
+        <button type="button" aria-label="หน้าถัดไป" disabled={page >= total} onClick={() => go(page + 1)} className="absolute inset-y-0 right-0 w-1/4 cursor-e-resize disabled:cursor-default" />
         {confidential && (
           <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
             <div className="flex h-full flex-wrap content-start gap-x-24 gap-y-28 p-8 opacity-[0.12]" style={{ transform: "rotate(-30deg) scale(1.6)" }}>
@@ -775,6 +833,26 @@ function PdfDoc({
             </div>
           </div>
         )}
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <button type="button" onClick={() => go(page - 1)} disabled={page <= 1} className={navButton}>
+          <span aria-hidden>‹</span> ก่อนหน้า
+        </button>
+        <span className="text-[14px] font-semibold tabular-nums text-fg" aria-live="polite">
+          หน้า {page} / {total}
+        </span>
+        <button type="button" onClick={() => go(page + 1)} disabled={page >= total} className={navButton}>
+          ถัดไป <span aria-hidden>›</span>
+        </button>
+      </div>
+      {/* แถบหน้า — เขียว = เปิดแล้ว · กดเพื่อข้ามไปหน้านั้น */}
+      <div className="mt-2.5 flex h-2.5 gap-px" aria-label="ไปยังหน้า">
+        {Array.from({ length: total }, (_, i) => {
+          const n = i + 1;
+          const cls = n === page ? "bg-fg" : seen.has(n) && counting ? "bg-success" : seen.has(n) ? "bg-ink-4" : "bg-line";
+          return <button key={n} type="button" aria-label={`ไปหน้า ${n}${seen.has(n) ? " (เปิดแล้ว)" : ""}`} aria-current={n === page ? "page" : undefined} onClick={() => go(n)} className={`min-w-0 flex-1 rounded-[2px] ${cls}`} />;
+        })}
       </div>
     </div>
   );
