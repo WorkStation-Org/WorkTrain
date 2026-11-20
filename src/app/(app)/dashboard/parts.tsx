@@ -186,38 +186,61 @@ export function PeopleTable({ people }: { people: Dashboard["people"] }) {
   );
 }
 
-export interface SetGroup {
-  setId: number;
-  setTitle: string;
+export type GroupBy = "set" | "person";
+
+export interface StatusGroup {
+  key: number;
+  title: string;
+  /** บรรทัดรองใต้หัวกลุ่ม — ทีมของคน (จัดตามคน) */
+  sub: string | null;
   rows: StatusRow[];
   counts: ProgressCounts;
 }
 
-/** แถวสถานะ → กลุ่มต่อชุด (แถวเรียงตามชื่อชุดมาจาก service แล้ว) */
-export function groupBySet(rows: readonly StatusRow[], now: Date): SetGroup[] {
+/** แถวสถานะ → กลุ่มต่อชุดหรือต่อคน · ลำดับกลุ่มตามลำดับแถวที่ service เรียงมาแล้ว */
+export function groupRows(rows: readonly StatusRow[], by: GroupBy, now: Date): StatusGroup[] {
   const groups = new Map<number, StatusRow[]>();
   for (const r of rows) {
-    const g = groups.get(r.setId);
+    const k = by === "set" ? r.setId : r.personId;
+    const g = groups.get(k);
     if (g) g.push(r);
-    else groups.set(r.setId, [r]);
+    else groups.set(k, [r]);
   }
-  return [...groups.entries()].map(([setId, rs]) => ({ setId, setTitle: rs[0].setTitle, rows: rs, counts: countProgress(rs, now) }));
+  return [...groups.entries()].map(([key, rs]) => ({
+    key,
+    title: by === "set" ? rs[0].setTitle : withNickname(rs[0].label),
+    sub: by === "set" ? null : rs[0].label.team,
+    rows: rs,
+    counts: countProgress(rs, now),
+  }));
+}
+
+function When({ d, now, className = "" }: { d: Date; now: Date; className?: string }) {
+  return (
+    <time dateTime={bangkokDate(d)} title={formatBangkok(d)} className={className}>
+      {formatThaiDay(d, now)}
+    </time>
+  );
 }
 
 /**
- * สถานะรายชุด — ชุดละหนึ่งกลุ่ม หัวกลุ่มบอกสัดส่วนในบรรทัดเดียว กดเปิดดูรายคน
+ * สถานะการมอบเป็นกลุ่ม — ชุดละกลุ่ม (ใครยังค้างในชุดนี้) หรือคนละกลุ่ม (คนนี้เรียนอะไรไปแล้ว)
+ * หัวกลุ่มบอกสัดส่วนในบรรทัดเดียว กดเปิดดูรายการ
  * ★ `<details>` ของจริง: คีย์บอร์ดเปิดได้ · ค้นหาในหน้า (Ctrl+F) เปิดกลุ่มที่เจอให้เอง
  */
-export function SetGroups({ groups, open, now }: { groups: SetGroup[]; open: boolean; now: Date }) {
+export function StatusGroups({ groups, by, open, now }: { groups: StatusGroup[]; by: GroupBy; open: boolean; now: Date }) {
   return (
     <div className="divide-y divide-line border-t border-line">
       {groups.map((g) => (
-        <details key={g.setId} open={open} className="group/set">
+        <details key={g.key} open={open} className="group/set">
           <summary className="flex cursor-pointer list-none items-center gap-x-4 gap-y-2 px-5 py-3.5 transition-colors hover:bg-subtle [&::-webkit-details-marker]:hidden @max-xl:flex-wrap">
             <svg aria-hidden viewBox="0 0 16 16" className="size-4 shrink-0 text-ink-3 transition-transform duration-200 group-open/set:rotate-90">
               <path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg">{g.setTitle}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-medium text-fg">{g.title}</span>
+              {g.sub && <span className="block truncate text-[11px] text-ink-3">{g.sub}</span>}
+            </span>
             <span className="flex w-full items-center gap-3 pl-8 @xl:w-auto @xl:pl-0">
               <span className="w-28 shrink-0 @3xl:w-40">
                 <ProgressMix counts={g.counts} thin />
@@ -238,12 +261,13 @@ export function SetGroups({ groups, open, now }: { groups: SetGroup[]; open: boo
               </span>
             </span>
           </summary>
-          <Grid minWidth="min-w-[600px]">
+          <Grid minWidth="min-w-[660px]">
             <thead className="border-b border-line">
               <tr>
-                <Th sticky>ชื่อ</Th>
+                <Th sticky>{by === "set" ? "ชื่อ" : "ชุด"}</Th>
                 <Th>ได้รับมอบ</Th>
                 <Th>กำหนดส่ง</Th>
+                <Th>ผ่านเมื่อ</Th>
                 <Th>สถานะ</Th>
                 <Th num>ครั้งที่สอบ</Th>
               </tr>
@@ -254,19 +278,16 @@ export function SetGroups({ groups, open, now }: { groups: SetGroup[]; open: boo
                 return (
                   <tr key={r.assignmentId} className="group transition-colors hover:bg-subtle">
                     <Td sticky className="max-w-[18rem]">
-                      <PersonCell label={r.label} />
+                      {by === "set" ? <PersonCell label={r.label} /> : <span className="block truncate text-fg">{r.setTitle}</span>}
                     </Td>
                     <Td className="whitespace-nowrap text-ink-2">
-                      <time dateTime={bangkokDate(r.assignedAt)} title={formatBangkok(r.assignedAt)}>
-                        {formatThaiDay(r.assignedAt, now)}
-                      </time>
+                      <When d={r.assignedAt} now={now} />
                     </Td>
                     <Td className={`whitespace-nowrap ${overdue ? "text-danger" : "text-ink-2"}`}>
-                      <time dateTime={bangkokDate(r.dueAt)} title={formatBangkok(r.dueAt)}>
-                        {formatThaiDay(r.dueAt, now)}
-                      </time>
+                      <When d={r.dueAt} now={now} />
                       {overdue && <span className="ml-1.5 text-[11px]">เลยกำหนด</span>}
                     </Td>
+                    <Td className="whitespace-nowrap text-ink-2">{r.passedAt ? <When d={r.passedAt} now={now} /> : <span className="text-ink-4">—</span>}</Td>
                     <Td>
                       <Badge tone={PROGRESS_TONE[r.progress]} label={PROGRESS_LABEL[r.progress]} />
                     </Td>

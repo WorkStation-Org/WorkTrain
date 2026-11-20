@@ -83,14 +83,15 @@ function visibleTo(actor: Pick<Actor, "personId" | "role">, me: OrgPerson | unde
   };
 }
 
+/** ช่วงที่ดึงการมอบ — เดือน (Dashboard) หรือทั้งหมดตั้งแต่เริ่ม (ใครเรียนอะไรไปแล้ว) */
+type Scope = { start: Date; end: Date } | "all";
+
 /**
- * ข้อมูลของหน้า Dashboard — แถวสถานะคือการมอบที่ได้รับในเดือนนั้น หรือยังไม่ผ่านอยู่ หรือผ่านในเดือนนั้น
- * สถิติรายคนคำนวณจากการมอบที่มองเห็นทั้งหมด (ไม่ถูกตัวกรองทีม/ชุดตัด เฉพาะคนที่ผ่านตัวกรอง)
+ * โหลดการมอบที่ actor มองเห็น → ผ่านตัวกรองทีม/หัวหน้า/ชุด → ซ่อนคนลาออก/ตัดจบ → แถวสถานะ
+ * ★ ที่เดียวที่ตัดสินการมองเห็นและการซ่อน — หน้าเดือนและหน้าทั้งหมดได้กติกาเดียวกัน
  */
-export async function dashboard(actor: Pick<Actor, "personId" | "role">, filter: DashboardFilter, now: Date = new Date()): Promise<Dashboard | null> {
-  const month = bangkokMonthRange(filter.month);
-  if (!month) return null;
-  const org = await fetchOrg(now.getTime());
+async function loadStatus(actor: Pick<Actor, "personId" | "role">, filter: Omit<DashboardFilter, "month">, scope: Scope) {
+  const org = await fetchOrg();
   const people = org.ok ? org.people : [];
   const teamOf = new Map(people.map((p) => [p.personId, p.teamId]));
   const managerOf = new Map(people.map((p) => [p.personId, p.managerPersonId]));
@@ -100,17 +101,20 @@ export async function dashboard(actor: Pick<Actor, "personId" | "role">, filter:
   const labelOf = personLabelsFrom(people);
   const inOrg = org.ok ? new Set(people.map((p) => p.personId)) : null;
 
-  const rowsDb = await db()
+  const base = db()
     .select({ a: assignments, title: learningSets.title, authorPersonId: learningSets.authorPersonId })
     .from(assignments)
-    .innerJoin(learningSets, eq(learningSets.id, assignments.setId))
-    .where(
-      or(
-        and(gte(assignments.assignedAt, month.start), lt(assignments.assignedAt, month.end)),
-        and(gte(assignments.passedAt, month.start), lt(assignments.passedAt, month.end)),
-        and(lt(assignments.assignedAt, month.end), eq(learningSets.status, "active"), isNull(assignments.passedAt)),
-      ),
-    );
+    .innerJoin(learningSets, eq(learningSets.id, assignments.setId));
+  const rowsDb =
+    scope === "all"
+      ? await base
+      : await base.where(
+          or(
+            and(gte(assignments.assignedAt, scope.start), lt(assignments.assignedAt, scope.end)),
+            and(gte(assignments.passedAt, scope.start), lt(assignments.passedAt, scope.end)),
+            and(lt(assignments.assignedAt, scope.end), eq(learningSets.status, "active"), isNull(assignments.passedAt)),
+          ),
+        );
   const visible = rowsDb.filter((r) => sees(r.a, r));
   const matching = visible.filter(
     (r) =>
@@ -158,6 +162,18 @@ export async function dashboard(actor: Pick<Actor, "personId" | "role">, filter:
     })
     .sort((a, b) => a.setTitle.localeCompare(b.setTitle, "th") || a.personName.localeCompare(b.personName, "th"));
 
+  return { org, people, teamOf, managerOf, teamName, labelOf, inOrg, visible, filtered, tried, rows, hiddenPeople, hiddenRows: matching.length - filtered.length };
+}
+
+/**
+ * ข้อมูลของหน้า Dashboard — แถวสถานะคือการมอบที่ได้รับในเดือนนั้น หรือยังไม่ผ่านอยู่ หรือผ่านในเดือนนั้น
+ * สถิติรายคนคำนวณจากการมอบที่มองเห็นทั้งหมด (ไม่ถูกตัวกรองทีม/ชุดตัด เฉพาะคนที่ผ่านตัวกรอง)
+ */
+export async function dashboard(actor: Pick<Actor, "personId" | "role">, filter: DashboardFilter): Promise<Dashboard | null> {
+  const month = bangkokMonthRange(filter.month);
+  if (!month) return null;
+  const { org, people, teamOf, managerOf, teamName, labelOf, inOrg, visible, filtered, tried, rows, hiddenPeople, hiddenRows } = await loadStatus(actor, filter, month);
+
   const stats = personMonthStats(
     filtered.map((r) => r.a),
     tried as StatAttempt[],
@@ -183,11 +199,28 @@ export async function dashboard(actor: Pick<Actor, "personId" | "role">, filter:
     people: stats,
     rows,
     hiddenPeople,
-    hiddenRows: matching.length - filtered.length,
+    hiddenRows,
     teams: [...teams.entries()].map(([id, name]) => ({ id, name })).sort(byName),
     managers: [...managers.entries()].map(([personId, name]) => ({ personId, name })).sort(byName),
     sets: [...setsSeen.entries()].map(([id, title]) => ({ id, title })).sort(byName),
   };
+}
+
+export interface LearningRecord {
+  /** การมอบทุกครั้งตั้งแต่เริ่ม (ไม่ขึ้นกับเดือน) เรียงตามชื่อคน แล้วชื่อชุด */
+  rows: StatusRow[];
+  /** การมอบที่ซ่อนไว้ (ลาออก · ตัดจบที่ยังไม่ผ่าน) · 0 เมื่อ `showHidden` */
+  hiddenRows: number;
+}
+
+/**
+ * ใครเรียนอะไรไปแล้ว — การมอบทั้งหมดตั้งแต่เริ่ม (ไม่ดูเดือน) ด้วยการมองเห็น ตัวกรอง และการซ่อนเดียวกับ Dashboard
+ * หน้าจัดกลุ่มตามคน · CSV `kind=record`
+ */
+export async function learningRecord(actor: Pick<Actor, "personId" | "role">, filter: Omit<DashboardFilter, "month">): Promise<LearningRecord> {
+  const { rows, hiddenRows } = await loadStatus(actor, filter, "all");
+  rows.sort((a, b) => a.personName.localeCompare(b.personName, "th") || a.personId - b.personId || a.setTitle.localeCompare(b.setTitle, "th"));
+  return { rows, hiddenRows };
 }
 
 export interface LeaderboardView {
