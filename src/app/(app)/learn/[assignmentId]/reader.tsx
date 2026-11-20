@@ -14,6 +14,7 @@ import { documentLinkAction, readingBeatAction } from "../actions";
  *   ลิงก์หมดอายุกลางเรื่อง = ขอใหม่แล้วเล่นต่อจากจุดเดิม
  * ★ ดูได้ทีละคลิป (ADR-0020) — แท็บไหนกดเล่น แท็บอื่นหยุด · เซิร์ฟเวอร์ตอบ `video_elsewhere` = หยุดและไม่นับส่วนที่เพิ่งดู
  * ★ `review` (สอบผ่านแล้ว) = เปิดซ้ำได้ไม่จำกัด ไม่ส่งความคืบหน้า กรอ/เร่งได้อิสระ
+ * ★ เอกสารประกอบ (`reference` · ADR-0025) = กลุ่มแยกใต้รายการ · เปิดได้แบบทบทวน (ไม่ส่งความคืบหน้า) · ไม่นับในตัวเลข "ครบ"
  * ★ pdfjs ≥ 6.2.108 เท่านั้น (GHSA-hq66-cqwq-w95j: รัน JavaScript จาก PDF ที่ประสงค์ร้ายได้) — ไฟล์มาจากผู้สร้างในบริษัท แต่ไม่ไว้ใจเนื้อไฟล์
  */
 
@@ -36,6 +37,8 @@ export interface LessonDoc {
   pageCount: number;
   pagesSeen: number[];
   completed: boolean;
+  /** เอกสารประกอบ — เปิดได้ ไม่ต้องครบก่อนสอบ ไม่ส่งความคืบหน้า (ADR-0025) */
+  reference?: boolean;
 }
 
 /**
@@ -63,16 +66,19 @@ export function LessonWorkspace({
   /** กติกาการสอบ — แสดงเป็นรายการก่อนปุ่มเริ่มสอบ */
   examRules: string[];
 }) {
-  const [openId, setOpenId] = useState<number | null>(documents.find((d) => !d.completed)?.id ?? documents[0]?.id ?? null);
+  // ที่ต้องเรียน vs เอกสารประกอบ — ตัวเลขทั้งหมดนับเฉพาะที่ต้องเรียน (ADR-0025)
+  const required = documents.filter((d) => !d.reference);
+  const references = documents.filter((d) => d.reference);
+  const [openId, setOpenId] = useState<number | null>(required.find((d) => !d.completed)?.id ?? documents[0]?.id ?? null);
   const [seenCount, setSeenCount] = useState<Record<number, number>>(() => Object.fromEntries(documents.map((d) => [d.id, d.pagesSeen.length])));
   const open = documents.find((d) => d.id === openId);
   const isDone = (d: LessonDoc) => d.completed || (seenCount[d.id] ?? 0) >= d.pageCount;
-  const doneCount = documents.filter(isDone).length;
-  const remaining = documents.length - doneCount;
+  const doneCount = required.filter(isDone).length;
+  const remaining = required.length - doneCount;
   const onSeen = (id: number) => (n: number) => setSeenCount((s) => (s[id] === n ? s : { ...s, [id]: n }));
 
-  const videos = documents.filter((d) => isVideoMime(d.mimeType));
-  const pdfs = documents.filter((d) => !isVideoMime(d.mimeType));
+  const videos = required.filter((d) => isVideoMime(d.mimeType));
+  const pdfs = required.filter((d) => !isVideoMime(d.mimeType));
   const summary = [
     videos.length ? `${videos.length} วิดีโอ · รวม ${formatDuration(videos.reduce((s, d) => s + (d.durationSeconds ?? d.pageCount * VIDEO_SEGMENT_SECONDS), 0))}` : null,
     pdfs.length ? `${pdfs.length} PDF ${pdfs.reduce((s, d) => s + d.pageCount, 0)} หน้า` : null,
@@ -85,7 +91,9 @@ export function LessonWorkspace({
   const titleOf = (d: LessonDoc) => (clipNo.has(d.id) ? `EP.${clipNo.get(d.id)} ${d.fileName}` : d.fileName);
   const [q, setQ] = useState("");
   const needle = q.trim().toLowerCase();
-  const shown = needle ? documents.filter((d) => titleOf(d).toLowerCase().includes(needle)) : documents;
+  const match = (d: LessonDoc) => !needle || titleOf(d).toLowerCase().includes(needle);
+  const shown = required.filter(match);
+  const shownRefs = references.filter(match);
   // รายการยาว (เกิน SEARCH_FROM รายการ) ถึงมีช่องค้นหา — ชุดสั้นไม่ต้องเห็นช่องที่ไม่จำเป็น
   const searchable = documents.length > SEARCH_FROM;
   const listRef = useRef<HTMLOListElement>(null);
@@ -109,12 +117,20 @@ export function LessonWorkspace({
               key={open.id}
               assignmentId={assignmentId}
               doc={open}
-              label={`EP.${clipNo.get(open.id)} จาก ${videos.length} คลิป`}
+              label={open.reference ? "เอกสารประกอบ · ไม่ต้องดูครบ" : `EP.${clipNo.get(open.id)} จาก ${videos.length} คลิป`}
               onSeen={onSeen(open.id)}
-              counting={!review}
+              counting={!review && !open.reference}
             />
           ) : (
-            <PdfDoc key={open.id} assignmentId={assignmentId} doc={open} viewer={viewer} onSeen={onSeen(open.id)} counting={!review} />
+            <PdfDoc
+              key={open.id}
+              assignmentId={assignmentId}
+              doc={open}
+              viewer={viewer}
+              onSeen={onSeen(open.id)}
+              counting={!review && !open.reference}
+              note={open.reference ? "เอกสารประกอบ · ไม่ต้องอ่านครบ" : undefined}
+            />
           )
         ) : (
           start
@@ -128,10 +144,10 @@ export function LessonWorkspace({
             <div className="flex items-baseline justify-between gap-2">
               <h2 className="text-[15px] font-semibold text-fg">เนื้อหาในชุด</h2>
               <span className="text-[13px] text-muted">
-                ครบ {doneCount}/{documents.length}
+                ครบ {doneCount}/{required.length}
               </span>
             </div>
-            <ProgressLine percent={documents.length ? (doneCount / documents.length) * 100 : 0} done={remaining === 0} />
+            <ProgressLine percent={required.length ? (doneCount / required.length) * 100 : 0} done={remaining === 0} />
             <p className="text-[13px] text-muted">{summary}</p>
             {searchable && (
               <label className="flex h-11 items-center gap-2 rounded-[10px] border border-line-strong bg-canvas px-3">
@@ -151,7 +167,7 @@ export function LessonWorkspace({
             )}
           </div>
           <ol ref={listRef} aria-label="รายการเนื้อหา" className="thin-scroll max-h-[min(62dvh,560px)] overflow-y-auto overscroll-contain p-1.5">
-            {shown.length === 0 && <li className="px-3 py-8 text-center text-[13px] text-muted">ไม่พบคลิปหรือเอกสารที่ชื่อมี “{q.trim()}”</li>}
+            {shown.length === 0 && shownRefs.length === 0 && <li className="px-3 py-8 text-center text-[13px] text-muted">ไม่พบคลิปหรือเอกสารที่ชื่อมี “{q.trim()}”</li>}
             {shown.map((d) => {
               const video = isVideoMime(d.mimeType);
               const seen = Math.min(seenCount[d.id] ?? 0, d.pageCount);
@@ -191,6 +207,33 @@ export function LessonWorkspace({
                     ) : current ? (
                       <span className="shrink-0 text-[13px] font-semibold text-ink-2">{video ? "กำลังดู" : "กำลังอ่าน"}</span>
                     ) : null}
+                  </button>
+                </li>
+              );
+            })}
+            {shownRefs.length > 0 && (
+              <li className="px-2.5 pb-1 pt-3 text-[12px] font-semibold text-muted">
+                เอกสารประกอบ · เปิดอ่านได้ ไม่ต้องครบก่อนสอบ
+              </li>
+            )}
+            {shownRefs.map((d) => {
+              const video = isVideoMime(d.mimeType);
+              const current = active && d.id === openId;
+              return (
+                <li key={d.id} ref={current ? currentRef : undefined}>
+                  <button
+                    type="button"
+                    onClick={() => setOpenId(d.id)}
+                    disabled={!active}
+                    aria-current={current ? "true" : undefined}
+                    className={`flex min-h-14 w-full items-center gap-3 rounded-[10px] p-2.5 text-left disabled:cursor-default ${current ? "bg-subtle" : "enabled:hover:bg-subtle"}`}
+                  >
+                    <Thumb video={video} cover={d.coverUrl} length={video ? formatDuration(d.durationSeconds ?? d.pageCount * VIDEO_SEGMENT_SECONDS) : null} />
+                    <span className="flex min-w-0 flex-1 flex-col gap-1">
+                      <span className="break-words text-[14px] font-semibold leading-snug text-fg">{d.fileName}</span>
+                      <span className="text-[13px] text-muted">{video ? "วิดีโอประกอบ" : `PDF ${d.pageCount} หน้า`}</span>
+                    </span>
+                    {current && <span className="shrink-0 text-[13px] font-semibold text-ink-2">{video ? "กำลังดู" : "กำลังอ่าน"}</span>}
                   </button>
                 </li>
               );
@@ -568,7 +611,9 @@ function VideoDoc({
       )}
       {!counting ? (
         <p className="rounded-[13px] border border-line bg-raised px-4 py-3.5 text-[13px] text-ink-2">
-          ทบทวน — ดูซ้ำได้ไม่จำกัด กรอและเร่งได้อิสระ ระบบไม่นับเวลา และไม่ต้องสอบใหม่
+          {doc.reference
+            ? "เอกสารประกอบ — ดูได้ตามสะดวก กรอและเร่งได้อิสระ ไม่นับความคืบหน้า และไม่ต้องดูครบก่อนสอบ"
+            : "ทบทวน — ดูซ้ำได้ไม่จำกัด กรอและเร่งได้อิสระ ระบบไม่นับเวลา และไม่ต้องสอบใหม่"}
         </p>
       ) : (
         <div className="space-y-2.5 rounded-[13px] border border-line bg-raised px-4 py-3.5">
@@ -621,12 +666,15 @@ function PdfDoc({
   viewer,
   onSeen,
   counting,
+  note,
 }: {
   assignmentId: number;
   doc: LessonDoc;
   viewer: string;
   onSeen: (n: number) => void;
   counting: boolean;
+  /** ข้อความแทน "อ่านแล้ว x จาก y" — เอกสารประกอบ (ADR-0025) */
+  note?: string;
 }) {
   const confidential = doc.kind === "pricelist";
   const router = useRouter();
@@ -704,7 +752,11 @@ function PdfDoc({
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <span className="min-w-0 truncate text-[14px] font-semibold text-fg">{doc.fileName}</span>
         <span className="text-[13px] text-muted">
-          {counting ? `อ่านแล้ว ${seen.size} จาก ${doc.pageCount} หน้า — เลื่อนให้ครบทุกหน้าก่อนสอบ` : `ทบทวน · ${doc.pageCount} หน้า`}
+          {note
+            ? `${note} · ${doc.pageCount} หน้า`
+            : counting
+              ? `อ่านแล้ว ${seen.size} จาก ${doc.pageCount} หน้า — เลื่อนให้ครบทุกหน้าก่อนสอบ`
+              : `ทบทวน · ${doc.pageCount} หน้า`}
         </span>
       </div>
       {confidential && <p className="mb-2 text-[13px] text-danger">Pricelist — ดูในระบบเท่านั้น · ทุกหน้ามีชื่อของคุณและเวลาที่เปิด · ระบบบันทึกการเปิดทุกครั้ง</p>}

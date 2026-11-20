@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { db } from "@/db";
 import { assignments, attempts, documents, learningSets, readingProgress, setKinds, setVersions, type SetStatus } from "@/db/schema";
 import { hiddenFromLists } from "@/domain/assignment-end";
-import { isVideoMime, VIDEO_SEGMENT_SECONDS } from "@/domain/document";
+import { isVideoMime, requiredForExam, VIDEO_SEGMENT_SECONDS } from "@/domain/document";
 import { assignmentState, type AssignmentState } from "@/lib/assignment-service";
 import type { Actor } from "@/lib/auth";
 import { coverPath } from "@/lib/set-service";
@@ -93,9 +93,9 @@ async function overview(actor: Pick<Actor, "personId" | "role">, statuses: reado
     if (v) shownOf.set(set.id, v);
   }
   const shownIds = [...shownOf.values()].map((v) => v.id);
-  // เอกสารที่ผู้เรียนต้องดู/อ่าน (มีจำนวนหน้า/ช่วง) — แบบเดียวกับหน้ารายการของผู้เรียน · Excel ไม่นับ · ที่ซ่อนไว้ไม่นับ
+  // เอกสารที่ผู้เรียนต้องดู/อ่าน (มีจำนวนหน้า/ช่วง) — แบบเดียวกับหน้ารายการของผู้เรียน · Excel ไม่นับ · ที่ซ่อนไว้และเอกสารประกอบไม่นับ
   const docs = shownIds.length
-    ? (await db().select().from(documents).where(inArray(documents.versionId, shownIds)).orderBy(documents.sortOrder)).filter((d) => d.pageCount !== null && !d.hidden)
+    ? (await db().select().from(documents).where(inArray(documents.versionId, shownIds)).orderBy(documents.sortOrder)).filter(requiredForExam)
     : [];
 
   // ชุดที่ยังไม่ปล่อยไม่มีการมอบ — ไม่ต้องถามผัง

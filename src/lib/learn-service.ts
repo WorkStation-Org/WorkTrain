@@ -33,7 +33,7 @@ import {
   type Rng,
 } from "@/domain/exam";
 import { scanGate } from "@/lib/identity-service";
-import { isVideoMime, maxNewSegments, VIDEO_HOLD_MS, VIDEO_SEGMENT_SECONDS, videoCredit } from "@/domain/document";
+import { isVideoMime, learnerVisible, maxNewSegments, requiredForExam, VIDEO_HOLD_MS, VIDEO_SEGMENT_SECONDS, videoCredit } from "@/domain/document";
 import { objectStore, VIDEO_LINK_TTL_SECONDS } from "@/lib/object-store";
 import { coverPath, type Outcome } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
@@ -84,12 +84,18 @@ async function approvedVersion(setId: number) {
 }
 
 /**
- * เอกสารที่ผู้เรียนต้องอ่าน/ดู — PDF ทุกชนิด (Pricelist แสดงแบบมีลายน้ำ) · วิดีโอ (นับเป็นช่วง) · Excel ยังแสดงทีละหน้าไม่ได้
- * ★ ที่ผู้สร้างซ่อนไว้ไม่อยู่ในนี้ — ไม่แสดง ไม่นับความคืบหน้า และเปิดไม่ได้ (ทุกทางที่เปิดเอกสารผ่านฟังก์ชันนี้)
+ * เอกสารที่ผู้เรียนเปิดได้ — PDF ทุกชนิด (Pricelist แสดงแบบมีลายน้ำ) · วิดีโอ (นับเป็นช่วง) · Excel ยังแสดงทีละหน้าไม่ได้
+ * ★ ที่ผู้สร้างซ่อนไว้ไม่อยู่ในนี้ — ไม่แสดง และเปิดไม่ได้ (ทุกทางที่เปิดเอกสารผ่านฟังก์ชันนี้)
+ * ★ รวมเอกสารประกอบ (ADR-0025) — เปิดได้ แต่ไม่นับความคืบหน้า (ดู `requiredDocuments`)
  */
-async function requiredDocuments(versionId: number) {
+async function visibleDocuments(versionId: number) {
   const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder), asc(documents.id));
-  return rows.filter((d) => d.pageCount !== null && !d.hidden);
+  return rows.filter(learnerVisible);
+}
+
+/** เอกสารที่ผู้เรียนต้องอ่าน/ดูครบก่อนสอบ — ที่เปิดได้ ยกเว้นเอกสารประกอบ · ส่งความคืบหน้าได้เฉพาะชุดนี้ */
+async function requiredDocuments(versionId: number) {
+  return (await visibleDocuments(versionId)).filter(requiredForExam);
 }
 
 // ── เวอร์ชันใหม่ (spec §7 · ADR-0008) ───────────────────────────────────────
@@ -350,7 +356,7 @@ async function openableDocument(input: { personId: number; assignmentId: number;
   if (!canReview(mine.a) && !(await activeSession(input.personId, input.now))) return { ok: false as const, error: "session_ended" };
   if (await openAttempt(mine.a.id)) return { ok: false as const, error: "กำลังสอบอยู่ — เปิดเอกสารไม่ได้" };
   const version = await approvedVersion(mine.set.id);
-  const doc = version ? (await requiredDocuments(version.id)).find((d) => d.id === input.documentId) : undefined;
+  const doc = version ? (await visibleDocuments(version.id)).find((d) => d.id === input.documentId) : undefined;
   if (!doc) return { ok: false as const, error: "ไม่พบเอกสารนี้" };
   return { ok: true as const, doc };
 }
@@ -532,7 +538,9 @@ export async function learnView(personId: number, assignmentId: number, now: Dat
   if (!mine || mine.set.status !== "active") return null;
   const version = await approvedVersion(mine.set.id);
   if (!version) return null;
-  const docs = await requiredDocuments(version.id);
+  // ที่ต้องเรียนก่อน แล้วตามด้วยเอกสารประกอบ — หน้าเรียนแยกเป็นสองกลุ่ม (ADR-0025)
+  const visible = await visibleDocuments(version.id);
+  const docs = [...visible.filter(requiredForExam), ...visible.filter((d) => !requiredForExam(d))];
   const progress = await db()
     .select()
     .from(readingProgress)
@@ -586,6 +594,8 @@ export async function learnView(personId: number, assignmentId: number, now: Dat
         pageCount: d.pageCount!,
         pagesSeen: p?.pagesSeen ?? [],
         completed: Boolean(p?.completedAt),
+        /** เอกสารประกอบ — เปิดได้ ไม่นับความคืบหน้า ไม่ต้องครบก่อนสอบ (ADR-0025) */
+        reference: !requiredForExam(d),
       };
     }),
     /** ครั้งที่สอบที่จบแล้ว พร้อมคะแนนเป็นข้อ (`right` จาก `total`) */

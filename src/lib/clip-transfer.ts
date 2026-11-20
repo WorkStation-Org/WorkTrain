@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, isNull, max, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
 import { approvalEvents, assignments, documents, documentViews, learningSets, readingProgress, setVersions } from "@/db/schema";
-import { coverKey, documentKey, isDocumentMime, isVideoMime } from "@/domain/document";
+import { coverKey, documentKey, isDocumentMime, isVideoMime, requiredForExam } from "@/domain/document";
 import type { Actor } from "@/lib/auth";
 import { objectStore } from "@/lib/object-store";
 import { canEditVersion, currentVersion, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
@@ -140,9 +140,9 @@ export async function transferClip(input: {
     const editable = current?.id === doc.versionId && canEditVersion(actor, source, current);
     if (editable && !(await hasLearnerRecords(doc.id))) sourceResult = "removed";
     else {
-      if (!doc.hidden) {
+      if (requiredForExam(doc)) {
         const siblings = await db().select().from(documents).where(eq(documents.versionId, doc.versionId));
-        const left = siblings.filter((d) => d.id !== doc.id && !d.hidden && d.pageCount !== null);
+        const left = siblings.filter((d) => d.id !== doc.id && requiredForExam(d));
         if (!left.length) return { ok: false, error: "ชุดนี้ต้องเหลือคลิปหรือเอกสารให้ผู้เรียนอย่างน้อย 1 รายการ — คัดลอกแทนการย้าย" };
       }
       sourceResult = "hidden";

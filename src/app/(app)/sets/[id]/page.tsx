@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { PersonName } from "@/components/person-name";
 import { Badge, Button, Card, FIELD_HINT_CLASS, FIELD_LABEL_CLASS, INPUT_CLASS, PageHeader, SectionTitle } from "@/components/ui";
 import { LEVEL_LABELS, slots, topicLabel, topicsOf, type Blueprint } from "@/domain/blueprint";
-import { aiReadable, isVideoMime } from "@/domain/document";
+import { examSource, isVideoMime } from "@/domain/document";
 import { coverage } from "@/domain/spread";
 import { FORMS_PER_VERSION, type Level } from "@/db/schema";
 import { hiddenFromLists, hiddenReason } from "@/domain/assignment-end";
@@ -12,7 +12,7 @@ import { clipTargets, type ClipTransferDetail } from "@/lib/clip-transfer";
 import { examEditor, reviewedQuestionIds } from "@/lib/exam-service";
 import { firstParam, pageActor } from "@/lib/page";
 import { personLabelsFrom } from "@/lib/person-name";
-import { approverRole, audienceMode, canCloseSet, canDeleteDraft, canEditDraft, canEditVersion, canManage, canRenameSet, coverPath, getSetDetail } from "@/lib/set-service";
+import { approverRole, audienceMode, canAddReference, canCloseSet, canDeleteDraft, canEditDraft, canEditVersion, canManage, canRenameSet, coverPath, getSetDetail } from "@/lib/set-service";
 import { formatBangkok } from "@/lib/time";
 import { fetchOrg } from "@/lib/workid";
 import {
@@ -60,6 +60,8 @@ const EVENT_LABELS: Record<string, string> = {
   renamed: "เปลี่ยนชื่อชุด",
   clip_sent: "ส่งคลิปไปชุดอื่น",
   clip_received: "รับคลิปจากชุดอื่น",
+  reference_added: "เพิ่มเอกสารประกอบ",
+  reference_removed: "ลบเอกสารประกอบ",
 };
 
 type Tab = "settings" | "docs" | "exam" | "audience" | "learners" | "history";
@@ -104,9 +106,12 @@ export default async function SetPage({
   const reviewedCount = allQuestions.filter((q) => reviewed.has(q.id)).length;
   const canReview = canManage(actor, set);
   // นับเฉพาะที่แสดงให้ผู้เรียน — ไฟล์ที่ซ่อนไว้ไม่อยู่ในแถบขั้นตอนและไม่อยู่ในแผนเฉลี่ยข้อสอบ (AI ไม่ใช้)
-  const shownDocs = documents.filter((d) => !d.hidden);
+  // เอกสารประกอบนับแยก — ไม่ใช่สิ่งที่ผู้เรียนต้องดู/อ่านครบ (ADR-0025)
+  const shownDocs = documents.filter((d) => !d.hidden && d.kind !== "reference");
+  const referenceCount = documents.filter((d) => !d.hidden && d.kind === "reference").length;
   const videos = shownDocs.filter((d) => isVideoMime(d.mimeType));
-  const aiDocs = shownDocs.filter((d) => aiReadable(d.mimeType));
+  // เอกสารประกอบไม่ใช่ที่มาของข้อสอบ (ADR-0025)
+  const aiDocs = documents.filter(examSource);
 
   const requested = firstParam(sp.tab) as Tab | undefined;
   const fallback: Tab =
@@ -141,7 +146,8 @@ export default async function SetPage({
         ? [
             videos.length && `${videos.length} วิดีโอ`,
             shownDocs.length - videos.length && `${shownDocs.length - videos.length} เอกสาร`,
-            documents.length > shownDocs.length && `ซ่อน ${documents.length - shownDocs.length}`,
+            referenceCount && `ประกอบ ${referenceCount}`,
+            documents.some((d) => d.hidden) && `ซ่อน ${documents.filter((d) => d.hidden).length}`,
           ]
             .filter(Boolean)
             .join(" · ")
@@ -328,6 +334,8 @@ export default async function SetPage({
               hidden: d.hidden,
             }))}
             editable={docsEditable}
+            // ชุดที่ใช้อยู่ (ไม่มีเวอร์ชันใหม่ค้าง) — เพิ่มเอกสารประกอบได้ทันที ไม่ต้องเริ่มเวอร์ชันใหม่ (ADR-0025)
+            addReference={!docsEditable && canAddReference(actor, set, version)}
             canSetCover={isOwner}
             canToggleHidden={isOwner && set.status !== "closed" && set.status !== "deleted"}
             allowPricelist={detail.kind.allowPricelist}
@@ -568,6 +576,7 @@ function eventNote(action: string, detail: unknown): string | null {
   } & Partial<ClipTransferDetail>;
   if (action === "document_visibility") return `${d.hidden ? "ซ่อน" : "แสดง"} ${d.fileName ?? "ไฟล์"}`;
   if (action === "renamed") return `จาก "${d.from ?? ""}" เป็น "${d.to ?? ""}"`;
+  if (action === "reference_added" || action === "reference_removed") return d.fileName ?? null;
   if (action === "clip_sent" || action === "clip_received") {
     const verb = d.mode === "move" ? "ย้าย" : "คัดลอก";
     const where = action === "clip_sent" ? `ไปชุด "${d.otherSet?.title ?? ""}"` : `จากชุด "${d.otherSet?.title ?? ""}"`;
@@ -628,6 +637,7 @@ function VersionCard({
           <p className="mb-3 text-[13px] text-ink-3">
             ใช้อยู่: เวอร์ชันที่ {version?.versionNo ?? 1}
             {version?.label ? ` · ${version.label}` : ""} — เอกสารเปลี่ยน (ราคา รุ่น เงื่อนไข) ให้เริ่มเวอร์ชันใหม่ ผู้เรียนยังใช้ของเดิมจนกว่าจะอนุมัติ
+            {isOwner && " · แค่เพิ่มไฟล์ไว้อ่านทบทวน ไม่ต้องเริ่มเวอร์ชันใหม่ — เพิ่มเป็นเอกสารประกอบด้านล่างได้เลย"}
           </p>
           {isOwner && (
             <form action={startVersionAction} className="flex flex-wrap items-end gap-2">

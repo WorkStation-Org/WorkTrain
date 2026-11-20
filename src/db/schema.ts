@@ -151,8 +151,11 @@ export const setVersions = pgTable(
   ],
 );
 
-/** ชนิดของเอกสารต้นทาง — Pricelist ดูได้อย่างเดียวพร้อมลายน้ำ (ADR-0010) */
-export const DOCUMENT_KINDS = ["catalog", "pricelist", "other"] as const;
+/**
+ * ชนิดของเอกสารต้นทาง — Pricelist ดูได้อย่างเดียวพร้อมลายน้ำ (ADR-0010) ·
+ * `reference` = เอกสารประกอบ: เปิดอ่าน/ดูได้ ไม่ต้องครบก่อนสอบ · AI ไม่ใช้ · เพิ่มเข้าชุดที่ใช้อยู่ได้ทันทีโดยไม่ต้องเริ่มเวอร์ชันใหม่ (ADR-0025)
+ */
+export const DOCUMENT_KINDS = ["catalog", "pricelist", "other", "reference"] as const;
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 
 export const documents = pgTable(
@@ -308,6 +311,10 @@ export const APPROVAL_ACTIONS = [
   "clip_sent",
   /** คลิปเข้ามาจากชุดอื่น (ADR-0022) · detail `ClipTransferDetail` */
   "clip_received",
+  /** ผู้สร้าง/TG เพิ่มเอกสารประกอบเข้าเวอร์ชันที่ผู้เรียนเห็นอยู่ (ADR-0025) · detail `{ documentId, fileName }` */
+  "reference_added",
+  /** ผู้สร้าง/TG ลบเอกสารประกอบที่ยังไม่มีใครเปิดออกจากเวอร์ชันที่ผู้เรียนเห็นอยู่ (ADR-0025) · detail `{ documentId, fileName }` */
+  "reference_removed",
 ] as const;
 export type ApprovalAction = (typeof APPROVAL_ACTIONS)[number];
 

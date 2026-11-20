@@ -8,7 +8,7 @@ import { MAX_SEND_ATTEMPTS, sendToPerson, type SendResult } from "@/lib/deliver"
 import { checkForms, type ExamModel } from "@/lib/exam-generator";
 import { newVersionMessage } from "@/lib/line-cards";
 import { formsComplete, logFormsEvent, replaceForms, sourceDocuments } from "@/lib/exam-service";
-import { approverRole, canEditVersion, currentVersion, onBehalfDetail, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
+import { approverRole, canEditVersion, currentVersion, missingRequiredContent, onBehalfDetail, type Outcome, type SetRow, type VersionRow } from "@/lib/set-service";
 import { fetchOrg } from "@/lib/workid";
 
 /**
@@ -117,6 +117,8 @@ export async function submitVersion(input: { actor: Actor; setId: number; now?: 
   if (set.approverPersonId === input.actor.personId) return { ok: false, error: "ผู้ส่งต้องไม่ใช่ผู้อนุมัติ — ให้ผู้สร้างกดส่ง หรือเปลี่ยนผู้อนุมัติ" };
   const docs = await db().select({ id: documents.id }).from(documents).where(eq(documents.versionId, v.id));
   if (!docs.length) return { ok: false, error: "เวอร์ชันใหม่ยังไม่มีเอกสาร" };
+  const nothingToLearn = await missingRequiredContent(v.id);
+  if (nothingToLearn) return { ok: false, error: nothingToLearn };
   const incomplete = await formsComplete(v.id, set.blueprint as Blueprint);
   if (incomplete) return { ok: false, error: incomplete };
   if (!v.changeSummary?.trim()) return { ok: false, error: "ให้ AI สรุปสิ่งที่เปลี่ยนก่อนส่ง" };

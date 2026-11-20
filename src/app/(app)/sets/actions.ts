@@ -135,6 +135,8 @@ export async function confirmUploadAction(input: { setId: number; token: string 
   const actor = await requireAuthor();
   const out = await confirmUpload({ actor, token: input.token });
   revalidatePath(`/sets/${input.setId}`);
+  // เอกสารประกอบเข้าชุดที่ใช้อยู่ = ผู้เรียนเห็นทันที (ADR-0025)
+  if (out.ok) revalidatePath("/learn", "layout");
   return out;
 }
 
@@ -162,7 +164,9 @@ export async function previewLinkAction(input: { documentId: number }) {
 
 export async function removeDocumentAction(form: FormData) {
   const actor = await requireAuthor();
-  back(int(form, "setId"), await removeDocument({ actor, documentId: int(form, "documentId") }), "ลบเอกสารแล้ว", str(form, "tab"));
+  const out = await removeDocument({ actor, documentId: int(form, "documentId") });
+  if (out.ok) revalidatePath("/learn", "layout");
+  back(int(form, "setId"), out, "ลบเอกสารแล้ว", str(form, "tab"));
 }
 
 export async function generateExamsAction(form: FormData) {

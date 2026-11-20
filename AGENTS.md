@@ -46,6 +46,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `src/lib/set-overview.ts` — `/sets/released` ภาพรวมชุดที่ปล่อยแล้ว (ใช้อยู่ + ปิดแล้ว) แบบการ์ด: เนื้อหา · วันที่ปล่อย · ผ่าน/กำลังเรียน/ยังไม่เริ่ม/เลยกำหนด
   (นับด้วย `assignmentState()` ตัวเดียวกับแท็บผู้เรียน) · ปกการ์ดใช้ `components/set-cover.tsx` ร่วมกับ `/learn`
 - `src/lib/set-service.ts` — สร้างชุด · ตั้งค่า · อัปโหลด (ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยันด้วย HEAD) · `getSetDetail()` (มีเฉลย — เฉพาะ `canManage`) ·
+  เอกสารประกอบเข้าชุดที่ใช้อยู่ได้ทันที (`canAddReference` · ลงประวัติ `reference_added`/`reference_removed` · ADR-0025) ·
+  ที่นับว่า "ต้องเรียน" ตัดสินที่ `requiredForExam()` ใน `src/domain/document.ts` ที่เดียว ·
   `renameSet()` TG เปลี่ยนชื่อชุดได้ทุกสถานะ (ลงประวัติ `renamed` · ชื่อชุดไม่มี snapshot ที่ไหน · ADR-0022)
 - `src/lib/clip-transfer.ts` — TG ย้าย/คัดลอกคลิปไปชุดอื่น (`transferClip` · `clipTargets` · ADR-0022): copy ไฟล์+ปกใน R2 เป็น key ของชุดปลายทางเสมอ ·
   ย้าย = ลบในเวอร์ชันที่ยังแก้ได้และยังไม่มีใครเรียน ไม่งั้นซ่อน · ปลายทางรับได้เฉพาะร่าง/ใช้อยู่ · UI `sets/[id]/clip-transfer.tsx` ในแผงคลิปของขั้นเอกสาร

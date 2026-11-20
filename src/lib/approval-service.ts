@@ -5,7 +5,7 @@ import { approvalEvents, learningSets, setVersions } from "@/db/schema";
 import type { Blueprint } from "@/domain/blueprint";
 import type { Actor } from "@/lib/auth";
 import { formsComplete } from "@/lib/exam-service";
-import { approverRole, canCloseSet, canDeleteDraft, canEditDraft, onBehalfDetail, type Outcome, type SetRow } from "@/lib/set-service";
+import { approverRole, canCloseSet, canDeleteDraft, canEditDraft, missingRequiredContent, onBehalfDetail, type Outcome, type SetRow } from "@/lib/set-service";
 
 /**
  * การอนุมัติ (spec §4 · ADR-0004) — ร่าง → รออนุมัติ → (ตีกลับ → ร่าง) → ใช้อยู่ → ปิด · ร่างลบได้ (ADR-0016)
@@ -34,6 +34,8 @@ export async function submitForApproval(input: { actor: Actor; setId: number; no
   if (set.approverPersonId === input.actor.personId) return { ok: false, error: "ผู้ส่งต้องไม่ใช่ผู้อนุมัติ — ให้ผู้สร้างกดส่ง หรือเปลี่ยนผู้อนุมัติ" };
   const version = await latestVersion(set.id);
   if (!version) return { ok: false, error: "ชุดนี้ยังไม่มีเอกสาร" };
+  const nothingToLearn = await missingRequiredContent(version.id);
+  if (nothingToLearn) return { ok: false, error: nothingToLearn };
   const incomplete = await formsComplete(version.id, set.blueprint as Blueprint);
   if (incomplete) return { ok: false, error: incomplete };
 
