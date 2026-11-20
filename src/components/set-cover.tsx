@@ -17,8 +17,9 @@ export function SetCover({
   return (
     <div className={`relative flex aspect-video items-center justify-center overflow-hidden ${hasVideo ? "bg-[#2c2e32]" : "bg-subtle"}`}>
       {/* eslint-disable-next-line @next/next/no-img-element -- ภาพผ่าน route ที่ตรวจสิทธิ์ ไม่ผ่าน next/image */}
-      {coverUrl && <img src={coverUrl} alt="" className="absolute inset-0 size-full object-cover" />}
-      <span className={`absolute left-3 top-2.5 rounded px-1.5 text-[11px] tracking-wide ${hasVideo ? "bg-black/45 text-[#e7e8ea]" : "text-muted"}`}>
+      {/* ปก PDF (หน้าแรก · ADR-0026) ชิดบน — หัวเรื่องของเอกสารอยู่ด้านบน */}
+      {coverUrl && <img src={coverUrl} alt="" className={`absolute inset-0 size-full object-cover ${hasVideo ? "" : "object-top"}`} />}
+      <span className={`absolute left-3 top-2.5 rounded px-1.5 text-[11px] tracking-wide ${hasVideo || coverUrl ? "bg-black/45 text-[#e7e8ea]" : "text-muted"}`}>
         {kindName}
       </span>
       {hasVideo ? (
@@ -30,7 +31,7 @@ export function SetCover({
           </span>
           {videoChip && <span className="absolute bottom-2.5 right-2.5 rounded bg-black/60 px-1.5 text-[11px] leading-5 text-white">{videoChip}</span>}
         </>
-      ) : (
+      ) : coverUrl ? null : (
         <svg width="38" height="46" viewBox="0 0 40 48" fill="none" stroke="currentColor" strokeWidth="2" className="text-ink-4" aria-hidden>
           <path d="M6 2h20l10 10v34H6z" />
           <path d="M26 2v10h10" />

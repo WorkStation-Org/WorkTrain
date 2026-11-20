@@ -31,6 +31,7 @@ import {
   isDocumentMime,
   isJpeg,
   isVideoMime,
+  canHaveCover,
   kindAllowsMime,
   kindMimeError,
   maxBytesFor,
@@ -602,12 +603,18 @@ export async function updateDocument(input: {
       if (!k?.allowPricelist) return { ok: false, error: "ชนิดของชุดนี้ไม่ได้เปิดให้แนบ Pricelist" };
     }
     patch.kind = kind;
+    // เปลี่ยนเป็น Pricelist = ปกหน้าแรก (ไม่มีลายน้ำ) ต้องหายไปด้วย (ADR-0026)
+    if (kind === "pricelist" && doc.coverKey) {
+      patch.coverKey = null;
+      patch.coverMs = null;
+    }
   }
   if (input.examWeight !== undefined) {
     if (!Number.isInteger(input.examWeight) || input.examWeight < 0 || input.examWeight > 5) return { ok: false, error: "น้ำหนักต้องเป็น 0–5" };
     patch.examWeight = input.examWeight;
   }
   if (Object.keys(patch).length) await db().update(documents).set(patch).where(eq(documents.id, doc.id));
+  if (patch.coverKey === null && doc.coverKey) await objectStore()?.delete(doc.coverKey);
   return { ok: true };
 }
 
@@ -687,16 +694,18 @@ async function documentWithSet(documentId: number) {
 }
 
 /**
- * ตั้งปกวิดีโอจากเฟรมที่ผู้สร้างจับในเบราว์เซอร์ — ผู้สร้างหรือ TG เปลี่ยนได้ทุกเมื่อ (ปกไม่ใช่เนื้อหาที่ต้องเรียน จึงไม่ผูกกับร่าง/อนุมัติ)
+ * ตั้งปกจากภาพที่ผู้สร้างทำในเบราว์เซอร์ — วิดีโอ: เฟรมที่เลือก (ADR-0013) · PDF: หน้าแรกอัตโนมัติ (ADR-0026) · Pricelist ไม่มีปก
+ * ผู้สร้างหรือ TG เปลี่ยนได้ทุกเมื่อ (ปกไม่ใช่เนื้อหาที่ต้องเรียน จึงไม่ผูกกับร่าง/อนุมัติ)
  * ตรวจไฟล์เองว่าเป็น JPEG จริงและไม่ใหญ่เกิน · ปกเก่าถูกลบจากที่เก็บ
  */
-export async function setVideoCover(input: { actor: Actor; documentId: number; bytes: Uint8Array; ms: number }): Promise<Outcome> {
+export async function setDocumentCover(input: { actor: Actor; documentId: number; bytes: Uint8Array; ms: number }): Promise<Outcome> {
   const found = await documentWithSet(input.documentId);
-  if (!found || !isOwnerOrAdmin(input.actor, found.set)) return { ok: false, error: "ไม่พบวิดีโอนี้ หรือไม่มีสิทธิ์เปลี่ยนปก" };
+  if (!found || !isOwnerOrAdmin(input.actor, found.set)) return { ok: false, error: "ไม่พบไฟล์นี้ หรือไม่มีสิทธิ์เปลี่ยนปก" };
   const { doc } = found;
-  if (!isVideoMime(doc.mimeType)) return { ok: false, error: "ตั้งปกได้เฉพาะวิดีโอ" };
+  if (!canHaveCover(doc)) return { ok: false, error: doc.kind === "pricelist" ? "Pricelist ไม่มีปก — ราคาดูได้ในตัวอ่านที่มีลายน้ำเท่านั้น" : "ตั้งปกได้เฉพาะวิดีโอและ PDF" };
   if (input.bytes.byteLength > MAX_COVER_BYTES || !isJpeg(input.bytes)) return { ok: false, error: "ภาพปกไม่ถูกต้อง ลองเลือกเฟรมใหม่" };
-  const maxMs = (doc.durationSeconds ?? 0) * 1000 + 1000;
+  // PDF ใช้หน้าแรกเสมอ (`ms` = 0) · วิดีโอต้องเป็นเฟรมที่อยู่ในคลิป
+  const maxMs = isVideoMime(doc.mimeType) ? (doc.durationSeconds ?? 0) * 1000 + 1000 : 0;
   const ms = Math.round(input.ms);
   if (!Number.isFinite(ms) || ms < 0 || ms > maxMs) return { ok: false, error: "ตำแหน่งเฟรมอยู่นอกความยาวคลิป" };
   const store = objectStore();

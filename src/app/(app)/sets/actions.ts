@@ -20,7 +20,7 @@ import {
   requestUpload,
   setDocumentHidden,
   setSpreadMode,
-  setVideoCover,
+  setDocumentCover,
   updateDocument,
   updateSettings,
 } from "@/lib/set-service";
@@ -140,12 +140,12 @@ export async function confirmUploadAction(input: { setId: number; token: string 
   return out;
 }
 
-/** ปกวิดีโอ (ADR-0013) — ฟอร์มส่ง `setId` · `documentId` · `ms` · `cover` (JPEG ที่จับจากเฟรมในเบราว์เซอร์) */
+/** ปกวิดีโอ (ADR-0013) / PDF (ADR-0026) — ฟอร์มส่ง `setId` · `documentId` · `ms` · `cover` (JPEG ที่ทำในเบราว์เซอร์) */
 export async function setCoverAction(form: FormData) {
   const actor = await requireUser();
   const file = form.get("cover");
   if (!(file instanceof Blob)) return { ok: false as const, error: "ไม่มีภาพปก" };
-  const out = await setVideoCover({ actor, documentId: int(form, "documentId"), ms: Number(str(form, "ms")), bytes: new Uint8Array(await file.arrayBuffer()) });
+  const out = await setDocumentCover({ actor, documentId: int(form, "documentId"), ms: Number(str(form, "ms")), bytes: new Uint8Array(await file.arrayBuffer()) });
   revalidatePath(`/sets/${int(form, "setId")}`);
   return out;
 }

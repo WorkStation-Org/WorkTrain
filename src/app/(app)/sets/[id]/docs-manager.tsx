@@ -7,6 +7,7 @@ import { Button, INPUT_CLASS } from "@/components/ui";
 import type { DocumentKind } from "@/db/schema";
 import {
   aiReadable,
+  canHaveCover,
   DOCUMENT_KIND_LABELS,
   DOCUMENT_MIMES,
   formatBytesLimit,
@@ -17,10 +18,11 @@ import {
   kindMimeError,
   maxBytesFor,
 } from "@/domain/document";
-import { confirmUploadAction, moveDocumentAction, removeDocumentAction, requestUploadAction, setDocumentHiddenAction, updateDocumentAction } from "../actions";
+import { confirmUploadAction, moveDocumentAction, previewLinkAction, removeDocumentAction, requestUploadAction, setDocumentHiddenAction, updateDocumentAction } from "../actions";
 import { ClipTransfer, type ClipTransferOptions, type TransferNotice } from "./clip-transfer";
 import { captureCoverFromFile, CoverEditor, saveCover } from "./cover-picker";
 import { PdfPreview, VideoPreview } from "./doc-preview";
+import { capturePdfCover } from "./pdf-cover";
 
 /**
  * เอกสารต้นทาง — ลากวางได้ทีละหลายไฟล์ (ดูชนิดไฟล์ให้เอง) · รายการตามลำดับที่ผู้เรียนเห็นพร้อมป้าย "ใช้ทำอะไร" ·
@@ -28,7 +30,9 @@ import { PdfPreview, VideoPreview } from "./doc-preview";
  * TG ย้าย/คัดลอกคลิปไปชุดอื่นได้จากแผงเดียวกัน (`clip-transfer.tsx` · ADR-0022)
  * ชุดที่ใช้อยู่ (`addReference`) อัปได้เฉพาะเอกสารประกอบ — ขึ้นให้ผู้เรียนทันที ไม่ต้องเริ่มเวอร์ชันใหม่ · เปลี่ยนชื่อ/ลบ (ที่ยังไม่มีใครเปิด) ได้ (ADR-0025)
  *
- * ★ อัปทางเดิม: ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยัน · วิดีโอได้ปกอัตโนมัติจากเฟรมที่ 10% ของไฟล์ในเครื่อง (ไม่ต้องพึ่ง CORS)
+ * ★ อัปทางเดิม: ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยัน · วิดีโอได้ปกอัตโนมัติจากเฟรมในไฟล์ในเครื่อง (ไม่ต้องพึ่ง CORS)
+ * ★ PDF ได้ปกหน้าแรกอัตโนมัติ (ADR-0026) — ตอนอัปวาดจากไฟล์ในเครื่อง · PDF ที่อัปไว้ก่อนแล้วยังไม่มีปก ทำให้เองเมื่อผู้สร้าง/TG เปิดแท็บนี้ ·
+ *   Pricelist ไม่มีปก (ภาพหน้าแรกไม่มีลายน้ำ)
  */
 
 export interface DocItem {
@@ -104,6 +108,31 @@ export function DocsManager({
   const [notice, setNotice] = useState<TransferNotice | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const sel = docs.find((d) => d.id === selected) ?? docs[0];
+  // ปก PDF ที่ยังไม่มี — ทำทีละไฟล์ครั้งเดียวต่อการเปิดหน้า (ทำไม่ได้ก็ข้าม ไม่วนลองซ้ำ)
+  const [covering, setCovering] = useState<{ done: number; total: number } | null>(null);
+  const coverTried = useRef<Set<number>>(new Set());
+  const coverRunning = useRef(false);
+
+  useEffect(() => {
+    if (!canSetCover || coverRunning.current) return;
+    const missing = docs.filter((d) => d.mimeType === "application/pdf" && !d.coverUrl && canHaveCover(d) && !coverTried.current.has(d.id));
+    if (!missing.length) return;
+    coverRunning.current = true;
+    for (const d of missing) coverTried.current.add(d.id);
+    void (async () => {
+      let made = 0;
+      setCovering({ done: 0, total: missing.length });
+      for (const [i, d] of missing.entries()) {
+        const link = await previewLinkAction({ documentId: d.id }).catch(() => null);
+        const blob = link?.ok ? await capturePdfCover({ url: link.url }) : null;
+        if (blob && (await saveCover(setId, d.id, blob, 0).catch(() => null))?.ok) made += 1;
+        setCovering({ done: i + 1, total: missing.length });
+      }
+      setCovering(null);
+      coverRunning.current = false;
+      if (made) router.refresh();
+    })();
+  }, [docs, canSetCover, setId, router]);
 
   // ตัวเลขทั้งหมดนับเฉพาะที่ผู้เรียนต้องดู/อ่าน — แบบเดียวกับหน้าเรียน (เอกสารประกอบนับแยก · ADR-0025)
   const shown = docs.filter((d) => !d.hidden && d.kind !== "reference");
@@ -147,6 +176,11 @@ export function DocsManager({
     if (isVideoMime(file.type)) {
       const cover = await captureCoverFromFile(file);
       if (cover) await saveCover(setId, done.documentId, cover.blob, cover.ms).catch(() => null);
+    } else if (file.type === "application/pdf") {
+      // กันไม่ให้ effect ทำปกซ้ำระหว่างรอ — ปกจากไฟล์ในเครื่องได้เสมอ ไม่ต้องพึ่ง CORS
+      coverTried.current.add(done.documentId);
+      const blob = await capturePdfCover({ data: new Uint8Array(await file.arrayBuffer()) });
+      if (blob) await saveCover(setId, done.documentId, blob, 0).catch(() => null);
     }
     patchQueue(key, { status: "done" });
   }
@@ -168,6 +202,11 @@ export function DocsManager({
           {pdfs.length ? "✓ มี PDF ให้ AI ออกข้อสอบ" : "⚠ ยังไม่มี PDF — AI ออกข้อสอบไม่ได้"}
         </li>
         {noCover > 0 && <li className="rounded-full bg-warn-soft px-2.5 py-1 font-semibold text-warn">⚠ {noCover} คลิปยังไม่มีปก</li>}
+        {covering && (
+          <li role="status" className="rounded-full border border-line px-2.5 py-1 text-ink-2">
+            กำลังทำปก PDF {covering.done}/{covering.total}…
+          </li>
+        )}
         {docs.length > 0 && <li className="rounded-full border border-line px-2.5 py-1 text-ink-2">ผู้เรียนใช้เวลาราว {Math.max(1, minutes)} นาที</li>}
       </ul>
 
@@ -320,7 +359,7 @@ export function DocsManager({
                       <button type="button" onClick={() => setSelected(d.id)} aria-current={current ? "true" : undefined} className="flex min-h-16 min-w-0 flex-1 items-center gap-3 p-2 text-left">
                         <span className={`relative flex aspect-video w-[84px] shrink-0 items-center justify-center overflow-hidden rounded-md ${video ? "bg-[#2c2e32] text-white" : "border border-line bg-subtle text-muted"}`}>
                           {/* eslint-disable-next-line @next/next/no-img-element -- ภาพผ่าน route ที่ตรวจสิทธิ์ */}
-                          {d.coverUrl && <img src={d.coverUrl} alt="" className="absolute inset-0 size-full object-cover" />}
+                          {d.coverUrl && <img src={d.coverUrl} alt="" className={`absolute inset-0 size-full object-cover ${video ? "" : "object-top"}`} />}
                           {video ? (
                             <>
                               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="relative" aria-hidden>
@@ -329,7 +368,9 @@ export function DocsManager({
                               <span className="absolute bottom-0.5 right-1 rounded-[3px] bg-black/60 px-1 text-[10px] leading-4">{formatDuration(d.durationSeconds ?? 0)}</span>
                             </>
                           ) : (
-                            <span className="text-[10px] font-bold">{DOCUMENT_MIMES[d.mimeType as keyof typeof DOCUMENT_MIMES]?.toUpperCase() ?? "FILE"}</span>
+                            <span className={d.coverUrl ? "absolute bottom-0.5 right-1 rounded-[3px] bg-black/60 px-1 text-[10px] font-bold leading-4 text-white" : "text-[10px] font-bold"}>
+                              {DOCUMENT_MIMES[d.mimeType as keyof typeof DOCUMENT_MIMES]?.toUpperCase() ?? "FILE"}
+                            </span>
                           )}
                         </span>
                         <span className={`flex min-w-0 flex-1 flex-col gap-0.5 ${d.hidden ? "opacity-60" : ""}`}>
@@ -445,7 +486,7 @@ function DocPanel({
     <aside aria-label="รายละเอียดไฟล์ที่เลือก" className="min-w-0 flex-[1_1_340px] overflow-hidden rounded-[13px] border border-line bg-raised">
       <div className={`relative flex aspect-video flex-col items-center justify-center gap-3 ${video ? "bg-[#2c2e32]" : "bg-canvas"}`}>
         {/* eslint-disable-next-line @next/next/no-img-element -- ภาพผ่าน route ที่ตรวจสิทธิ์ */}
-        {doc.coverUrl && <img src={doc.coverUrl} alt={`ปกของ ${doc.fileName}`} className="absolute inset-0 size-full object-cover" />}
+        {doc.coverUrl && <img src={doc.coverUrl} alt={`ปกของ ${doc.fileName}`} className={`absolute inset-0 size-full object-cover ${video ? "" : "object-top"}`} />}
         {!doc.coverUrl &&
           (video ? (
             // มุมล่าง — กลางกรอบเป็นปุ่มเล่น
