@@ -160,11 +160,40 @@ export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
   catalog: "เอกสารหลัก",
   pricelist: "Pricelist",
   other: "อื่น ๆ",
+  reference: "เอกสารประกอบ",
 };
 
-/** Pricelist ต้องเป็นเอกสาร (ประทับลายน้ำทุกหน้า · ADR-0010) — ไม่รับวิดีโอ */
+/**
+ * Pricelist ต้องเป็นเอกสาร (ประทับลายน้ำทุกหน้า · ADR-0010) — ไม่รับวิดีโอ ·
+ * เอกสารประกอบต้องเปิดบนหน้าเรียนได้ — PDF หรือวิดีโอ (Excel ยังแสดงให้ผู้เรียนไม่ได้ · ADR-0025)
+ */
 export function kindAllowsMime(kind: DocumentKind, mime: DocumentMime): boolean {
-  return !(kind === "pricelist" && isVideoMime(mime));
+  if (kind === "pricelist") return !isVideoMime(mime);
+  if (kind === "reference") return mime === "application/pdf" || isVideoMime(mime);
+  return true;
+}
+
+/** เหตุผลเมื่อ `kindAllowsMime` ไม่ผ่าน */
+export function kindMimeError(kind: DocumentKind): string {
+  return kind === "reference" ? "เอกสารประกอบต้องเป็น PDF หรือวิดีโอ MP4" : "Pricelist ต้องเป็น PDF หรือ Excel — วิดีโอแนบเป็นเอกสารหลักหรืออื่น ๆ";
+}
+
+/**
+ * ผู้เรียนต้องดู/อ่านครบก่อนสอบไหม — มีจำนวนหน้า/ช่วง (Excel ไม่นับ) · ไม่ได้ซ่อน · ไม่ใช่เอกสารประกอบ (ADR-0025)
+ * ★ ทุกที่ที่นับ "ครบ" ใช้ตัวนี้ตัวเดียว — หน้าเรียน · รายการผู้เรียน · ภาพรวมชุด · ด่าน "ต้องเหลืออย่างน้อย 1 รายการ"
+ */
+export function requiredForExam(d: { kind: string; pageCount: number | null; hidden: boolean }): boolean {
+  return d.pageCount !== null && !d.hidden && d.kind !== "reference";
+}
+
+/** ผู้เรียนเปิดได้ไหม — ที่ต้องเรียน + เอกสารประกอบที่ไม่ได้ซ่อน */
+export function learnerVisible(d: { pageCount: number | null; hidden: boolean }): boolean {
+  return d.pageCount !== null && !d.hidden;
+}
+
+/** AI ใช้ออกข้อสอบไหม — PDF ที่ไม่ได้ซ่อน และไม่ใช่เอกสารประกอบ */
+export function examSource(d: { kind: string; mimeType: string; hidden: boolean }): boolean {
+  return aiReadable(d.mimeType) && !d.hidden && d.kind !== "reference";
 }
 
 /** Pricelist ดาวน์โหลดไม่ได้ (ADR-0010) */

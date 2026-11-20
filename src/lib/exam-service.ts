@@ -13,7 +13,7 @@ import {
   type FormKind,
 } from "@/db/schema";
 import { DELTA_BLUEPRINT, slots, type Blueprint } from "@/domain/blueprint";
-import { aiReadable } from "@/domain/document";
+import { aiReadable, examSource } from "@/domain/document";
 import { spreadPlan } from "@/domain/spread";
 import type { Actor } from "@/lib/auth";
 import { checkForms, checkQuestion, type ExamModel, type GeneratedQuestion, type SourceDocument } from "@/lib/exam-generator";
@@ -60,11 +60,13 @@ export async function sourceDocuments(versionId: number): Promise<Outcome<{ docs
   const store = objectStore();
   if (!store) return { ok: false, error: "ยังไม่ได้ตั้งที่เก็บไฟล์ (R2) บนเซิร์ฟเวอร์นี้" };
   const rows = await db().select().from(documents).where(eq(documents.versionId, versionId)).orderBy(asc(documents.sortOrder));
-  // ไฟล์ที่ซ่อนไว้ผู้เรียนไม่ได้อ่าน — ไม่ให้ AI ออกข้อสอบจากไฟล์นั้น
-  const readable = rows.filter((d) => aiReadable(d.mimeType) && !d.hidden);
+  // ไฟล์ที่ซ่อนไว้ผู้เรียนไม่ได้อ่าน · เอกสารประกอบไม่บังคับอ่าน (ADR-0025) — ไม่ให้ AI ออกข้อสอบจากไฟล์นั้น
+  const readable = rows.filter(examSource);
   if (!readable.length) {
-    const hiddenPdf = rows.some((d) => aiReadable(d.mimeType) && d.hidden);
-    return { ok: false, error: hiddenPdf ? "PDF ทุกไฟล์ถูกซ่อนอยู่ — แสดงอย่างน้อย 1 ไฟล์ก่อนออกข้อสอบ" : "ต้องมีเอกสาร PDF อย่างน้อย 1 ไฟล์ก่อนออกข้อสอบ" };
+    const pdfs = rows.filter((d) => aiReadable(d.mimeType));
+    if (pdfs.some((d) => d.hidden)) return { ok: false, error: "PDF ทุกไฟล์ถูกซ่อนอยู่ — แสดงอย่างน้อย 1 ไฟล์ก่อนออกข้อสอบ" };
+    if (pdfs.length) return { ok: false, error: "PDF ทุกไฟล์เป็นเอกสารประกอบ — AI ไม่ใช้ออกข้อสอบ ตั้งอย่างน้อย 1 ไฟล์เป็นเอกสารหลักหรืออื่น ๆ" };
+    return { ok: false, error: "ต้องมีเอกสาร PDF อย่างน้อย 1 ไฟล์ก่อนออกข้อสอบ" };
   }
   const docs: SourceDocument[] = [];
   for (const d of readable) {
@@ -335,9 +337,14 @@ async function sheetTarget(actor: Pick<Actor, "personId" | "role">, setId: numbe
     if (!pending || !approverRole(actor, set)) return { ok: false as const, error: "Import ข้อสอบส่วนที่เปลี่ยนได้เฉพาะผู้อนุมัติของเวอร์ชันที่รออนุมัติ" };
     if (version.changeKind !== "large") return { ok: false as const, error: 'เลือก "เรียนรู้และทดสอบ" ก่อน' };
   }
-  const all = await db().select({ fileName: documents.fileName, hidden: documents.hidden }).from(documents).where(eq(documents.versionId, version.id)).orderBy(asc(documents.sortOrder));
+  const all = await db()
+    .select({ fileName: documents.fileName, hidden: documents.hidden, kind: documents.kind })
+    .from(documents)
+    .where(eq(documents.versionId, version.id))
+    .orderBy(asc(documents.sortOrder));
   if (!all.length) return { ok: false as const, error: "ชุดนี้ยังไม่มีเอกสาร" };
-  const docs = all.filter((d) => !d.hidden);
+  // เอกสารประกอบไม่ใช่ที่มาของข้อสอบ (ADR-0025)
+  const docs = all.filter((d) => !d.hidden && d.kind !== "reference");
   if (!docs.length) return { ok: false as const, error: "ทุกไฟล์ในชุดนี้ถูกซ่อนอยู่ — แสดงอย่างน้อย 1 ไฟล์ก่อน" };
   const blueprint = kind === "delta" ? DELTA_BLUEPRINT : (set.blueprint as Blueprint);
   return { ok: true as const, set, version, blueprint, fileNames: docs.map((d) => d.fileName) };

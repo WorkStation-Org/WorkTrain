@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { PDFDocument } from "pdf-lib";
 import { db } from "@/db";
 import { atomic } from "@/db/atomic";
@@ -12,6 +12,7 @@ import {
   examForms,
   learningSets,
   questions,
+  readingProgress,
   setKinds,
   setVersions,
   DOCUMENT_KINDS,
@@ -31,7 +32,9 @@ import {
   isJpeg,
   isVideoMime,
   kindAllowsMime,
+  kindMimeError,
   maxBytesFor,
+  requiredForExam,
   videoSegmentCount,
 } from "@/domain/document";
 import { mp4DurationSeconds } from "@/domain/mp4";
@@ -141,6 +144,38 @@ export function canEditVersion(
     version.submittedAt === null &&
     isOwnerOrAdmin(actor, set)
   );
+}
+
+/**
+ * เพิ่มเอกสารประกอบเข้าเวอร์ชันที่ผู้เรียนเห็นอยู่ได้ไหม (ADR-0025) — ผู้สร้างหรือ TG ของชุดที่ใช้อยู่
+ * · เวอร์ชันล่าสุดต้องอนุมัติแล้ว (ไม่มีเวอร์ชันใหม่ค้าง) — มีเวอร์ชันใหม่ค้างอยู่ เอกสารประกอบเข้าเวอร์ชันใหม่ทางปกติแทน
+ * · ไม่ต้องเริ่มเวอร์ชันใหม่ ไม่ต้องอนุมัติ ข้อสอบไม่เปลี่ยน — เอกสารประกอบไม่ต้องครบก่อนสอบ และ AI ไม่ใช้
+ */
+export function canAddReference(
+  actor: Pick<Actor, "personId" | "role">,
+  set: Pick<SetRow, "authorPersonId" | "status">,
+  version: Pick<VersionRow, "approvedAt"> | null,
+): boolean {
+  return set.status === "active" && version !== null && version.approvedAt !== null && isOwnerOrAdmin(actor, set);
+}
+
+/** เอกสารประกอบในเวอร์ชันที่ผู้เรียนเห็นอยู่ ที่คนนี้จัดการได้ (เปลี่ยนชื่อ · ลบ) */
+function liveReference(
+  actor: Pick<Actor, "personId" | "role">,
+  set: SetRow,
+  current: VersionRow | null,
+  doc: Pick<typeof documents.$inferSelect, "kind" | "versionId">,
+): boolean {
+  return doc.kind === "reference" && current?.id === doc.versionId && canAddReference(actor, set, current);
+}
+
+/**
+ * ด่านก่อนส่งขออนุมัติ (ชุดและเวอร์ชันใหม่) — ต้องมีคลิปหรือเอกสารที่ผู้เรียนต้องดู/อ่านอย่างน้อย 1 รายการ
+ * ไม่อย่างนั้นไม่มีใครอ่านครบจนสอบได้ · เอกสารประกอบ ที่ซ่อนไว้ และ Excel ไม่นับ (ADR-0025)
+ */
+export async function missingRequiredContent(versionId: number): Promise<string | null> {
+  const rows = await db().select().from(documents).where(eq(documents.versionId, versionId));
+  return rows.some(requiredForExam) ? null : "ต้องมีคลิปหรือเอกสารที่ผู้เรียนต้องดู/อ่านอย่างน้อย 1 รายการ — เอกสารประกอบไม่นับ";
 }
 
 async function loadSet(setId: number): Promise<SetRow | null> {
@@ -323,13 +358,18 @@ export async function requestUpload(input: {
   const set = await loadSet(input.setId);
   if (!set) return { ok: false, error: "ไม่พบชุดนี้" };
   let version = await currentVersion(set.id);
-  if (!canEditVersion(input.actor, set, version)) return { ok: false, error: "แก้ได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
+  // ชุดที่ใช้อยู่รับเอกสารประกอบเข้าเวอร์ชันที่ผู้เรียนเห็นได้ทันที (ADR-0025) · อย่างอื่นต้องเป็นร่าง/เวอร์ชันใหม่ที่ยังไม่ส่ง
+  const live = input.docKind === "reference" && canAddReference(input.actor, set, version);
+  if (!live && !canEditVersion(input.actor, set, version)) {
+    const liveSet = set.status === "active" && version?.approvedAt && isOwnerOrAdmin(input.actor, set);
+    return { ok: false, error: liveSet ? "ชุดที่ใช้อยู่เพิ่มได้เฉพาะเอกสารประกอบ — เนื้อหาที่ต้องเรียนให้เริ่มเวอร์ชันใหม่" : "แก้ได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
+  }
   if (!isDocumentMime(input.mime)) return { ok: false, error: "รับเฉพาะ PDF · Excel (.xlsx) · วิดีโอ MP4" };
   const maxBytes = maxBytesFor(input.mime);
   if (!Number.isInteger(input.size) || input.size <= 0 || input.size > maxBytes) {
     return { ok: false, error: `${isVideoMime(input.mime) ? "วิดีโอ" : "ไฟล์"}ต้องไม่เกิน ${formatBytesLimit(maxBytes)}` };
   }
-  if (!kindAllowsMime(input.docKind, input.mime)) return { ok: false, error: "Pricelist ต้องเป็น PDF หรือ Excel — วิดีโอแนบเป็นเอกสารหลักหรืออื่น ๆ" };
+  if (!kindAllowsMime(input.docKind, input.mime)) return { ok: false, error: kindMimeError(input.docKind) };
   if (input.docKind === "pricelist") {
     const [kind] = await db().select({ allowPricelist: setKinds.allowPricelist }).from(setKinds).where(eq(setKinds.id, set.kindId));
     if (!kind?.allowPricelist) return { ok: false, error: "ชนิดของชุดนี้ไม่ได้เปิดให้แนบ Pricelist" };
@@ -369,7 +409,8 @@ export async function confirmUpload(input: { actor: Actor; token: string; now?: 
   if (t.exp < now) return { ok: false, error: "ใบอัปโหลดหมดอายุ ลองอัปใหม่" };
   const set = await loadSet(t.setId);
   const current = set ? await currentVersion(set.id) : null;
-  if (!set || current?.id !== t.versionId || !canEditVersion(input.actor, set, current)) {
+  const live = Boolean(set && t.docKind === "reference" && canAddReference(input.actor, set, current));
+  if (!set || current?.id !== t.versionId || (!live && !canEditVersion(input.actor, set, current))) {
     return { ok: false, error: "แก้ได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
   }
 
@@ -406,21 +447,41 @@ export async function confirmUpload(input: { actor: Actor; token: string; now?: 
   }
 
   const order = await db().select({ id: documents.id }).from(documents).where(eq(documents.versionId, t.versionId));
-  const [doc] = await db()
-    .insert(documents)
-    .values({
-      versionId: t.versionId,
-      kind: t.docKind,
-      objectKey: t.key,
-      fileName: t.fileName,
-      mimeType: t.mime,
-      sizeBytes: t.size,
-      pageCount,
-      durationSeconds,
-      sortOrder: order.length,
-    })
-    .returning({ id: documents.id });
-  return { ok: true, documentId: doc.id };
+  const row = {
+    versionId: t.versionId,
+    kind: t.docKind,
+    objectKey: t.key,
+    fileName: t.fileName,
+    mimeType: t.mime,
+    sizeBytes: t.size,
+    pageCount,
+    durationSeconds,
+    sortOrder: order.length,
+  };
+  if (!live) {
+    const [doc] = await db().insert(documents).values(row).returning({ id: documents.id });
+    return { ok: true, documentId: doc.id };
+  }
+  // เข้าเวอร์ชันที่ผู้เรียนเห็นอยู่ = ลงประวัติในคราวเดียว · จอง id ก่อนให้ประวัติอ้างได้ (atomic ใช้ผลของคำสั่งก่อนหน้าไม่ได้)
+  const { rows } = await db().execute<{ id: number }>(sql`select nextval(pg_get_serial_sequence('documents', 'id'))::int as id`);
+  const id = Number(rows[0].id);
+  const at = new Date(now);
+  await atomic([
+    db().insert(documents).values({ ...row, id }),
+    db().update(learningSets).set({ updatedAt: at }).where(eq(learningSets.id, set.id)),
+    db()
+      .insert(approvalEvents)
+      .values({
+        setId: set.id,
+        versionId: t.versionId,
+        action: "reference_added",
+        actorPersonId: input.actor.personId,
+        actorName: input.actor.name,
+        detail: { documentId: id, fileName: t.fileName },
+        createdAt: at,
+      }),
+  ]);
+  return { ok: true, documentId: id };
 }
 
 /** จำนวนหน้าของ PDF · อ่านไม่ได้ = null */
@@ -434,7 +495,7 @@ export async function countPdfPages(bytes: Uint8Array): Promise<number | null> {
   }
 }
 
-export async function removeDocument(input: { actor: Actor; documentId: number }): Promise<Outcome> {
+export async function removeDocument(input: { actor: Actor; documentId: number; now?: Date }): Promise<Outcome> {
   const [row] = await db()
     .select({ doc: documents, setId: setVersions.setId })
     .from(documents)
@@ -443,6 +504,7 @@ export async function removeDocument(input: { actor: Actor; documentId: number }
   if (!row) return { ok: false, error: "ไม่พบเอกสาร" };
   const set = await loadSet(row.setId);
   const current = set ? await currentVersion(set.id) : null;
+  if (set && liveReference(input.actor, set, current, row.doc)) return removeLiveReference(input.actor, set, row.doc, input.now ?? new Date());
   if (!set || current?.id !== row.doc.versionId || !canEditVersion(input.actor, set, current)) {
     return { ok: false, error: "แก้ได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง" };
   }
@@ -451,6 +513,34 @@ export async function removeDocument(input: { actor: Actor; documentId: number }
   await db().delete(documents).where(eq(documents.id, row.doc.id));
   await objectStore()?.delete(row.doc.objectKey);
   if (row.doc.coverKey) await objectStore()?.delete(row.doc.coverKey);
+  return { ok: true };
+}
+
+/**
+ * ลบเอกสารประกอบออกจากเวอร์ชันที่ผู้เรียนเห็นอยู่ (ADR-0025) — ได้เฉพาะที่ยังไม่มีใครเปิด
+ * (`document_views` มีแต่ insert และ `reading_progress` อ้างแบบ restrict) · มีคนเปิดแล้ว = ซ่อนแทน · ลงประวัติ
+ */
+async function removeLiveReference(actor: Actor, set: SetRow, doc: typeof documents.$inferSelect, now: Date): Promise<Outcome> {
+  const [viewed] = await db().select({ id: documentViews.id }).from(documentViews).where(eq(documentViews.documentId, doc.id)).limit(1);
+  const [read] = await db().select({ documentId: readingProgress.documentId }).from(readingProgress).where(eq(readingProgress.documentId, doc.id)).limit(1);
+  if (viewed || read) return { ok: false, error: "มีผู้เรียนเปิดเอกสารนี้แล้ว — ลบไม่ได้ ใช้สวิตช์ซ่อนแทน" };
+  await atomic([
+    db().delete(documents).where(eq(documents.id, doc.id)),
+    db().update(learningSets).set({ updatedAt: now }).where(eq(learningSets.id, set.id)),
+    db()
+      .insert(approvalEvents)
+      .values({
+        setId: set.id,
+        versionId: doc.versionId,
+        action: "reference_removed",
+        actorPersonId: actor.personId,
+        actorName: actor.name,
+        detail: { documentId: doc.id, fileName: doc.fileName },
+        createdAt: now,
+      }),
+  ]);
+  await objectStore()?.delete(doc.objectKey);
+  if (doc.coverKey) await objectStore()?.delete(doc.coverKey);
   return { ok: true };
 }
 
@@ -472,7 +562,21 @@ async function editableDocument(actor: Actor, documentId: number) {
 
 const NOT_EDITABLE = "แก้ได้เฉพาะชุดร่างหรือเวอร์ชันใหม่ที่ยังไม่ส่งของตัวเอง";
 
-/** ชื่อที่ผู้เรียนเห็น · ใช้ทำอะไร (เอกสารหลัก/Pricelist/อื่น ๆ) · น้ำหนักตอนเฉลี่ยข้อสอบ */
+/**
+ * เอกสารประกอบในเวอร์ชันที่ผู้เรียนเห็นอยู่ — แก้ได้แค่ชื่อ (ADR-0025) · เปลี่ยนเป็นเนื้อหาที่ต้องเรียนต้องผ่านเวอร์ชันใหม่
+ * แผงส่งทุกช่องมาพร้อมกัน จึงรับเมื่อช่องอื่นเท่าค่าเดิม
+ */
+async function renamableReference(input: { actor: Actor; documentId: number; kind?: string; examWeight?: number }) {
+  const found = await documentWithSet(input.documentId);
+  if (!found) return null;
+  const current = await currentVersion(found.set.id);
+  if (!liveReference(input.actor, found.set, current, found.doc)) return null;
+  if (input.kind !== undefined && input.kind !== found.doc.kind) return null;
+  if (input.examWeight !== undefined && input.examWeight !== found.doc.examWeight) return null;
+  return found;
+}
+
+/** ชื่อที่ผู้เรียนเห็น · ใช้ทำอะไร (เอกสารหลัก/Pricelist/อื่น ๆ/เอกสารประกอบ) · น้ำหนักตอนเฉลี่ยข้อสอบ */
 export async function updateDocument(input: {
   actor: Actor;
   documentId: number;
@@ -480,7 +584,7 @@ export async function updateDocument(input: {
   kind?: string;
   examWeight?: number;
 }): Promise<Outcome> {
-  const found = await editableDocument(input.actor, input.documentId);
+  const found = (await editableDocument(input.actor, input.documentId)) ?? (await renamableReference(input));
   if (!found) return { ok: false, error: NOT_EDITABLE };
   const { doc, set } = found;
   const patch: Partial<typeof documents.$inferInsert> = {};
@@ -492,7 +596,7 @@ export async function updateDocument(input: {
   if (input.kind !== undefined) {
     if (!DOCUMENT_KINDS.includes(input.kind as DocumentKind)) return { ok: false, error: "เลือกว่าใช้ทำอะไร" };
     const kind = input.kind as DocumentKind;
-    if (isDocumentMime(doc.mimeType) && !kindAllowsMime(kind, doc.mimeType)) return { ok: false, error: "Pricelist ต้องเป็น PDF หรือ Excel — วิดีโอแนบเป็นเอกสารหลักหรืออื่น ๆ" };
+    if (isDocumentMime(doc.mimeType) && !kindAllowsMime(kind, doc.mimeType)) return { ok: false, error: kindMimeError(kind) };
     if (kind === "pricelist") {
       const [k] = await db().select({ allowPricelist: setKinds.allowPricelist }).from(setKinds).where(eq(setKinds.id, set.kindId));
       if (!k?.allowPricelist) return { ok: false, error: "ชนิดของชุดนี้ไม่ได้เปิดให้แนบ Pricelist" };
@@ -536,9 +640,9 @@ export async function setDocumentHidden(input: { actor: Actor; documentId: numbe
   const { doc, set } = found;
   if (set.status === "closed" || set.status === "deleted") return { ok: false, error: "ชุดนี้ปิดแล้ว — ซ่อน/แสดงไม่ได้" };
   if (doc.hidden === input.hidden) return { ok: true };
-  if (input.hidden && doc.pageCount !== null) {
+  if (input.hidden && requiredForExam(doc)) {
     const siblings = await db().select().from(documents).where(eq(documents.versionId, doc.versionId));
-    const left = siblings.filter((d) => d.id !== doc.id && !d.hidden && d.pageCount !== null);
+    const left = siblings.filter((d) => d.id !== doc.id && requiredForExam(d));
     if (!left.length) return { ok: false, error: "ต้องเหลือคลิปหรือเอกสารให้ผู้เรียนอย่างน้อย 1 รายการ" };
   }
   const now = input.now ?? new Date();

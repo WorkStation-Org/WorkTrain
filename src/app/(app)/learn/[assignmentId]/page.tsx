@@ -42,8 +42,9 @@ export default async function LearnSetPage({
 
   const due = view.assignment.dueAt;
   const late = view.state !== "passed" && due <= now;
-  const docsDone = view.documents.filter((d) => d.completed).length;
-  const docsTotal = view.documents.length;
+  // เอกสารประกอบไม่นับ — ไม่ต้องครบก่อนสอบ (ADR-0025)
+  const docsDone = view.documents.filter((d) => !d.reference && d.completed).length;
+  const docsTotal = view.documents.filter((d) => !d.reference).length;
   const step = view.state === "passed" || view.state === "update_ack" || view.state === "update_exam" ? 3 : view.state === "ready" || view.state === "in_exam" ? 2 : 1;
 
   return (

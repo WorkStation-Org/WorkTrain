@@ -14,6 +14,7 @@ import {
   isDocumentMime,
   isVideoMime,
   kindAllowsMime,
+  kindMimeError,
   maxBytesFor,
 } from "@/domain/document";
 import { confirmUploadAction, moveDocumentAction, removeDocumentAction, requestUploadAction, setDocumentHiddenAction, updateDocumentAction } from "../actions";
@@ -25,6 +26,7 @@ import { PdfPreview, VideoPreview } from "./doc-preview";
  * เอกสารต้นทาง — ลากวางได้ทีละหลายไฟล์ (ดูชนิดไฟล์ให้เอง) · รายการตามลำดับที่ผู้เรียนเห็นพร้อมป้าย "ใช้ทำอะไร" ·
  * คลิกไฟล์แล้วแก้ในแผงด้านขวา (ชื่อที่ผู้เรียนเห็น · ใช้ทำอะไร · น้ำหนัก · ปกคลิป · ลบ) · เล่นวิดีโอ/เปิดอ่าน PDF ได้ทุกคนที่ทำงานกับชุด
  * TG ย้าย/คัดลอกคลิปไปชุดอื่นได้จากแผงเดียวกัน (`clip-transfer.tsx` · ADR-0022)
+ * ชุดที่ใช้อยู่ (`addReference`) อัปได้เฉพาะเอกสารประกอบ — ขึ้นให้ผู้เรียนทันที ไม่ต้องเริ่มเวอร์ชันใหม่ · เปลี่ยนชื่อ/ลบ (ที่ยังไม่มีใครเปิด) ได้ (ADR-0025)
  *
  * ★ อัปทางเดิม: ขอลิงก์ → PUT ตรงเข้า R2 → ยืนยัน · วิดีโอได้ปกอัตโนมัติจากเฟรมที่ 10% ของไฟล์ในเครื่อง (ไม่ต้องพึ่ง CORS)
  */
@@ -54,6 +56,7 @@ interface QueueItem {
 const mb = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`;
 
 function roleOf(d: Pick<DocItem, "kind" | "mimeType">): { label: string; tone: string } {
+  if (d.kind === "reference") return { label: "ประกอบ · ไม่บังคับ", tone: "bg-subtle text-muted" };
   if (d.kind === "pricelist") return { label: aiReadable(d.mimeType) ? "Pricelist · AI ใช้ด้วย" : "Pricelist · ดูอย่างเดียว", tone: "bg-danger-soft text-danger" };
   if (isVideoMime(d.mimeType)) return { label: "ผู้เรียนต้องดู", tone: "bg-subtle text-ink-2" };
   if (aiReadable(d.mimeType)) return { label: "AI ใช้ออกข้อสอบ", tone: "bg-success-soft text-success" };
@@ -70,6 +73,7 @@ export function DocsManager({
   setId,
   docs,
   editable,
+  addReference = false,
   canSetCover,
   canToggleHidden,
   allowPricelist,
@@ -79,6 +83,8 @@ export function DocsManager({
   setId: number;
   docs: DocItem[];
   editable: boolean;
+  /** ชุดที่ใช้อยู่ — อัปได้เฉพาะเอกสารประกอบ เข้าเวอร์ชันที่ผู้เรียนเห็นอยู่ทันที (ADR-0025) */
+  addReference?: boolean;
   canSetCover: boolean;
   /** ผู้สร้าง/TG ซ่อน/แสดงไฟล์ได้ทุกสถานะ (ไม่ต้องเป็นร่าง) ยกเว้นชุดที่ปิดแล้ว */
   canToggleHidden: boolean;
@@ -99,10 +105,12 @@ export function DocsManager({
   const fileInput = useRef<HTMLInputElement>(null);
   const sel = docs.find((d) => d.id === selected) ?? docs[0];
 
-  // ตัวเลขทั้งหมดนับเฉพาะที่แสดงให้ผู้เรียน — แบบเดียวกับหน้าเรียน
-  const shown = docs.filter((d) => !d.hidden);
+  // ตัวเลขทั้งหมดนับเฉพาะที่ผู้เรียนต้องดู/อ่าน — แบบเดียวกับหน้าเรียน (เอกสารประกอบนับแยก · ADR-0025)
+  const shown = docs.filter((d) => !d.hidden && d.kind !== "reference");
+  const references = docs.filter((d) => !d.hidden && d.kind === "reference");
   const videos = shown.filter((d) => isVideoMime(d.mimeType));
   const pdfs = shown.filter((d) => aiReadable(d.mimeType));
+  const uploadKind: DocumentKind = addReference && !editable ? "reference" : "catalog";
   const noCover = videos.filter((d) => !d.coverUrl).length;
   const minutes = Math.round(
     (videos.reduce((n, d) => n + (d.durationSeconds ?? 0), 0) + shown.filter((d) => !isVideoMime(d.mimeType)).reduce((n, d) => n + (d.pageCount ?? 0) * 60, 0)) / 60,
@@ -128,7 +136,8 @@ export function DocsManager({
     const fail = (error: string) => patchQueue(key, { status: "error", error });
     if (!isDocumentMime(file.type)) return fail("รับเฉพาะ PDF · Excel · วิดีโอ MP4");
     if (file.size > maxBytesFor(file.type)) return fail(`${isVideoMime(file.type) ? "วิดีโอ" : "ไฟล์"}ต้องไม่เกิน ${formatBytesLimit(maxBytesFor(file.type))}`);
-    const req = await requestUploadAction({ setId, docKind: "catalog", fileName: file.name, mime: file.type, size: file.size }).catch(() => null);
+    if (!kindAllowsMime(uploadKind, file.type)) return fail(kindMimeError(uploadKind));
+    const req = await requestUploadAction({ setId, docKind: uploadKind, fileName: file.name, mime: file.type, size: file.size }).catch(() => null);
     if (!req?.ok) return fail(req?.error ?? "ขอลิงก์อัปไม่สำเร็จ");
     const status = await put(req.uploadUrl, file, (percent) => patchQueue(key, { percent }));
     if (status < 200 || status >= 300) return fail(`อัปไม่สำเร็จ (${status || "เครือข่ายขาด"})`);
@@ -164,7 +173,7 @@ export function DocsManager({
 
       <div className="flex flex-wrap items-start gap-4">
         <div className="min-w-0 flex-[999_1_520px] space-y-3">
-          {editable && (
+          {(editable || addReference) && (
             <div
               onDragOver={(e) => {
                 e.preventDefault();
@@ -185,8 +194,19 @@ export function DocsManager({
                 </svg>
               </span>
               <span className="flex min-w-0 flex-[1_1_240px] flex-col gap-0.5">
-                <span className="text-[15px] font-semibold text-fg">ลากไฟล์มาวางตรงนี้ — ได้ทีละหลายไฟล์</span>
-                <span className="text-[12px] text-muted">ระบบดูชนิดไฟล์ให้เอง: PDF · Excel ไม่เกิน 30 MB · วิดีโอ MP4 ไม่เกิน 2 GB (ได้ปกจากเฟรมในคลิปอัตโนมัติ)</span>
+                {uploadKind === "reference" ? (
+                  <>
+                    <span className="text-[15px] font-semibold text-fg">เพิ่มเอกสารประกอบ — ลากไฟล์มาวางตรงนี้</span>
+                    <span className="text-[12px] text-muted">
+                      ผู้เรียนเปิดอ่าน/ดูได้ทันที ไม่ต้องครบก่อนสอบ · ข้อสอบเดิมไม่เปลี่ยน ไม่ต้องเริ่มเวอร์ชันใหม่ · PDF ไม่เกิน 30 MB · วิดีโอ MP4 ไม่เกิน 2 GB
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[15px] font-semibold text-fg">ลากไฟล์มาวางตรงนี้ — ได้ทีละหลายไฟล์</span>
+                    <span className="text-[12px] text-muted">ระบบดูชนิดไฟล์ให้เอง: PDF · Excel ไม่เกิน 30 MB · วิดีโอ MP4 ไม่เกิน 2 GB (ได้ปกจากเฟรมในคลิปอัตโนมัติ)</span>
+                  </>
+                )}
               </span>
               <Button type="button" variant="primary" onClick={() => fileInput.current?.click()}>
                 เลือกไฟล์
@@ -195,7 +215,9 @@ export function DocsManager({
                 ref={fileInput}
                 type="file"
                 multiple
-                accept={Object.keys(DOCUMENT_MIMES).join(",")}
+                accept={Object.keys(DOCUMENT_MIMES)
+                  .filter((m) => isDocumentMime(m) && kindAllowsMime(uploadKind, m))
+                  .join(",")}
                 className="sr-only"
                 tabIndex={-1}
                 onChange={(e) => {
@@ -234,7 +256,8 @@ export function DocsManager({
                 {videos.length ? `${videos.length} วิดีโอ · ${formatDuration(videos.reduce((n, d) => n + (d.durationSeconds ?? 0), 0))}` : ""}
                 {videos.length && shown.length > videos.length ? " · " : ""}
                 {shown.length > videos.length ? `${shown.length - videos.length} เอกสาร` : ""}
-                {docs.length > shown.length ? ` · ซ่อนอยู่ ${docs.length - shown.length}` : ""}
+                {references.length ? ` · ประกอบ ${references.length}` : ""}
+                {docs.some((d) => d.hidden) ? ` · ซ่อนอยู่ ${docs.filter((d) => d.hidden).length}` : ""}
               </span>
             </div>
             {toggleError && (
@@ -256,7 +279,7 @@ export function DocsManager({
               </p>
             )}
             {docs.length === 0 ? (
-              <p className="px-4 py-8 text-center text-[13px] text-muted">ยังไม่มีเอกสาร{editable ? " — ลากไฟล์มาวางด้านบน" : ""}</p>
+              <p className="px-4 py-8 text-center text-[13px] text-muted">ยังไม่มีเอกสาร{editable || addReference ? " — ลากไฟล์มาวางด้านบน" : ""}</p>
             ) : (
               <ol className="p-1.5">
                 {docs.map((d, i) => {
@@ -349,6 +372,7 @@ export function DocsManager({
             setId={setId}
             doc={sel}
             editable={editable}
+            liveReference={addReference && !editable && sel.kind === "reference"}
             canSetCover={canSetCover}
             allowPricelist={allowPricelist}
             customWeights={customWeights}
@@ -366,6 +390,7 @@ function DocPanel({
   setId,
   doc,
   editable,
+  liveReference,
   canSetCover,
   allowPricelist,
   customWeights,
@@ -375,6 +400,8 @@ function DocPanel({
   setId: number;
   doc: DocItem;
   editable: boolean;
+  /** เอกสารประกอบในชุดที่ใช้อยู่ — เปลี่ยนชื่อ/ลบได้ (ลบได้เฉพาะที่ยังไม่มีใครเปิด) · เปลี่ยนชนิดไม่ได้ */
+  liveReference: boolean;
   canSetCover: boolean;
   allowPricelist: boolean;
   customWeights: boolean;
@@ -401,9 +428,12 @@ function DocPanel({
     router.refresh();
   }
 
-  const kinds: DocumentKind[] = ["catalog", "pricelist", "other"];
+  const kinds: DocumentKind[] = ["catalog", "pricelist", "other", "reference"];
+  const nameEditable = editable || liveReference;
   const help =
-    kind === "pricelist"
+    kind === "reference"
+      ? "เอกสารประกอบ — ผู้เรียนเปิดอ่าน/ดูได้ ไม่ต้องครบก่อนสอบ · AI ไม่ใช้ออกข้อสอบ"
+      : kind === "pricelist"
       ? "Pricelist — ผู้เรียนดูได้อย่างเดียว ประทับลายน้ำชื่อคนเปิดทุกหน้า · AI ใช้ออกข้อสอบเรื่องราคาด้วย (ระบบเทียบราคาให้)"
       : video
         ? "วิดีโอ — ผู้เรียนต้องดูครบทุกช่วง · AI ไม่ดูวิดีโอ (ใส่เนื้อหาที่อยากออกข้อสอบไว้ใน PDF)"
@@ -430,14 +460,14 @@ function DocPanel({
       <div className="space-y-4 p-4">
         <label className="block space-y-1.5">
           <span className="text-[12px] text-ink-2">ชื่อที่ผู้เรียนเห็น</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} disabled={!editable} maxLength={200} className={INPUT_CLASS} />
+          <input value={name} onChange={(e) => setName(e.target.value)} disabled={!nameEditable} maxLength={200} className={INPUT_CLASS} />
         </label>
 
         <fieldset className="space-y-1.5">
           <legend className="text-[12px] text-ink-2">ใช้ทำอะไร</legend>
-          <div className="flex gap-1 rounded-[10px] bg-subtle p-1">
+          <div className="grid grid-cols-2 gap-1 rounded-[10px] bg-subtle p-1">
             {kinds.map((k) => {
-              const disabled = !editable || (k === "pricelist" && (!allowPricelist || (isDocumentMime(doc.mimeType) && !kindAllowsMime(k, doc.mimeType))));
+              const disabled = !editable || (k === "pricelist" && !allowPricelist) || (isDocumentMime(doc.mimeType) && !kindAllowsMime(k, doc.mimeType));
               return (
                 <label
                   key={k}
@@ -452,7 +482,7 @@ function DocPanel({
           <p className="text-[12px] leading-relaxed text-muted">{help}</p>
         </fieldset>
 
-        {customWeights && aiReadable(doc.mimeType) && (
+        {customWeights && aiReadable(doc.mimeType) && kind !== "reference" && (
           <div className="space-y-1.5">
             <span className="text-[12px] text-ink-2">น้ำหนักตอนเฉลี่ยข้อสอบ (0 = ไม่ออกจากไฟล์นี้)</span>
             <div className="flex items-center gap-2">
@@ -479,13 +509,13 @@ function DocPanel({
         {video && transfer && <ClipTransfer setId={setId} documentId={doc.id} fileName={doc.fileName} options={transfer} onDone={onTransferred} />}
 
         <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
-          {editable && (
+          {nameEditable && (
             <Button type="button" variant="primary" size="sm" onClick={save} disabled={busy || !dirty}>
               {busy ? "กำลังบันทึก…" : "บันทึก"}
             </Button>
           )}
           {msg && <span className={`text-[12px] ${msg.ok ? "text-success" : "text-danger"}`}>{msg.text}</span>}
-          {editable && (
+          {nameEditable && (
             <form action={removeDocumentAction} className="ml-auto" onSubmit={(e) => !confirm(`ลบ ${doc.fileName}?`) && e.preventDefault()}>
               <input type="hidden" name="setId" value={setId} />
               <input type="hidden" name="documentId" value={doc.id} />
