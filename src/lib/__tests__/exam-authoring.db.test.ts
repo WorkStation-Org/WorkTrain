@@ -27,7 +27,7 @@ const {
   confirmUpload,
   getSetDetail,
   listManagedSets,
-  setVideoCover,
+  setDocumentCover,
   coverImage,
   coverPath,
   authorVideoLink,
@@ -263,34 +263,43 @@ describe("อัปโหลดวิดีโอ (ADR-0013)", () => {
     it("ผู้สร้างตั้งปกจากเฟรมได้ · เปลี่ยนปก = ปกเก่าถูกลบ · ที่อยู่ภาพเปลี่ยนตาม", async () => {
       const { setId, doc } = await videoDoc();
       expect(coverPath(doc)).toBeNull();
-      expect(await setVideoCover({ actor: pd, documentId: doc.id, bytes: JPEG, ms: 12_500 })).toEqual({ ok: true });
+      expect(await setDocumentCover({ actor: pd, documentId: doc.id, bytes: JPEG, ms: 12_500 })).toEqual({ ok: true });
       const first = (await getSetDetail(pd, setId))!.documents[0];
       expect(first).toMatchObject({ coverMs: 12_500 });
       expect(first.coverKey).toMatch(new RegExp(`^${doc.objectKey.replace(/\.mp4$/, "")}-cover-[0-9a-f]{24}\\.jpg$`));
       expect(coverKeys()).toEqual([first.coverKey]);
 
-      expect((await setVideoCover({ actor: admin, documentId: doc.id, bytes: JPEG, ms: 30_000 })).ok).toBe(true);
+      expect((await setDocumentCover({ actor: admin, documentId: doc.id, bytes: JPEG, ms: 30_000 })).ok).toBe(true);
       const second = (await getSetDetail(pd, setId))!.documents[0];
       expect(coverKeys()).toEqual([second.coverKey]);
       expect(coverPath(second)).not.toEqual(coverPath(first));
     });
 
-    it("คนอื่นตั้งปกไม่ได้ · ต้องเป็น JPEG จริง · ไม่ใหญ่เกิน · เฟรมต้องอยู่ในคลิป · ตั้งปกให้ PDF ไม่ได้", async () => {
+    it("คนอื่นตั้งปกไม่ได้ · ต้องเป็น JPEG จริง · ไม่ใหญ่เกิน · เฟรมต้องอยู่ในคลิป · PDF ได้ปกหน้าแรก · Pricelist ไม่มีปก", async () => {
       const { doc } = await videoDoc();
-      expect((await setVideoCover({ actor: sales, documentId: doc.id, bytes: JPEG, ms: 0 })).ok).toBe(false);
-      expect((await setVideoCover({ actor: pd, documentId: doc.id, bytes: new TextEncoder().encode("<svg/>"), ms: 0 })).ok).toBe(false);
-      expect((await setVideoCover({ actor: pd, documentId: doc.id, bytes: new Uint8Array(600 * 1024).fill(0xff), ms: 0 })).ok).toBe(false);
-      expect(await setVideoCover({ actor: pd, documentId: doc.id, bytes: JPEG, ms: 5 * 60_000 })).toEqual({ ok: false, error: "ตำแหน่งเฟรมอยู่นอกความยาวคลิป" });
+      expect((await setDocumentCover({ actor: sales, documentId: doc.id, bytes: JPEG, ms: 0 })).ok).toBe(false);
+      expect((await setDocumentCover({ actor: pd, documentId: doc.id, bytes: new TextEncoder().encode("<svg/>"), ms: 0 })).ok).toBe(false);
+      expect((await setDocumentCover({ actor: pd, documentId: doc.id, bytes: new Uint8Array(600 * 1024).fill(0xff), ms: 0 })).ok).toBe(false);
+      expect(await setDocumentCover({ actor: pd, documentId: doc.id, bytes: JPEG, ms: 5 * 60_000 })).toEqual({ ok: false, error: "ตำแหน่งเฟรมอยู่นอกความยาวคลิป" });
       const pdfSet = await newSet();
       await uploadPdf(pd, pdfSet);
       const [pdf] = (await getSetDetail(pd, pdfSet))!.documents;
-      expect(await setVideoCover({ actor: pd, documentId: pdf.id, bytes: JPEG, ms: 0 })).toEqual({ ok: false, error: "ตั้งปกได้เฉพาะวิดีโอ" });
+      // PDF: ปกหน้าแรกเท่านั้น (ADR-0026) — key อยู่ข้างไฟล์ PDF
+      expect(await setDocumentCover({ actor: pd, documentId: pdf.id, bytes: JPEG, ms: 1000 })).toEqual({ ok: false, error: "ตำแหน่งเฟรมอยู่นอกความยาวคลิป" });
+      expect(await setDocumentCover({ actor: pd, documentId: pdf.id, bytes: JPEG, ms: 0 })).toEqual({ ok: true });
+      const withCover = (await getSetDetail(pd, pdfSet))!.documents[0];
+      expect(withCover.coverKey).toMatch(new RegExp(`^${pdf.objectKey.replace(/\.pdf$/, "")}-cover-[0-9a-f]{24}\\.jpg$`));
+      // เปลี่ยนเป็น Pricelist = ปกหายทั้งในฐานและที่เก็บ · ตั้งปกให้ Pricelist ไม่ได้
+      await testDb().update(schema.setKinds).set({ allowPricelist: true });
+      expect(await updateDocument({ actor: pd, documentId: pdf.id, kind: "pricelist" })).toEqual({ ok: true });
+      expect((await getSetDetail(pd, pdfSet))!.documents[0].coverKey).toBeNull();
       expect(coverKeys()).toEqual([]);
+      expect(await setDocumentCover({ actor: pd, documentId: pdf.id, bytes: JPEG, ms: 0 })).toEqual({ ok: false, error: "Pricelist ไม่มีปก — ราคาดูได้ในตัวอ่านที่มีลายน้ำเท่านั้น" });
     });
 
     it("ภาพปก: คนทำงานกับชุดและผู้เรียนที่ได้รับมอบเห็น · คนอื่นไม่เห็น · ลบวิดีโอ = ลบปก", async () => {
       const { setId, doc } = await videoDoc();
-      await setVideoCover({ actor: pd, documentId: doc.id, bytes: JPEG, ms: 1000 });
+      await setDocumentCover({ actor: pd, documentId: doc.id, bytes: JPEG, ms: 1000 });
       expect(await coverImage({ actor: pd, documentId: doc.id })).toEqual(JPEG);
       expect(await coverImage({ actor: sales, documentId: doc.id })).toBeNull();
       await testDb()

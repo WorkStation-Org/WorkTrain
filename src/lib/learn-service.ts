@@ -493,7 +493,8 @@ export async function myLearningList(personId: number, now: Date = new Date()): 
     const touched = docs
       .filter((d) => !doneOf(d) && byDoc.get(d.id))
       .sort((x, y) => byDoc.get(y.id)!.updatedAt.getTime() - byDoc.get(x.id)!.updatedAt.getTime())[0];
-    const firstCover = videoDocs.find((d) => d.coverKey);
+    // ปกคลิปแรก · ชุดที่ไม่มีวิดีโอใช้ปก PDF หน้าแรก (ADR-0026)
+    const firstCover = (videoDocs.length ? videoDocs : pdfDocs).find((d) => d.coverKey);
     items.push({
       assignmentId: a.id,
       title,
