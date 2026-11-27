@@ -76,6 +76,16 @@ export function segmentWatchTarget(segment: number, durationSeconds: number): nu
   return length * 0.8;
 }
 
+/**
+ * ความยาวที่ใช้คิดเกณฑ์ของช่วง — ความยาวที่ตัวเล่นเล่นได้จริง ถ้าสั้นกว่าค่าที่เก็บไว้
+ * ★ `duration_seconds` ปัดเป็นวินาทีเต็ม (570.6 → 571) · `video.played` ไปได้ไม่เกินความยาวจริง —
+ *   ใช้ค่าที่ปัดแล้ว ช่วงสุดท้ายที่สั้นกว่า 1 วินาทีจะต้องดู 0.8 วินาทีจากเนื้อหา 0.6 วินาที = ไม่มีวันครบ
+ * ตัวเล่นยังไม่รู้ความยาว (NaN · Infinity · 0) = ใช้ค่าที่เก็บไว้
+ */
+export function playableSeconds(storedSeconds: number, playerSeconds: number): number {
+  return Number.isFinite(playerSeconds) && playerSeconds > 0 ? Math.min(storedSeconds, playerSeconds) : storedSeconds;
+}
+
 /** ความเร็วเล่นสูงสุดที่ตัวเล่นยอม — เร็วกว่านี้ถูกดึงกลับ */
 export const MAX_VIDEO_PLAYBACK_RATE = 2;
 

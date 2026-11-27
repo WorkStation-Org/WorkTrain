@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
-import { formatDuration, isVideoMime, MAX_VIDEO_PLAYBACK_RATE, segmentWatchTarget, VIDEO_SEGMENT_SECONDS } from "@/domain/document";
+import { formatDuration, isVideoMime, MAX_VIDEO_PLAYBACK_RATE, playableSeconds, segmentWatchTarget, VIDEO_SEGMENT_SECONDS } from "@/domain/document";
 import { documentLinkAction, readingBeatAction } from "../actions";
 
 /**
@@ -529,6 +529,8 @@ function VideoDoc({
     const now = v.paused || v.ended ? null : Math.min(doc.pageCount, Math.floor(v.currentTime / VIDEO_SEGMENT_SECONDS) + 1);
     setPlayingSegment((p) => (p === now ? p : now));
     const ranges = v.played;
+    // ★ ไม่ใช้ `duration` ตรง ๆ — ค่าที่เก็บไว้ปัดเป็นวินาทีเต็ม ช่วงสุดท้ายจะต้องดูเกินเนื้อหาจริง
+    const length = playableSeconds(duration, v.duration);
     const added: number[] = [];
     for (let n = 1; n <= doc.pageCount; n++) {
       if (seenRef.current.has(n)) continue;
@@ -536,7 +538,7 @@ function VideoDoc({
       const end = start + VIDEO_SEGMENT_SECONDS;
       let covered = 0;
       for (let i = 0; i < ranges.length; i++) covered += Math.max(0, Math.min(end, ranges.end(i)) - Math.max(start, ranges.start(i)));
-      if (covered > 0 && covered >= segmentWatchTarget(n, duration)) added.push(n);
+      if (covered > 0 && covered >= segmentWatchTarget(n, length)) added.push(n);
     }
     if (!added.length) return;
     const next = new Set(seenRef.current);
