@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maxNewSegments, segmentWatchTarget, videoSegmentCount, formatDuration, maxBytesFor, kindAllowsMime, coverSeconds } from "@/domain/document";
+import { maxNewSegments, playableSeconds, segmentWatchTarget, videoSegmentCount, formatDuration, maxBytesFor, kindAllowsMime, coverSeconds } from "@/domain/document";
 import { mp4DurationSeconds } from "@/domain/mp4";
 import { fakeMp4, rangeReader } from "./mp4-fixture";
 
@@ -51,6 +51,23 @@ describe("ช่วงวิดีโอ", () => {
   it("ต้องเล่นผ่าน 80% ของช่วง · ช่วงสุดท้ายที่สั้นกว่าใช้ความยาวจริง", () => {
     expect(segmentWatchTarget(1, 125.5)).toBe(8);
     expect(segmentWatchTarget(13, 125.5)).toBeCloseTo(4.4);
+  });
+
+  it("ช่วงสุดท้ายคิดจากความยาวที่เล่นได้จริง ไม่ใช่ค่าที่ปัดเป็นวินาทีเต็ม", () => {
+    // คลิปจริง 570.6 วินาที · เก็บไว้ 571 · ช่วงที่ 58 มีเนื้อหา 0.6 วินาที
+    const stored = Math.round(570.6);
+    expect(videoSegmentCount(570.6)).toBe(58);
+    expect(segmentWatchTarget(58, stored)).toBeCloseTo(0.8); // เกินเนื้อหาจริง = ค้างตลอดไป (บั๊กเดิม)
+    const real = playableSeconds(stored, 570.6);
+    expect(real).toBeCloseTo(570.6);
+    expect(segmentWatchTarget(58, real)).toBeLessThanOrEqual(0.6);
+  });
+
+  it("ตัวเล่นยังไม่รู้ความยาว หรือยาวกว่าที่เก็บไว้ = ใช้ค่าที่เก็บไว้", () => {
+    expect(playableSeconds(571, NaN)).toBe(571);
+    expect(playableSeconds(571, Infinity)).toBe(571);
+    expect(playableSeconds(571, 0)).toBe(571);
+    expect(playableSeconds(571, 575)).toBe(571);
   });
 
   it("ช่วงใหม่ต่อ heartbeat ไม่เกินที่เล่นทันที่ 2 เท่า", () => {
